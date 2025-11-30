@@ -11,6 +11,8 @@ RECIPES_DIR=${RECIPES_DIR:-/usr/src/astral/recipes}
 CACHE_SRC=${CACHE_SRC:-/var/cache/astral/src}
 CACHE_BIN=${CACHE_BIN:-/var/cache/astral/bin}
 DB_DIR=${DB_DIR:-/var/lib/astral/db}
+REPO_URL=${REPO_URL:-https://izumi-sonoka.github.io/Astral-Repo/}
+INDEX_FILE="$DB_DIR/index" # /var/lib/astral/db/index
 LOG_DIR=${LOG_DIR:-/var/log/astral}
 PKG_EXT=${PKG_EXT:-.asb}   # package extension (tar.xz)
 TMPDIR=${TMPDIR:-/tmp}
@@ -38,6 +40,22 @@ USAGE
 is_pkg_installed() {
   pkg="$1"
   [ -d "$DB_DIR/$pkg" ]
+}
+
+update_repo() {
+    info "Updating package database..."
+    
+    # Define the URL for the index file
+    INDEX_URL="${REPO_URL}astral.index" # Note: Assuming astral.index is in the root of the repo
+    
+    # Use curl to download the index file
+    # -f: Fail silently on HTTP errors, -sS: Silent but show errors, -L: Follow redirects
+    if curl -fsSL "$INDEX_URL" -o "$INDEX_FILE"; then
+        info "Database updated successfully: $(cat "$INDEX_FILE" | wc -l) packages found."
+    else
+        err "Failed to download index file from $INDEX_URL. Check REPO_URL or network."
+        return 1
+    fi
 }
 
 sync_pkg_recursive() {
@@ -200,38 +218,57 @@ build_from_recipe() {
 
 # helper: fetch binary if remote
 fetch_binary_if_remote() {
-    if [ -n "${REPO_URL:-}" ]; then
-        url_bin="$REPO_URL/${pkg}${PKG_EXT}"
-        url_sig="$REPO_URL/${pkg}${PKG_EXT}.sig"
-        tmp_bin="$CACHE_BIN/${pkg}${PKG_EXT}"
-        tmp_sig="$CACHE_BIN/${pkg}${PKG_EXT}.sig"
-        
-        # Use wget/curl to download BINARY and SIGNATURE
-        if ! wget -q -O "$tmp_bin" "$url_bin" || ! wget -q -O "$tmp_sig" "$url_sig"; then
-            info "Binary or signature not found/downloaded."
-            rm -f "$tmp_bin" "$tmp_sig" # Clean up failed download, we dont want failed attemps, dont we
-            return 1
-        fi
-        
-        # VERIFY SIGNATURE
-        if command -v gpg >/dev/null 2>&1; then
-            info "Verifying binary signature..."
-            # Note: You must have the package author's public key imported on the system.
-            if gpg --verify "$tmp_sig" "$tmp_bin"; then
-                echo "$tmp_bin"
-                return 0 # Success!
-            else
-                err "GPG signature verification failed! Deleting unsafe binary."
-                rm -f "$tmp_bin" "$tmp_sig"
-                return 1
-            fi
+    local pkg="$1"
+    
+    # 1. Check if the index exists locally
+    [ -f "$INDEX_FILE" ] || { info "Index not found. Cannot check remote repo."; return 1; }
+
+    # 2. Look up the package in the index
+    # Format: PackageName Version Arch Filename (using space as separator)
+    repo_line=$(grep "^$pkg " "$INDEX_FILE" | head -n 1)
+
+    if [ -z "$repo_line" ]; then
+        info "Package '$pkg' not found in remote index."
+        return 1
+    fi
+
+    # 3. Parse the line to get version and filename
+    set -- $repo_line
+    local remote_filename=$4 # Filename should be the 4th field from the index
+
+    # 4. Construct URLs (assuming files are in the same directory as the index for now)
+    local url_bin="${REPO_URL}${remote_filename}"
+    local url_sig="${REPO_URL}${remote_filename}.sig"
+    
+    local tmp_bin="$CACHE_BIN/${remote_filename}"
+    local tmp_sig="$CACHE_BIN/${remote_filename}.sig"
+
+    # 5. Download Binary and Signature
+    info "Fetching binary: $remote_filename from remote..."
+    # Use curl for reliable downloading
+    if ! curl -fsSL -o "$tmp_bin" "$url_bin" || ! curl -fsSL -o "$tmp_sig" "$url_sig"; then
+        info "Binary or signature not found/downloaded."
+        rm -f "$tmp_bin" "$tmp_sig"
+        return 1
+    fi
+    
+    # 6. GPG Verification (Security check remains the same)
+    if command -v gpg >/dev/null 2>&1; then
+        info "Verifying binary signature..."
+        # Using batch/quiet/no-verbose for reliable exit code check
+        if gpg --batch --quiet --no-verbose --verify "$tmp_sig" "$tmp_bin"; then
+            echo "$tmp_bin" # Return the path to the downloaded binary
+            return 0
         else
-            err "GPG not installed! Cannot guarantee binary safety. Aborting."
+            err "GPG signature verification failed! Deleting unsafe binary."
             rm -f "$tmp_bin" "$tmp_sig"
             return 1
         fi
+    else
+        err "GPG not installed! Cannot guarantee binary safety."
+        rm -f "$tmp_bin" "$tmp_sig"
+        return 1
     fi
-    return 1 # Binary not found locally or remotely
 }
 
 # Removing package
@@ -371,6 +408,14 @@ case "$1" in
     [ $# -gt 1 ] || err "pkg required"
     build_from_recipe "$2"
     ;;
+  -u|--update)
+    update_repo
+    ;;
+
+    -s|--sync)
+      [ $# -gt 1 ] || err "pkg required"
+      sync_pkg_recursive "$2" # Requires the recursive function from the previous step
+      ;;
   -R|--Remove)
     [ $# -gt 1 ] || err "pkg required"
     remove_pkg "$2"
