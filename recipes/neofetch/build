@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+
+echo "Downloading Neofetch 7.1.0 source..."
+
+wget -q https://github.com/dylanaraps/neofetch/archive/7.1.0.tar.gz -O neofetch-7.1.0.tar.gz
+tar xf neofetch-7.1.0.tar.gz
+cd neofetch-7.1.0
+
+[ -f "neofetch" ] || err "Neofetch script not found after extraction"
