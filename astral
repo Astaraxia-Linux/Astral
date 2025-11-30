@@ -157,10 +157,24 @@ fetch_binary_if_remote() {
         tmp_sig="$CACHE_BIN/${pkg}${PKG_EXT}.sig"
         
         # Use wget/curl to download BINARY and SIGNATURE
-        if ! wget -q -O "$tmp_bin" "$url_bin" || ! wget -q -O "$tmp_sig" "$url_sig"; then
-            info "Binary or signature not found/downloaded."
-            rm -f "$tmp_bin" "$tmp_sig" # Clean up failed download, we dont want failed attemps, dont we
-            return 1
+        if [ "${REPO_URL:0:7}" = "file://" ]; then
+            # It's a local repository (TESTING SCENARIO) - use cp
+            SRC_DIR="${REPO_URL:7}" # Strips 'file://'
+        
+            info "Fetching binary from local repository..."
+            if ! cp -f "${SRC_DIR}/${pkg}${PKG_EXT}" "$tmp_bin" 2>/dev/null || ! cp -f "${SRC_DIR}/${pkg}${PKG_EXT}.sig" "$tmp_sig" 2>/dev/null; then
+                info "Binary or signature not found/copied (check repo path)."
+                rm -f "$tmp_bin" "$tmp_sig"
+                return 1
+            fi
+        else
+            # It's a remote repository - use wget
+            info "Fetching binary from remote repository..."
+            if ! wget -q -O "$tmp_bin" "$url_bin" || ! wget -q -O "$tmp_sig" "$url_sig"; then
+                info "Binary or signature not found/downloaded."
+                rm -f "$tmp_bin" "$tmp_sig"
+                return 1
+            fi
         fi
         
         # VERIFY SIGNATURE
