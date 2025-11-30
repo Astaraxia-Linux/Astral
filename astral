@@ -42,6 +42,40 @@ is_pkg_installed() {
   [ -d "$DB_DIR/$pkg" ]
 }
 
+sync_pkg_recursive() {
+    local pkg="$1"
+    
+    if is_pkg_installed "$pkg"; then
+        info "Package '$pkg' is already installed. Skipping."
+        return 0
+    fi
+
+    local recipe_dir="$(recipe_path "$pkg")"
+    [ -z "$recipe_dir" ] && err "recipe $pkg not found for installation"
+
+    local depsf="$recipe_dir/depends"
+    if [ -f "$depsf" ]; then
+        info "Checking dependencies for $pkg..."
+        while IFS= read -r dep_pkg; do
+            # Robust filtering
+            dep_pkg=$(echo "$dep_pkg" | tr -d '[:space:]')
+            if [ -z "$dep_pkg" ] || [ "${dep_pkg:0:1}" = "#" ]; then
+                continue
+            fi
+            sync_pkg_recursive "$dep_pkg"
+        done < "$depsf"
+    fi
+
+    info "Attempting to install $pkg..."
+    if binpkg=$(fetch_binary_if_remote "$pkg" 2>/dev/null || true); then
+        info "Installing $pkg from binary."
+        install_binary_pkg "$binpkg"
+    else
+        info "Binary not available or failed verification. Building $pkg from source."
+        build_from_recipe "$pkg"
+    fi
+}
+
 update_repo() {
     info "Updating package database..."
     
@@ -55,51 +89,6 @@ update_repo() {
     else
         err "Failed to download index file from $INDEX_URL. Check REPO_URL or network."
         return 1
-    fi
-}
-
-sync_pkg_recursive() {
-    local pkg="$1"
-    
-    # 1. Check if package is already installed
-    if is_pkg_installed "$pkg"; then
-        info "Package '$pkg' is already installed. Skipping."
-        return 0
-    fi
-
-    local recipe_dir="$(recipe_path "$pkg")"
-    [ -z "$recipe_dir" ] && err "recipe $pkg not found for installation"
-
-    # 2. Handle Dependencies (Recursive Call)
-    local depsf="$recipe_dir/depends"
-    if [ -f "$depsf" ]; then
-        info "Checking dependencies for $pkg..."
-        
-        # Robustly read dependencies one by one
-        while IFS= read -r dep_pkg; do
-            # Filter out whitespace, comments, and empty lines
-            dep_pkg=$(echo "$dep_pkg" | tr -d '[:space:]')
-            if [ -z "$dep_pkg" ] || [ "${dep_pkg:0:1}" = "#" ]; then
-                continue
-            fi
-            
-            # Recursively install dependency
-            sync_pkg_recursive "$dep_pkg"
-        done < "$depsf"
-    fi
-
-    # 3. Main Package Installation (Prefer Binary, Fallback to Source)
-    info "Attempting to install $pkg..."
-    
-    # Try to fetch and install the binary package
-    # fetch_binary_if_remote echoes the path on success
-    if binpkg=$(fetch_binary_if_remote "$pkg" 2>/dev/null || true); then
-        info "Installing $pkg from binary."
-        install_binary_pkg "$binpkg"
-    else
-        # If binary fetch failed, fallback to source compilation
-        info "Binary not available or failed verification. Building $pkg from source."
-        build_from_recipe "$pkg"
     fi
 }
 
