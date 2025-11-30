@@ -7,10 +7,10 @@ Astaraxia Package Manager, made using shell scripts, because the dev is too dumb
 - [How to make the recipes](#how-to-make-the-recipes)
 
 ## TESTING PHASE
-### Compiling - 2/3
+### Compiling - 3/3
 1. Compiling wihout depend... - CHECK
 2. Compiling with depend... - CHECK
-3. Compiling with 2 or more apps using the same depend... - X
+3. Compiling with 2 or more apps using the same depend... - CHECK
 ### Binary - 0/3
 1. Installing wihout depend... - X
 2. Installing with depend... - X
