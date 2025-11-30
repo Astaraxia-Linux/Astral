@@ -35,7 +35,7 @@ Commands:
 USAGE
 }
 
- helper: find recipe
+# helper: find recipe
 recipe_path() {
   pkg="$1"
   [ -f "$RECIPES_DIR/$pkg/build" ] && echo "$RECIPES_DIR/$pkg" && return 0
