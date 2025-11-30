@@ -5,6 +5,7 @@ Astaraxia Package Manager, made using shell scripts, because the dev is too dumb
 - [Testing phase](#testing-phase)
 - [How to install](#how-to-install)
 - [How to make the recipes](#how-to-make-the-recipes)
+- [TODO](#todo)
 
 ## TESTING PHASE
 ### Compiling - 3/3
@@ -132,3 +133,6 @@ Once these files are created and placed in the recipe directory, you can compile
 ```
 astral --compile example-app
 ```
+## TODO
+- Making Astral Search A Repo for a new update
+- Astral Repo site
