@@ -13,6 +13,8 @@ CACHE_BIN=${CACHE_BIN:-/var/cache/astral/bin}
 DB_DIR=${DB_DIR:-/var/lib/astral/db}
 REPO_URL=${REPO_URL:-https://izumi-sonoka.github.io/Astral-Repo/}
 INDEX_FILE="$DB_DIR/index" # /var/lib/astral/db/index
+SELF_UPDATE_URL=${SELF_UPDATE_URL:-https://raw.githubusercontent.com/Astaraxia-Linux/Astral/refs/heads/main/astral}
+SELF_UPDATE_PATH=/usr/bin/astral
 LOG_DIR=${LOG_DIR:-/var/log/astral}
 PKG_EXT=${PKG_EXT:-.asb}   # package extension (tar.xz)
 TMPDIR=${TMPDIR:-/tmp}
@@ -40,6 +42,42 @@ USAGE
 is_pkg_installed() {
   pkg="$1"
   [ -d "$DB_DIR/$pkg" ]
+}
+
+self_update() {
+    info "Starting astral self-update..."
+    
+    # Check if we have the necessary tools :p
+    command -v curl >/dev/null 2>&1 || { err "curl not found, cannot self-update."; return 1; }
+    
+    local tmp_file="$TMPDIR/astral-new.$$"
+    
+    # 1. Download the new script
+    if ! curl -fsSL "$SELF_UPDATE_URL" -o "$tmp_file"; then
+        err "Failed to download new astral script from $SELF_UPDATE_URL. Check network or URL."
+        rm -f "$tmp_file"
+        return 1
+    fi
+    
+    # 2. Check the downloaded file for validity
+    if ! head -n 1 "$tmp_file" | grep -q '^#![[:space:]]*/bin/sh'; then
+        err "Downloaded file does not look like a valid shell script (missing shebang). Aborting."
+        rm -f "$tmp_file"
+        return 1
+    fi
+    
+    chmod +x "$tmp_file"
+    
+    info "Replacing old script at $SELF_UPDATE_PATH..."
+    
+    # Use 'mv -f' (force move) to atomically replace the script. Requires root privileges.
+    if mv -f "$tmp_file" "$SELF_UPDATE_PATH"; then
+        info "Self-update successful! Please re-run astral."
+    else
+        err "Failed to replace $SELF_UPDATE_PATH. Check permissions (run as root?)."
+        rm -f "$tmp_file"
+        return 1
+    fi
 }
 
 sync_pkg_recursive() {
