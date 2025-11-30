@@ -38,8 +38,8 @@ USAGE
 }
 
 is_pkg_installed() {
-  pkg="$1"
-  [ -d "$DB_DIR/$pkg" ]
+  pkg="$1"
+  [ -d "$DB_DIR/$pkg" ]
 }
 
 sync_pkg_recursive() {
@@ -203,6 +203,22 @@ build_from_recipe() {
   else
     err "Recipe $pkg has no build script"
   fi
+   # save DB
+    pkgdir="$DB_DIR/$pkgname"
+    mkdir -p "$pkgdir"
+    printf '%s\n' "$pkgver" > "$pkgdir/version"
+    printf '%s\n' "$files" > "$pkgdir/files"
+    [ -f "$tmpmeta/.astral-meta" ] && cp -v "$tmpmeta/.astral-meta" "$pkgdir/meta" 2>/dev/null || true
+    
+    # >>> ADD THIS CRITICAL BLOCK: Save the dependencies used to build the package <<<
+    if [ -f "$buildtmp/depends" ]; then
+        info "Recording build dependencies for $pkgname."
+        cp "$buildtmp/depends" "$pkgdir/depends"
+    fi
+    # >>> END ADDITION <<<
+    
+    rm -rf "$tmpmeta"
+    info "Installed $pkgname ($pkgver)"
 }
 
 # helper: fetch binary if remote
@@ -384,8 +400,8 @@ if [ $# -lt 1 ]; then usage; exit 1; fi
 
 case "$1" in
   -s|--sync)
-    [ $# -gt 1 ] || err "pkg required"
-    sync_pkg_recursive "$2"
+    [ $# -gt 1 ] || err "pkg required"
+    sync_pkg_recursive "$2"
     ;;
   -bin|--binary)
     [ $# -gt 1 ] || err "pkg required"
