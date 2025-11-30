@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+SOURCE_DIR="neofetch-7.1.0"
+
+mkdir -p "$PKGDIR/usr/bin"
+mkdir -p "$PKGDIR/usr/share/man/man1"
+mkdir -p "$PKGDIR/usr/share/doc/neofetch"
+
+cp "$SOURCE_DIR/neofetch" "$PKGDIR/usr/bin/"
+chmod 755 "$PKGDIR/usr/bin/neofetch"
+
+cp -v "$SOURCE_DIR/neofetch.1" "$PKGDIR/usr/share/man/man1/"
+cp -v "$SOURCE_DIR/LICENSE.md" "$PKGDIR/usr/share/doc/neofetch/"
