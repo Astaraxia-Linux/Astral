@@ -326,28 +326,29 @@ remove_pkg() {
 
 # Helper function to get a package's dependencies (from its DB entry, if it has ever existed lol)
 get_pkg_deps() {
-    pkg="$1"
-    depfile="$DB_DIR/$pkg/depends"
-    # Print list of dependencies, one per line (empty if file doesn't exist)
-    [ -f "$depfile" ] && cat "$depfile" || true
+local pkg="$1"
+    local depfile="$DB_DIR/$pkg/depends"
+    
+    # Check if the depends file exists
+    [ -f "$depfile" ] || return 0
+    cat "$depfile" | grep -v '^\s*#' | grep -v '^\s*$' | tr -d '[:space:]'
 }
 
 # Check if a package is required by any other currently installed package
 is_pkg_required() {
-    target_pkg="$1"
-    for other_pkg_dir in "$DB_DIR"/*; do
-        # Skip if not a directory or if it's the package we are currently trying to remove
-        [ -d "$other_pkg_dir" ] || continue
-        other_pkg=$(basename "$other_pkg_dir")
-        [ "$other_pkg" = "$target_pkg" ] && continue
-        
-        # Check if the target_pkg is listed in the 'depends' file of the other package
-        if get_pkg_deps "$other_pkg" | grep -q "^$target_pkg\$"; then
-            return 0 # Required
-        fi
-    done
-    return 1 # Not required by anyone else (is an orphan)
-}
+  is_pkg_required() {
+      local target_pkg="$1"
+      for other_pkg_dir in "$DB_DIR"/*; do
+          # ... (skip if not directory or is the target package, existing code is fine) ...
+          
+          # Check if the target_pkg is listed in the 'depends' file of the other package
+          # Use simple grep, which should work now that get_pkg_deps outputs clean lines
+          if get_pkg_deps "$other_pkg" | grep -q "^${target_pkg}$"; then
+              return 0 # Required
+          fi
+      done
+      return 1 # Not required by anyone else (is an orphan)
+  }
 
 # Remove package and attempt to remove orphan dependencies
 removedep_pkg() {
