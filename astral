@@ -35,6 +35,56 @@ Commands:
 USAGE
 }
 
+is_pkg_installed() {
+  pkg="$1"
+  [ -d "$DB_DIR/$pkg" ]
+}
+
+sync_pkg_recursive() {
+    local pkg="$1"
+    
+    # 1. Check if package is already installed
+    if is_pkg_installed "$pkg"; then
+        info "Package '$pkg' is already installed. Skipping."
+        return 0
+    fi
+
+    local recipe_dir="$(recipe_path "$pkg")"
+    [ -z "$recipe_dir" ] && err "recipe $pkg not found for installation"
+
+    # 2. Handle Dependencies (Recursive Call)
+    local depsf="$recipe_dir/depends"
+    if [ -f "$depsf" ]; then
+        info "Checking dependencies for $pkg..."
+        
+        # Robustly read dependencies one by one
+        while IFS= read -r dep_pkg; do
+            # Filter out whitespace, comments, and empty lines
+            dep_pkg=$(echo "$dep_pkg" | tr -d '[:space:]')
+            if [ -z "$dep_pkg" ] || [ "${dep_pkg:0:1}" = "#" ]; then
+                continue
+            fi
+            
+            # Recursively install dependency
+            sync_pkg_recursive "$dep_pkg"
+        done < "$depsf"
+    fi
+
+    # 3. Main Package Installation (Prefer Binary, Fallback to Source)
+    info "Attempting to install $pkg..."
+    
+    # Try to fetch and install the binary package
+    # fetch_binary_if_remote echoes the path on success
+    if binpkg=$(fetch_binary_if_remote "$pkg" 2>/dev/null || true); then
+        info "Installing $pkg from binary."
+        install_binary_pkg "$binpkg"
+    else
+        # If binary fetch failed, fallback to source compilation
+        info "Binary not available or failed verification. Building $pkg from source."
+        build_from_recipe "$pkg"
+    fi
+}
+
 # helper: find recipe
 recipe_path() {
   pkg="$1"
@@ -308,15 +358,9 @@ if [ $# -lt 1 ]; then usage; exit 1; fi
 
 case "$1" in
   -s|--sync)
-    [ $# -gt 1 ] || err "pkg required"
-    pkg="$2"
-    # try binary first
-    if binpkg=$(fetch_binary_if_remote "$pkg" 2>/dev/null || true); then
-      install_binary_pkg "$binpkg"
-    else
-      build_from_recipe "$pkg"
-    fi
-    ;;
+    [ $# -gt 1 ] || err "pkg required"
+    sync_pkg_recursive "$2"
+    ;;
   -bin|--binary)
     [ $# -gt 1 ] || err "pkg required"
     pkg="$2"
