@@ -12,3 +12,5 @@ chmod +x /usr/bin/astral
 ```
 
 and place it on /usr/bin
+
+## HOW TO MAKE THE RECIPES
