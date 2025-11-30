@@ -29,6 +29,8 @@ Commands:
   -s, --sync <pkg>        Install package: prefer binary, fallback to build
   -bin, --binary <pkg>    Force binary install
   -comp, --compile <pkg>  Build from recipe and install (produce binary)
+  -u, --update            Updates package
+  --search                Searches for package
   -R, --Remove <pkg>      Remove package (leave deps)
   -r, --RemoveDep <pkg>   Remove package and attempt to remove orphan deps
   -y, --All               Try to upgrade all installed packages (binary mode)
