@@ -61,12 +61,6 @@ self_update() {
         return 1
     fi
     
-    # 2. Check the downloaded file for validity
-    if ! head -n 1 "$tmp_file" | grep -q '^#![[:space:]]*/bin/sh'; then
-        err "Downloaded file does not look like a valid shell script (missing shebang). Aborting."
-        rm -f "$tmp_file"
-        return 1
-    fi
     
     chmod +x "$tmp_file"
     
