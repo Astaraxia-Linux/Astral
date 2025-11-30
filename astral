@@ -35,7 +35,7 @@ Commands:
 USAGE
 }
 
-# helper: find recipe
+ helper: find recipe
 recipe_path() {
   pkg="$1"
   [ -f "$RECIPES_DIR/$pkg/build" ] && echo "$RECIPES_DIR/$pkg" && return 0
@@ -82,7 +82,7 @@ install_binary_pkg() {
   tmpmeta="$TMPDIR/astral-meta-$$"
   mkdir -p "$tmpmeta"
   tar -xf "$pkgfile" -C "$tmpmeta" --wildcards --no-anchored '.astral-meta' 2>/dev/null || true
-  # record files (all files except metadata)
+  # record files (all files except metadataaaaaaa)
   files=$(tar -tf "$pkgfile" | grep -v '^.astral-meta$' || true)
   pkgname=$(echo "$bn" | sed -E 's/^([^-]+)-.*/\1/')
   pkgver=$(echo "$bn" | sed -E 's/^[^-]+-([0-9A-Za-z.+~_:-]+).*/\1/' || printf 'unknown')
@@ -103,11 +103,11 @@ build_from_recipe() {
   # build environment
   buildtmp="$TMPDIR/astral-build-$pkg-$$"
   mkdir -p "$buildtmp"
-  # if recipe is a directory, copy files there
+  # if recipe is a directory, copy files ther
   if [ -d "$rpath" ]; then
     cp -a "$rpath"/* "$buildtmp"/
   else
-    # single-file recipe case - copy
+    # single-file recipe case - copyy
     cp -a "$rpath" "$buildtmp/recipe.astral"
   fi
   cd "$buildtmp"
@@ -117,7 +117,7 @@ build_from_recipe() {
     # create safe packaging dir
     PKGDIR="$buildtmp/pkg"
     mkdir -p "$PKGDIR"
-    # run build in subshell to avoid environment pollution
+    # run build in subshell
     ( cd "$buildtmp" && ./build ) || err "build failed for $pkg"
     # run package (should install into $PKGDIR)
     if [ -f "./package" ]; then
@@ -159,11 +159,11 @@ fetch_binary_if_remote() {
         # Use wget/curl to download BINARY and SIGNATURE
         if ! wget -q -O "$tmp_bin" "$url_bin" || ! wget -q -O "$tmp_sig" "$url_sig"; then
             info "Binary or signature not found/downloaded."
-            rm -f "$tmp_bin" "$tmp_sig" # Clean up failed download
+            rm -f "$tmp_bin" "$tmp_sig" # Clean up failed download, we dont want failed attemps, dont we
             return 1
         fi
         
-        # CRITICAL SECURITY STEP: VERIFY SIGNATURE
+        # VERIFY SIGNATURE
         if command -v gpg >/dev/null 2>&1; then
             info "Verifying binary signature..."
             # Note: You must have the package author's public key imported on the system.
@@ -275,7 +275,7 @@ removedep_pkg() {
             [ -d "$dep_dir" ] || continue
             dep_name=$(basename "$dep_dir")
 
-            # Check if this package is required by anyone else
+            # Check if this package is required by anyone else other than the pkg itself
             if ! is_pkg_required "$dep_name"; then
                 info "Removing orphan dependency: $dep_name"
                 # Call simple remove_pkg to avoid infinite recursion
