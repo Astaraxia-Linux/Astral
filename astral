@@ -336,13 +336,19 @@ local pkg="$1"
 
 # Check if a package is required by any other currently installed package
 is_pkg_required() {
-  is_pkg_required() {
-      local target_pkg="$1"
-      for other_pkg_dir in "$DB_DIR"/*; do
-          # ... (skip if not directory or is the target package, existing code is fine) ...
-          
-          # Check if the target_pkg is listed in the 'depends' file of the other package
-          # Use simple grep, which should work now that get_pkg_deps outputs clean lines
+    local target_pkg="$1"
+    
+    for other_pkg_dir in "$DB_DIR"/*; do
+        
+        # 1. Skip if the entry is not a directory.
+        [ -d "$other_pkg_dir" ] || continue 
+        
+        # 2. Assign the package name and ensure it's not empty (prevents unbound error)
+        local other_pkg=$(basename "$other_pkg_dir") 
+        [ -z "$other_pkg" ] && continue
+        
+        # 3. Skip if it's the package we are currently trying to remove.
+        [ "$other_pkg" = "$target_pkg" ] && continue
           if get_pkg_deps "$other_pkg" | grep -q "^${target_pkg}$"; then
               return 0 # Required
           fi
