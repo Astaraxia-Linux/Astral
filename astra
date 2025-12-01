@@ -119,8 +119,9 @@ fetch_remote_recipe() {
         local url="$remote_base/$file"
         local dest="$local_dir/$file"
         
-        # Download silently (-s), fail on 404 (-f)
-        if curl -fsSL "$url" -o "$dest"; then
+        # Download silently (-s), fail on 404 (-f). Suppress curl's error output (2>/dev/null) 
+        # and rely only on the exit code to determine success/failure.
+        if curl -fsSL "$url" -o "$dest" 2>/dev/null; then
             :
         else
             # Check against mandatory files
@@ -510,7 +511,7 @@ remove_pkg() {
             # rmdir will fail safely on non-empty directories
             if rmdir "/$d" 2>/dev/null; then
                 info "  -> Deleted empty directory: /$d"
-            fi
+            }
         done
         rm -f "$dirs_file" # Explicit cleanup
     fi
