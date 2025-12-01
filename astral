@@ -25,13 +25,12 @@ usage() {
 Usage: astral <command> [pkg...]
 Commands:
   -s, --sync <pkg>        Install package... idk
-  -bin, --binary <pkg>    Force binary install
   -comp, --compile <pkg>  Build from recipe and install (produce binary)
-  -u, --update            Updates package
+  -u, --update            Updates Local ReDB
   --search                Searches for package
   -R, --Remove <pkg>      Remove package (leave deps)
   -r, --RemoveDep <pkg>   Remove package and attempt to remove orphan deps
-  -y, --All               Try to upgrade all installed packages (binary mode)
+  -y, --All               Try to upgrade all installed packages
   --inspect <pkg>         Show recipe content
   --list-installed        List installed packages
 USAGE
