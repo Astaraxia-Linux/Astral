@@ -9,7 +9,8 @@ RECIPES_DIR=${RECIPES_DIR:-/usr/src/astral/recipes}
 CACHE_SRC=${CACHE_SRC:-/var/cache/astral/src}
 CACHE_BIN=${CACHE_BIN:-/var/cache/astral/bin}
 DB_DIR=${DB_DIR:-/var/lib/astral/db}
-REPO_URL=${REPO_URL:-https://izumi-sonoka.github.io/Astral-Repo/}
+REPO_URL=${REPO_URL:-https://izumi-sonoka.github.io/Astral-Repo/}                                  # URL for index/metadata (GitHub Pages)
+RECIPE_RAW_URL=${RECIPE_RAW_URL:-https://github.com/Izumi-Sonoka/Astral-Repo/} # Base URL for raw recipe files
 INDEX_FILE="$DB_DIR/index"
 LOG_DIR=${LOG_DIR:-/var/log/astral}
 SELF_UPDATE_URL=${SELF_UPDATE_URL:-https://raw.githubusercontent.com/Astaraxia-Linux/Astral/refs/heads/main/astral}
@@ -110,13 +111,10 @@ fetch_remote_recipe() {
     mkdir -p "$local_dir"
 
     # List of files to fetch. 'build' and 'package' and 'version' are mandatory.
-    # 'depends' and 'sources' are optional but we try to fetch them.
     local required_files="version build package sources"
     local optional_files="depends"
     
-    # Assuming remote structure: REPO_URL/recipes/pkgname/filename
-    # Note: REPO_URL usually ends with /. We append recipes/$pkg/
-    local remote_base="${REPO_URL}recipes/$pkg"
+    local remote_base="${RECIPE_RAW_URL}recipes/$pkg"
 
     for file in $required_files $optional_files; do
         local url="$remote_base/$file"
@@ -124,7 +122,6 @@ fetch_remote_recipe() {
         
         # Download silently (-s), fail on 404 (-f)
         if curl -fsSL "$url" -o "$dest"; then
-            # info "Fetched $file"
             :
         else
             if echo "$required_files" | grep -q "$file"; then
@@ -138,7 +135,8 @@ fetch_remote_recipe() {
     done
     
     # Make scripts executable
-    chmod +x "$local_dir/build" "$local_dir/package"
+    chmod +x "$local_dir/build" 2>/dev/null || true # package might not be there if single file recipe
+    chmod +x "$local_dir/package" 2>/dev/null || true
     info "Recipe for '$pkg' downloaded successfully."
 }
 
@@ -154,7 +152,6 @@ sync_pkg_recursive() {
     [ -z "$recipe_dir" ] && err "Recipe for '$pkg' could not be found or downloaded."
 
     # 2. Handle Dependencies (Recursive)
-    # We read the recipe's depends file (newly downloaded or local)
     local depsf="$recipe_dir/depends"
     if [ -f "$depsf" ]; then
         info "Checking dependencies for $pkg..."
@@ -176,7 +173,7 @@ build_from_recipe() {
     local rpath
     rpath=$(recipe_path "$pkg") || err "recipe $pkg not found"
     
-    # --- VERSION CHECK LOGIC ---
+    # --- VERSION CHECK LOGIC (Skip build if same version) ---
     local recipe_ver="unknown"
     [ -f "$rpath/version" ] && recipe_ver=$(cat "$rpath/version")
     
@@ -192,7 +189,7 @@ build_from_recipe() {
     else
         info "Installing '$pkg' version $recipe_ver..."
     fi
-    # ---------------------------
+    # -----------------------------------------------------
 
     # build environment
     local buildtmp="$TMPDIR/astral-build-$pkg-$$"
@@ -210,7 +207,7 @@ build_from_recipe() {
         local PKGDIR="$buildtmp/pkg"
         mkdir -p "$PKGDIR"
         
-        # ISOLATED BUILD
+        # ISOLATED BUILD (Using DESTDIR)
         ( cd "$buildtmp" && DESTDIR="$PKGDIR" ./build ) || err "build failed for $pkg"
         
         if [ -f "./package" ]; then
