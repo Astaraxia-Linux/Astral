@@ -24,7 +24,7 @@ usage() {
   cat <<USAGE
 Usage: astral <command> [pkg...]
 Commands:
-  -s, --sync <pkg>        Install package: prefer binary, fallback to build
+  -s, --sync <pkg>        Install package... idk
   -bin, --binary <pkg>    Force binary install
   -comp, --compile <pkg>  Build from recipe and install (produce binary)
   -u, --update            Updates package
@@ -43,37 +43,31 @@ is_pkg_installed() {
 }
 
 sync_pkg_recursive() {
-    local pkg="$1"
-    
-    if is_pkg_installed "$pkg"; then
-        info "Package '$pkg' is already installed. Skipping."
-        return 0
-    fi
+    local pkg="$1"
+    
+    if is_pkg_installed "$pkg"; then
+        info "Package '$pkg' is already installed. Skipping."
+        return 0
+    fi
 
-    local recipe_dir="$(recipe_path "$pkg")"
-    [ -z "$recipe_dir" ] && err "recipe $pkg not found for installation"
+    local recipe_dir="$(recipe_path "$pkg")"
+    [ -z "$recipe_dir" ] && err "recipe $pkg not found for installation"
 
-    local depsf="$recipe_dir/depends"
-    if [ -f "$depsf" ]; then
-        info "Checking dependencies for $pkg..."
-        while IFS= read -r dep_pkg; do
-            # Robust filtering
-            dep_pkg=$(echo "$dep_pkg" | tr -d '[:space:]')
-            if [ -z "$dep_pkg" ] || [ "${dep_pkg:0:1}" = "#" ]; then
-                continue
-            fi
-            sync_pkg_recursive "$dep_pkg"
-        done < "$depsf"
-    fi
+    local depsf="$recipe_dir/depends"
+    if [ -f "$depsf" ]; then
+        info "Checking dependencies for $pkg..."
+        while IFS= read -r dep_pkg; do
+            # Robust filtering
+            dep_pkg=$(echo "$dep_pkg" | tr -d '[:space:]')
+            if [ -z "$dep_pkg" ] || [ "${dep_pkg:0:1}" = "#" ]; then
+                continue
+            fi
+            sync_pkg_recursive "$dep_pkg"
+        done < "$depsf"
+    fi
 
-    info "Attempting to install $pkg..."
-    if binpkg=$(fetch_binary_if_remote "$pkg" 2>/dev/null || true); then
-        info "Installing $pkg from binary."
-        install_binary_pkg "$binpkg"
-    else
-        info "Binary not available or failed verification. Building $pkg from source."
-        build_from_recipe "$pkg"
-    fi
+    info "Installing $pkg by building from source."
+    build_from_recipe "$pkg"
 }
 
 update_repo() {
@@ -126,154 +120,71 @@ arch=$arch
 M
 }
 
-# install binary package
-install_binary_pkg() {
-  pkgfile="$1"
-  [ -f "$pkgfile" ] || err "binary $pkgfile not found"
-  info "Installing binary: $pkgfile"
-  # extract into root
-  tar -C / -xf "$pkgfile"
-  # build file list and record db
-  bn=$(basename "$pkgfile")
-  # attempt to extract metadata
-  tmpmeta="$TMPDIR/astral-meta-$$"
-  mkdir -p "$tmpmeta"
-  tar -xf "$pkgfile" -C "$tmpmeta" --wildcards --no-anchored '.astral-meta' 2>/dev/null || true
-  # record files (all files except metadataaaaaaa)
-  files=$(tar -tf "$pkgfile" | grep -v '^.astral-meta$' || true)
-  pkgname=$(echo "$bn" | sed -E 's/^([^-]+)-.*/\1/')
-  pkgver=$(echo "$bn" | sed -E 's/^[^-]+-([0-9A-Za-z.+~_:-]+).*/\1/' || printf 'unknown')
-  # save DB
-  pkgdir="$DB_DIR/$pkgname"
-  mkdir -p "$pkgdir"
-  printf '%s\n' "$pkgver" > "$pkgdir/version"
-  printf '%s\n' "$files" > "$pkgdir/files"
-  [ -f "$tmpmeta/.astral-meta" ] && cp -v "$tmpmeta/.astral-meta" "$pkgdir/meta" 2>/dev/null || true
-  rm -rf "$tmpmeta"
-  info "Installed $pkgname ($pkgver)"
-}
-
 # build from recipe directory
 build_from_recipe() {
-  pkg="$1"
-  rpath=$(recipe_path "$pkg") || err "recipe $pkg not found"
-  # build environment
-  buildtmp="$TMPDIR/astral-build-$pkg-$$"
-  mkdir -p "$buildtmp"
-  # if recipe is a directory, copy files ther
-  if [ -d "$rpath" ]; then
-    cp -a "$rpath"/* "$buildtmp"/
-  else
-    # single-file recipe case - copyy
-    cp -a "$rpath" "$buildtmp/recipe.astral"
-  fi
-  cd "$buildtmp"
-  # load recipe script if present (build/package functions expected)
-  if [ -f "./build" ]; then
-    chmod +x ./build || true
-    # create safe packaging dir
-    PKGDIR="$buildtmp/pkg"
-    mkdir -p "$PKGDIR"
-    # run build in subshell
-    ( cd "$buildtmp" && ./build ) || err "build failed for $pkg"
-    # run package (should install into $PKGDIR)
-    if [ -f "./package" ]; then
-      ( cd "$buildtmp" && PKGDIR="$PKGDIR" ./package ) || err "package() failed for $pkg"
-    else
-      # default packaging: assume built in builddir and provide files under PKGDIR/usr
-      err "no package() script found for $pkg; recipe must provide package script"
-    fi
-    # create metadata
-    ver="unknown"
-    [ -f "./version" ] && ver=$(cat ./version)
-    create_meta "$pkg" "$ver" "x86_64" "$PKGDIR"
-    # create binary package
-    pkgfile="$CACHE_BIN/${pkg}-${ver}${PKG_EXT}"
-    tar -C "$PKGDIR" -cJf "$pkgfile" .astral-meta . || err "failed to create package $pkgfile"
-    # append files directory content into tar (the real files)
-    # simpler: create a combined package (meta + pkg tree)
-    # we rebuild packaging to include entire pkg dir
-    rm -f "$pkgfile"
-    tar -C "$PKGDIR" -cJf "$pkgfile" . || err "failed to create package $pkgfile"
-    info "Created binary: $pkgfile"
-    # install it
-    install_binary_pkg "$pkgfile"
-    # cleanup
-    rm -rf "$buildtmp"
-  else
-    err "Recipe $pkg has no build script"
-  fi
-   # save DB
-   pkgdir="$DB_DIR/$pkgname"
-   mkdir -p "$pkgdir"
-   printf '%s\n' "$pkgver" > "$pkgdir/version"
-   printf '%s\n' "$files" > "$pkgdir/files"
-   [ -f "$tmpmeta/.astral-meta" ] && cp -v "$tmpmeta/.astral-meta" "$pkgdir/meta" 2>/dev/null || true
-    
-    # >>> ADD THIS CRITICAL BLOCK: Save the dependencies used to build the package <<<
-   if [ -f "$buildtmp/depends" ]; then
-       info "Recording build dependencies for $pkgname."
-       cp "$buildtmp/depends" "$pkgdir/depends"
-   fi
-    # >>> END ADDITION <<<
-    
-   rm -rf "$tmpmeta"
-   info "Installed $pkgname ($pkgver)"
-}
+    local pkg="$1"
+    local rpath
+    rpath=$(recipe_path "$pkg") || err "recipe $pkg not found"
+    # build environment
+    local buildtmp="$TMPDIR/astral-build-$pkg-$$"
+    mkdir -p "$buildtmp"
 
-# helper: fetch binary if remote
-fetch_binary_if_remote() {
-    local pkg="$1"
-    
-    # 1. Check if the index exists locally
-    [ -f "$INDEX_FILE" ] || { info "Index not found. Cannot check remote repo."; return 1; }
+    # if recipe is a directory, copy files ther
+    if [ -d "$rpath" ]; then
+        cp -a "$rpath"/* "$buildtmp"/
+    else
+        # single-file recipe case - copyy
+        cp -a "$rpath" "$buildtmp/recipe.astral"
+    fi
+    cd "$buildtmp"
 
-    # 2. Look up the package in the index
-    # Format: PackageName Version Arch Filename (using space as separator)
-    repo_line=$(grep "^$pkg " "$INDEX_FILE" | head -n 1)
-
-    if [ -z "$repo_line" ]; then
-        info "Package '$pkg' not found in remote index."
-        return 1
-    fi
-
-    # 3. Parse the line to get version and filename
-    set -- $repo_line
-    local remote_filename=$4 # Filename should be the 4th field from the index
-
-    # 4. Construct URLs (assuming files are in the same directory as the index for now)
-    local url_bin="${REPO_URL}${remote_filename}"
-    local url_sig="${REPO_URL}${remote_filename}.sig"
-    
-    local tmp_bin="$CACHE_BIN/${remote_filename}"
-    local tmp_sig="$CACHE_BIN/${remote_filename}.sig"
-
-    # 5. Download Binary and Signature
-    info "Fetching binary: $remote_filename from remote..."
-    # Use curl for reliable downloading
-    if ! curl -fsSL -o "$tmp_bin" "$url_bin" || ! curl -fsSL -o "$tmp_sig" "$url_sig"; then
-        info "Binary or signature not found/downloaded."
-        rm -f "$tmp_bin" "$tmp_sig"
-        return 1
-    fi
-    
-    # 6. GPG Verification (Security check remains the same)
-    if command -v gpg >/dev/null 2>&1; then
-        info "Verifying binary signature..."
-        # Using batch/quiet/no-verbose for reliable exit code check
-        if gpg --batch --quiet --no-verbose --verify "$tmp_sig" "$tmp_bin"; then
-            echo "$tmp_bin" # Return the path to the downloaded binary
-            return 0
-        else
-            err "GPG signature verification failed! Deleting unsafe binary."
-            rm -f "$tmp_bin" "$tmp_sig"
-            return 1
-        fi
-    else
-        err "GPG not installed! Cannot guarantee binary safety."
-        rm -f "$tmp_bin" "$tmp_sig"
-        return 1
-    fi
+    # load recipe script if present (build/package functions expected)
+    if [ -f "./build" ]; then
+        chmod +x ./build || true
+        # create safe packaging dir
+        local PKGDIR="$buildtmp/pkg"
+        mkdir -p "$PKGDIR"
+        
+        # run build in subshell
+        ( cd "$buildtmp" && ./build ) || err "build failed for $pkg"
+        
+        # run package (should install into $PKGDIR)
+        if [ -f "./package" ]; then
+            ( cd "$buildtmp" && PKGDIR="$PKGDIR" ./package ) || err "package() failed for $pkg"
+        else
+            err "no package() script found for $pkg; recipe must provide package script"
+        fi
+        
+        # create metadata
+        local ver="unknown"
+        [ -f "./version" ] && ver=$(cat ./version)
+        create_meta "$pkg" "$ver" "x86_64" "$PKGDIR"
+        
+        info "Installing $pkg to root filesystem..."
+        
+        # 1. Install files from PKGDIR to /
+        tar -C "$PKGDIR" -cf - . | tar -C / -xf - || err "failed to extract package files"
+        
+        # 2. Record installed files in the database
+        local files=$(tar -C "$PKGDIR" -tf . | grep -v '^\.$' | grep -v '^\.\/$' | grep -v '^\.astral-meta$' || true)
+        local pkgdir="$DB_DIR/$pkg"
+        mkdir -p "$pkgdir"
+        printf '%s\n' "$ver" > "$pkgdir/version"
+        printf '%s\n' "$files" > "$pkgdir/files"
+        
+        # 3. Record Dependencies
+        if [ -f "$buildtmp/depends" ]; then
+            info "Recording build dependencies for $pkg."
+            cp "$buildtmp/depends" "$pkgdir/depends"
+        fi
+        
+        info "Installed $pkg ($ver) from source."
+        
+        # cleanup
+        rm -rf "$buildtmp"
+    else
+        err "Recipe $pkg has no build script"
+    fi
 }
 
 # Removing package
@@ -406,48 +317,31 @@ list_installed() {
 if [ $# -lt 1 ]; then usage; exit 1; fi
 
 case "$1" in
-  -s|--sync)
-    [ $# -gt 1 ] || err "pkg required"
-    sync_pkg_recursive "$2"
-    ;;
-  -bin|--binary)
-    [ $# -gt 1 ] || err "pkg required"
-    pkg="$2"
-    binpkg=$(fetch_binary_if_remote "$pkg" 2>/dev/null) || err "binary not found"
-    install_binary_pkg "$binpkg"
-    ;;
-  -comp|--compile)
-    [ $# -gt 1 ] || err "pkg required"
-    build_from_recipe "$2"
-    ;;
-  -u|--update)
-    update_repo
-    ;;
+-s|--sync)
+    [ $# -gt 1 ] || err "pkg required"
+    sync_pkg_recursive "$2"
+    ;;
+  #-bin|--binary) <--- REMOVED
 
-    -s|--sync)
-      [ $# -gt 1 ] || err "pkg required"
-      sync_pkg_recursive "$2" # Requires the recursive function from the previous step
-      ;;
-  -R|--Remove)
-    [ $# -gt 1 ] || err "pkg required"
-    remove_pkg "$2"
-    ;;
-  -r|--RemoveDep)
-    [ $# -gt 1 ] || err "pkg required"
-    removedep_pkg "$2"
-    ;;
-  -y|--All)
-    info "Upgrade all (attempting binary upgrades where available)"
-    for d in "$DB_DIR"/*; do
-      [ -d "$d" ] || continue
-      name=$(basename "$d")
-      if binpkg=$(fetch_binary_if_remote "$name" 2>/dev/null); then
-        install_binary_pkg "$binpkg"
-      else
-        info "no binary for $name"
-      fi
-    done
-    ;;
+  -comp|--compile)
+    [ $# -gt 1 ] || err "pkg required"
+    build_from_recipe "$2"
+    ;;
+  -u|--update)
+    update_repo
+    ;;
+-R|--Remove)
+    [ $# -gt 1 ] || err "pkg required"
+    remove_pkg "$2"
+    ;;
+  -r|--RemoveDep)
+    [ $# -gt 1 ] || err "pkg required"
+    removedep_pkg "$2"
+    ;;
+  -y|--All)
+    info "Upgrade all functionality removed (no binary support). Listing installed packages."
+    list_installed
+    ;;
   --inspect)
     [ $# -gt 1 ] || err "pkg required"
     r=$(recipe_path "$2") || err "recipe not found"
