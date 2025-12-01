@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.4.5 - minimal POSIX package manager for Astaraxia
+# Astral v0.4.6 - minimal POSIX package manager for Astaraxia
 # Features: Source-only, Auto-recipe fetch, Version locking, Build isolation,
 #           Post-install/Pre-remove hooks, File conflict detection, SHA256 Checksums.
 
@@ -24,6 +24,8 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
+version=0.4.5.1
+
 usage() {
   cat <<USAGE
 Usage: astral <command> [pkg...]
@@ -46,6 +48,14 @@ USAGE
 is_pkg_installed() {
   pkg="$1"
   [ -d "$DB_DIR/$pkg" ]
+}
+
+astral_version() {
+cat <<EOF
+Astral version $version
+EOF
+
+	exit 0
 }
 
 # helper: find recipe path
