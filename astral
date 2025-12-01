@@ -94,6 +94,45 @@ recipe_path() {
   return 1
 }
 
+search_pkg() {
+    local query="$1"
+    info "Searching for package '$query'..."
+
+    Search Local Recipes (Directories in /usr/src/astral/recipes/)
+    info "--- Local Recipes ---"
+    local found_local=0
+    for r in "$RECIPES_DIR"/*; do
+        if [ -d "$r" ]; then
+            local pkg_name=$(basename "$r")
+            if echo "$pkg_name" | grep -iq "$query"; then
+                local ver="unknown"
+                [ -f "$r/version" ] && ver=$(cat "$r/version")
+                printf "L: %-20s (v%s)\n" "$pkg_name" "$ver"
+                found_local=1
+            fi
+        fi
+    done
+    [ "$found_local" -eq 0 ] && info "No local recipes found matching '$query'."
+
+
+    Search Remote Index (The astral.index file)
+    info "--- Remote Index ---"
+    [ -f "$INDEX_FILE" ] || { info "Remote index not found. Run 'astral -u' to update."; return 0; }
+
+    # Query the index file: Format is 'PackageName Version Arch Filename'
+    local found_remote=0
+    while IFS= read -r line; do
+        local pkg_name=$(echo "$line" | awk '{print $1}')
+        local pkg_ver=$(echo "$line" | awk '{print $2}')
+
+        if echo "$pkg_name" | grep -iq "$query"; then
+            printf "R: %-20s (v%s)\n" "$pkg_name" "$pkg_ver"
+            found_remote=1
+        fi
+    done < "$INDEX_FILE"
+    [ "$found_remote" -eq 0 ] && info "No remote packages found matching '$query'."
+}
+
 # read metadata from recipe dir or file
 read_recipe_meta() {
   r="$1"
@@ -321,8 +360,6 @@ case "$1" in
     [ $# -gt 1 ] || err "pkg required"
     sync_pkg_recursive "$2"
     ;;
-  #-bin|--binary) <--- REMOVED
-
   -comp|--compile)
     [ $# -gt 1 ] || err "pkg required"
     build_from_recipe "$2"
@@ -330,6 +367,10 @@ case "$1" in
   -u|--update)
     update_repo
     ;;
+--search)
+        [ $# -gt 1 ] || err "package name required"
+        search_pkg "$2"
+        ;;
 -R|--Remove)
     [ $# -gt 1 ] || err "pkg required"
     remove_pkg "$2"
