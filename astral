@@ -525,6 +525,21 @@ upgrade_all() {
 
 
 self_update() {
+    # 1. Ensure TMPDIR is set, defaulting to /tmp
+    TMPDIR="${TMPDIR:-/tmp}"
+    
+    # 2. Use mktemp for a secure temporary file name
+    # The -t flag prepends $TMPDIR/ if not already, and the 'astral-new.XXXXXX' pattern is helpful.
+    local tmp_file
+    tmp_file=$(mktemp "$TMPDIR/astral-new.XXXXXX")
+    if [ $? -ne 0 ]; then
+        err "Failed to create secure temporary file using mktemp."
+        return 1
+    fi
+
+    # Ensure the temporary file is cleaned up on exit (success or failure)
+    trap 'rm -f "$tmp_file"' EXIT
+
     local branch="${1:-main}"
     local update_url=""
     
@@ -542,32 +557,47 @@ self_update() {
             info "Starting astral self-update from 'bleeding-edge' branch ($update_url)..."
             ;;
         *)
-            err "Unknown update branch/channel '$branch'. Please use 'main' (default) or 'bleeding-edge' (or 'testing')."
+            err "Unknown update branch/channel '$branch'. Please use 'main' (default), 'cutting-edge', or 'bleeding-edge'."
+            # FIX: Added return 1 here to stop execution on unknown branch
+            return 1 
             ;;
     esac
 
+    # Check for curl before attempting download
     command -v curl >/dev/null 2>&1 || { err "curl not found."; return 1; }
-    local tmp_file="$TMPDIR/astral-new.$$"
 
     # Use the selected update_url
+    if [ -z "$update_url" ]; then
+        err "Internal error: Update URL is empty."
+        return 1
+    fi
+
     if ! curl -fsSL "$update_url" -o "$tmp_file"; then
         err "Failed to download new astral script from $update_url."
-        rm -f "$tmp_file"
+        # The trap handles cleanup, no need for rm -f here
         return 1
     fi
     
-    if ! head -n 1 "$tmp_file" | grep -q '^\#![[:space:]]*/bin/sh'; then
-        err "Downloaded file invalid (missing shebang)."
-        rm -f "$tmp_file"
+    # Check for shebang robustness: requires a leading '#!' and then non-space characters (or only spaces)
+    if ! head -n 1 "$tmp_file" | grep -qE '^#!([[:space:]]*/bin/sh|[[:space:]]*/usr/bin/env)'; then
+        err "Downloaded file invalid (missing shebang or invalid content)."
         return 1
     fi
     
+    # Check if the downloaded file has any content (e.g., if the URL returned a 404 page)
+    if [ ! -s "$tmp_file" ]; then
+        err "Downloaded file is empty or too small. Download failed."
+        return 1
+    fi
+
     chmod +x "$tmp_file"
     if mv -f "$tmp_file" "$SELF_UPDATE_PATH"; then
-        info "Self-update successful!"
+        info "Self-update successful! New script installed to $SELF_UPDATE_PATH."
+        # Crucial: Disable the trap's cleanup since the file has been moved
+        trap - EXIT 
+        # Relaunch the script if necessary (common in self-updaters, but not included here)
     else
-        err "Failed to replace $SELF_UPDATE_PATH."
-        rm -f "$tmp_file"
+        err "Failed to replace $SELF_UPDATE_PATH. Check permissions."
         return 1
     fi
 }
