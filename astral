@@ -10,7 +10,8 @@ CACHE_SRC=${CACHE_SRC:-/var/cache/astral/src}
 CACHE_BIN=${CACHE_BIN:-/var/cache/astral/bin}
 DB_DIR=${DB_DIR:-/var/lib/astral/db}
 REPO_URL=${REPO_URL:-https://izumi-sonoka.github.io/Astral-Repo/}                                  # URL for index/metadata (GitHub Pages)
-RECIPE_RAW_URL=${RECIPE_RAW_URL:-https://raw.githubusercontent.com/Izumi-Sonoka/Astral-Repo/main/} # Base URL for raw recipe files (CORRECTED)
+# FIX: Removed trailing slash here. We add it explicitly in fetch_remote_recipe.
+RECIPE_RAW_URL=${RECIPE_RAW_URL:-https://raw.githubusercontent.com/Izumi-Sonoka/Astral-Repo/main} # Base URL for raw recipe files
 INDEX_FILE="$DB_DIR/index"
 LOG_DIR=${LOG_DIR:-/var/log/astral}
 SELF_UPDATE_URL=${SELF_UPDATE_URL:-https://raw.githubusercontent.com/Astaraxia-Linux/Astral/refs/heads/main/astral}
@@ -114,14 +115,15 @@ fetch_remote_recipe() {
     local required_files="version build package sources"
     local optional_files="depends"
     
-    # URL BASE uses the clean RECIPE_RAW_URL
-    local remote_base="${RECIPE_RAW_URL}recipes/$pkg"
+    # FIX APPLIED HERE: Explicitly add the slash to prevent double slashes.
+    local remote_base="${RECIPE_RAW_URL}/recipes/$pkg"
 
     for file in $required_files $optional_files; do
         local url="$remote_base/$file"
         local dest="$local_dir/$file"
         
         # Download silently (-s), fail on 404 (-f)
+        # -L is already included in -fsSL to follow redirects
         if curl -fsSL "$url" -o "$dest"; then
             :
         else
