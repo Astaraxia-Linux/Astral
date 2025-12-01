@@ -12,7 +12,7 @@ Astaraxia Package Manager, made using shell scripts, because the dev is too dumb
 1. Compiling wihout depend... - CHECK
 2. Compiling with depend... - CHECK
 3. Compiling with 2 or more apps using the same depend... - CHECK
-### Binary - 0/3
+### Binary - 0/3 - ISNT IMPLEMENTED YET
 1. Installing wihout depend... - X
 2. Installing with depend... - X
 3. Installing with 2 or more apps using the same depend... - X
