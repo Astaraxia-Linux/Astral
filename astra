@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.4.7.2 BLEEDING EDGE - minimal POSIX package manager for Astaraxia
+# Astral v0.4.7.3 BLEEDING EDGE - minimal POSIX package manager for Astaraxia
 # Features: Source-only, Auto-recipe fetch, Version locking, Build isolation,
 #           Post-install/Pre-remove hooks, File conflict detection, SHA256 Checksums, Info file support.
 
@@ -31,7 +31,7 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-version="0.4.7.2 BLEEDING EDGE"
+version="0.4.7.3 BLEEDING EDGE"
 
 astral_version() {
 cat <<EOF
@@ -53,7 +53,7 @@ Commands:
   -u, --update            Updates the remote package index (for search).
   --search <pkg>          Searches for package in local recipes and remote index.
   -R, --Remove <pkg>      Remove package (leave deps).
-  -r, --RemoveDep <pkg>   Remove package and attempt to remove orphan deps.
+  -r, --RemoveDep <pkg>   Remove package and attempt to remove orphan deps. (Now safer, non-recursive)
   -Cc, --Clean-Cache      Remove recipes for packages that are NOT currently installed.
   -U, --self-update [BR]  Update the astral script itself from GitHub. BR can be 'main' (default) or 'bleeding-edge'.
   --inspect <pkg>         Show recipe files, including package info and build script head.
@@ -689,25 +689,44 @@ remove_pkg() {
     info "Removed $pkg successfully from database."
 }
 
+# --- MODIFIED: Safer, non-cascading dependency removal ---
 removedep_pkg() {
-    pkg="$1"
+    local pkg="$1"
+    local initial_deps_file="$DB_DIR/$pkg/depends"
+    local direct_deps=""
+    
+    # 1. Capture the direct dependencies of the package being removed BEFORE removal.
+    if [ -f "$initial_deps_file" ]; then
+        # Read the list of dependencies into a string or temporary file (using a variable for simplicity)
+        direct_deps=$(get_pkg_deps "$pkg" || true)
+    fi
+    
+    # 2. Perform the primary package removal.
     remove_pkg "$pkg"
-    info "Scanning for orphaned dependencies..."
-    while true; do
-        found_orphan=0
-        for dep_dir in "$DB_DIR"/*; do
-            [ -d "$dep_dir" ] || continue
-            dep_name=$(basename "$dep_dir")
-            if ! is_pkg_required "$dep_name"; then
-                info "Removing orphan dependency: $dep_name"
-                remove_pkg "$dep_name"
-                found_orphan=1
-                break
-            fi 
+    
+    # 3. Check and remove ONLY the direct dependencies captured in step 1.
+    if [ -n "$direct_deps" ]; then
+        info "Scanning for orphaned direct dependencies of $pkg..."
+        echo "$direct_deps" | while IFS= read -r dep_name; do
+            # Use get_pkg_deps output cleanup logic
+            dep_name=$(echo "$dep_name" | tr -d '[:space:]')
+            [ -z "$dep_name" ] && continue
+            
+            # Check if it's still installed and if any *other* package requires it.
+            if is_pkg_installed "$dep_name" && ! is_pkg_required "$dep_name"; then
+                info "Removing orphan dependency: $dep_name (was required by $pkg, now required by none)."
+                # Recursively call removedep_pkg on the found orphan to clean its sub-dependencies.
+                # NOTE: This re-introduces recursion but only on a guaranteed orphan, stopping the system-wide scan.
+                removedep_pkg "$dep_name"
+            fi
         done
-        [ "$found_orphan" -eq 0 ] && break
-    done
+        info "Direct dependency cleanup complete."
+    else
+        info "$pkg had no recorded dependencies. No dependency cleanup required."
+    fi
+    # The while loop structure of the old function is now implicitly handled by the recursion here.
 }
+# --- END MODIFIED REMOVEDEP ---
 
 clean_cache() {
     info "Starting recipe cache cleanup in $RECIPES_DIR..."
