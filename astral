@@ -1,6 +1,6 @@
 #!/bin/sh
 # Astral v0.2 - minimal POSIX package manager for Astaraxia
-# Features: Source-only, Auto-recipe fetch, Version locking, Build isolation..........
+# Features: Source-only, Auto-recipe fetch, Version locking, Build isolation.
 
 set -eu
 
@@ -162,7 +162,7 @@ sync_pkg_recursive() {
             dep_pkg=$(echo "$dep_pkg" | tr -d '[:space:]')
             if [ -z "$dep_pkg" ] || [ "${dep_pkg:0:1}" = "#" ]; then
                 continue
-            fi
+            fiet_remote_recipe
             sync_pkg_recursive "$dep_pkg"
         done < "$depsf"
     fi
@@ -203,7 +203,11 @@ build_from_recipe() {
     else
         cp -a "$rpath" "$buildtmp/recipe.astral"
     fi
+    # IMPORTANT: CD into the temporary build directory after copying the files.
     cd "$buildtmp"
+
+    # Set up a trap to ensure cleanup happens even if the script fails unexpectedly
+    trap "rm -rf '$buildtmp'" EXIT # FIX: Ensure cleanup uses the correct local variable
 
     if [ -f "./build" ]; then
         chmod +x ./build || true
@@ -211,10 +215,10 @@ build_from_recipe() {
         mkdir -p "$PKGDIR"
         
         # ISOLATED BUILD (Using DESTDIR)
-        ( cd "$buildtmp" && DESTDIR="$PKGDIR" ./build ) || err "build failed for $pkg"
+        ( DESTDIR="$PKGDIR" ./build ) || err "build failed for $pkg" # No need to CD here, we are already in $buildtmp
         
         if [ -f "./package" ]; then
-            ( cd "$buildtmp" && DESTDIR="$PKGDIR" PKGDIR="$PKGDIR" ./package ) || err "package() failed for $pkg"
+            ( DESTDIR="$PKGDIR" PKGDIR="$PKGDIR" ./package ) || err "package() failed for $pkg"
         else
             err "no package() script found for $pkg"
         fi
@@ -238,10 +242,13 @@ build_from_recipe() {
         fi
         
         info "Successfully installed $pkg ($recipe_ver)."
-        rm -rf "$buildtmp"
     else
         err "Recipe $pkg has no build script"
     fi
+    
+    # Cleanup will happen via the trap, but we can reset it if we reach here cleanly.
+    trap - EXIT
+    rm -rf "$buildtmp" # Manual cleanup if trap wasn't triggered
 }
 
 update_repo() {
