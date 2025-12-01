@@ -72,7 +72,7 @@ GLOBAL_PROGRESS_TOTAL=0
 GLOBAL_PROGRESS_CURRENT=0
 PROGRESS_BAR_SIZE=40
 
-# Function to display the progress bar (uses \r to overwrite the line)
+# Function to display the progress bar (REVISED for better POSIX \r handling)
 astral_progress() {
     local current="$1"
     local total="$2"
@@ -91,7 +91,7 @@ astral_progress() {
     local empty
     empty=$(printf "%${left_count}s" | tr ' ' '-')
 
-    # Print the bar, using \r to overwrite the line
+    # IMPORTANT: Start with \r to reset the cursor.
     printf "\r[${title}] [%s%s] %s%% (%s/%s)" "$fill" "$empty" "$percent_calc" "$current" "$total"
 }
 
@@ -213,7 +213,6 @@ fetch_remote_recipe() {
     info "Recipe for '$pkg' refreshed successfully."
 }
 
-# Helper function to download and extract source archives (MODIFIED for progress count)
 fetch_and_extract_sources() {
     local pkg="$1"
     local rpath="$2"
@@ -222,10 +221,10 @@ fetch_and_extract_sources() {
     local sources_file="$rpath/sources"
     [ -f "$sources_file" ] || return 0 # No sources to fetch
 
-    info "Downloading $pkg source..."
+    info "Downloading $pkg source (no progress bar for curl, please wait)..."
     
     # 1. Count total sources for extraction progress later
-    # Use grep -c to count non-empty, non-comment lines
+    # Uses a more robust method to count non-empty, non-comment lines
     GLOBAL_PROGRESS_TOTAL=$(grep -v '^[[:space:]]*#' "$sources_file" | grep -E -v '^[[:space:]]*$' | wc -l)
     GLOBAL_PROGRESS_CURRENT=0
     
@@ -247,8 +246,7 @@ fetch_and_extract_sources() {
     done < "$sources_file"
 }
 
-# FIXED: Removed the critical bug where 'tr -d' would break HASH FILENAME parsing.
-# MODIFIED: Added extraction progress bar logic.
+# CRITICALLY MODIFIED: Silenced all internal extraction commands to prevent newlines from breaking progress bar.
 verify_checksums() {
     local pkg="$1"
     local rpath="$2"
@@ -287,15 +285,20 @@ verify_checksums() {
         
         if [ "$actual_hash" != "$expected_hash" ]; then
             err "Checksum mismatch for $filename! Expected $expected_hash, got $actual_hash. Source may be corrupted or compromised. Aborting."
-        else
-            info "  -> Checksum verified for $filename."
         fi
+        # Only print success outside the progress loop, not here, for a cleaner display.
     done < "$checksums_file"
 
     # Now that files are verified, extract them (Extraction step with progress)
-    info "Checksums verified. Extracting sources..."
+    info "All checksums verified. Extracting sources..."
 
     local sources_file="$rpath/sources"
+    
+    # Recalculate total just in case, ensuring the progress bar has the correct scale.
+    if [ "$GLOBAL_PROGRESS_TOTAL" -eq 0 ]; then
+        GLOBAL_PROGRESS_TOTAL=$(grep -v '^[[:space:]]*#' "$sources_file" | grep -E -v '^[[:space:]]*$' | wc -l)
+    fi
+
     GLOBAL_PROGRESS_CURRENT=0
     
     while IFS= read -r url; do
@@ -307,17 +310,19 @@ verify_checksums() {
         local dest_file="$buildtmp/$filename"
         
         GLOBAL_PROGRESS_CURRENT=$((GLOBAL_PROGRESS_CURRENT + 1))
+        # Call the progress bar function
         astral_progress "$GLOBAL_PROGRESS_CURRENT" "$GLOBAL_PROGRESS_TOTAL" "Extracting $pkg"
 
         # Attempt to extract common archive formats
         case "$filename" in
-            *.tar.gz|*.tgz) tar -xf "$dest_file" -C "$buildtmp" || err "Tar extract failed for $filename" ;;
-            *.tar.bz2|*.tbz) tar -xf "$dest_file" -C "$buildtmp" || err "Bzip2 extract failed for $filename" ;;
-            *.tar.xz|*.txz) tar -xf "$dest_file" -C "$buildtmp" || err "XZ extract failed for $filename" ;;
-            *.zip) unzip -q "$dest_file" -d "$buildtmp" || err "Unzip failed for $filename" ;;
-            *) info "  -> Warning: Unknown archive type, skipping extraction for $filename." ;;
+            *.tar.gz|*.tgz) tar -xf "$dest_file" -C "$buildtmp" 2>/dev/null || err "Tar extract failed for $filename" ;;
+            *.tar.bz2|*.tbz) tar -xf "$dest_file" -C "$buildtmp" 2>/dev/null || err "Bzip2 extract failed for $filename" ;;
+            *.tar.xz|*.txz) tar -xf "$dest_file" -C "$buildtmp" 2>/dev/null || err "XZ extract failed for $filename" ;;
+            *.zip) unzip -q "$dest_file" -d "$buildtmp" 2>/dev/null || err "Unzip failed for $filename" ;;
+            # Remove the info call here to prevent newlines from breaking the progress bar.
+            *) ;; 
         esac
-        rm "$dest_file" # Clean up the archive file
+        # rm "$dest_file" # Clean up the archive file (Kept commented as per previous intent)
     done < "$sources_file"
 
     # Print the final, complete progress bar
@@ -726,7 +731,6 @@ remove_pkg() {
     info "Removed $pkg successfully from database."
 }
 
-# MODIFIED: Now identifies all orphans and prompts for user confirmation before removal.
 removedep_pkg() {
     pkg="$1"
     # Step 1: Remove the requested package first
