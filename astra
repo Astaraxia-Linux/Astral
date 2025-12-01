@@ -323,10 +323,12 @@ build_from_recipe() {
         
         create_meta "$pkg" "$recipe_ver" "x86_64" "$PKGDIR"
         
-        # Record file list for conflict check and database logging
-        # The output of this command substitution is safe to pass unquoted into the heredoc 
-        # as it is a list of paths separated by newlines.
-        local new_files=$(tar -C "$PKGDIR" -tf . | grep -v '^\.$' | grep -v '^\.\/$' | grep -v '^\.astral-meta$' || true)
+        local new_files=$(
+            ( cd "$PKGDIR" && find . -mindepth 1 -print ) \
+            | sed 's/^\.\///' \
+            | grep -v '^\.astral-meta$' \
+            || true
+        )
 
         # --- CONFLICT DETECTION (Feature: File overlap check + Metadata conflicts) ---
         info "Checking for package conflicts..."
@@ -403,7 +405,7 @@ update_repo() {
     if curl -fsSL "$INDEX_URL" -o "$INDEX_FILE"; then
         info "Database updated successfully."
     else
-        err "Failed to download index file from $INDEX_URL."
+        err "Failed to download index file from "$INDEX_URL"."
         return 1
     fi
 }
@@ -511,7 +513,7 @@ remove_pkg() {
             # rmdir will fail safely on non-empty directories
             if rmdir "/$d" 2>/dev/null; then
                 info "  -> Deleted empty directory: /$d"
-            fi
+            fi 
         done
         rm -f "$dirs_file" # Explicit cleanup
     fi
