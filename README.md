@@ -32,6 +32,7 @@ Every recipe requires at least three files and is housed in its own directory:
 ├── package        # Shell script for installing files into $PKGDIR (required)
 └── depends        # List of other Astaraxia packages required (optional, but recommended)
 └── sources        # List of URLs for source files (required if compiling)
+└── info           # optional and should contain descriptive text about the package. It should be formatted for easy reading in a terminal
 ```
 
 ### II. The Core Recipe File
@@ -53,6 +54,18 @@ List one required package name per line. This is used by astral --compile to che
 ```
 libc
 ncurses
+```
+
+#### 4. info (Info about the package)
+1. Purpose and Content
+    The info file is optional and should contain descriptive text about the package. It should be formatted for easy reading in a terminal.
+- Suggested Content:
+```
+    Short Description: A one-sentence summary of the package.
+    Long Description: A brief paragraph explaining the package's function, features, and target audience.
+    Upstream URL: The official website or repository link.
+    Maintainer: The name and contact information of the recipe creator.
+    License: The software license (e.g., GPLv3, MIT).
 ```
 
 ### III. The Build Workflow (Scripts)
