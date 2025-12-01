@@ -46,6 +46,7 @@ EOF
 
 usage() {
     cat <<USAGE
+$version
 Usage: astral [global_opts] <command> [pkg...]
 Global Options:
   -f, --force             Do force installation/build/removal (e.g., bypass version check, conflict checks).
