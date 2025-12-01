@@ -162,7 +162,8 @@ sync_pkg_recursive() {
             dep_pkg=$(echo "$dep_pkg" | tr -d '[:space:]')
             if [ -z "$dep_pkg" ] || [ "${dep_pkg:0:1}" = "#" ]; then
                 continue
-            fiet_remote_recipe
+            fi 
+
             sync_pkg_recursive "$dep_pkg"
         done < "$depsf"
     fi
