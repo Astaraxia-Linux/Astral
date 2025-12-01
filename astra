@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.4.7.1 BLEEDING EDGE - minimal POSIX package manager for Astaraxia
+# Astral v0.4.7.2 BLEEDING EDGE - minimal POSIX package manager for Astaraxia
 # Features: Source-only, Auto-recipe fetch, Version locking, Build isolation,
 #           Post-install/Pre-remove hooks, File conflict detection, SHA256 Checksums, Info file support.
 
@@ -31,7 +31,7 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-version="0.4.7.1 BLEEDING EDGE"
+version="0.4.7.2 BLEEDING EDGE"
 
 astral_version() {
 cat <<EOF
