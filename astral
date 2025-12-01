@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.4.8.0 - minimal POSIX package manager for Astaraxia
+# Astral v0.4.9.0 - minimal POSIX package manager for Astaraxia
 # Features: Source-only, Auto-recipe fetch, Version locking, Build isolation,
 #           Post-install/Pre-remove hooks, File conflict detection, SHA256 Checksums, Info file support.
 
@@ -9,6 +9,9 @@ set -eu
 # Global state variables for new features
 INSTALL_ROOT="/"    # Feature 2: Installation target directory
 FORCE_INSTALL=0     # Feature 3: Force flag (0=off, 1=on)
+GLOBAL_PROGRESS_TOTAL=0
+GLOBAL_PROGRESS_CURRENT=0
+PROGRESS_BAR_SIZE=40
 
 # Directory Layout
 RECIPES_DIR=${RECIPES_DIR:-/usr/src/astral/recipes}
@@ -70,6 +73,35 @@ USAGE
 is_pkg_installed() {
     pkg="$1"
     [ -d "$DB_DIR/$pkg" ]
+}
+
+astral_progress() {
+    local current="$1"
+    local total="$2"
+    local title="$3"
+
+    [ "$total" -le 0 ] && total=1 # Avoid division by zero
+
+    # Calculate percentage (simple integer arithmetic for POSIX compliance)
+    local percent_calc=$((100 * current / total))
+    local done_count=$((PROGRESS_BAR_SIZE * current / total))
+    local left_count=$((PROGRESS_BAR_SIZE - done_count))
+
+    # Build the bar strings using printf for consistent width
+    local fill
+    fill=$(printf "%${done_count}s" | tr ' ' '#')
+    local empty
+    empty=$(printf "%${left_count}s" | tr ' ' '-')
+
+    # Print the bar, using \r to overwrite the line
+    printf "\r[${title}] [%s%s] %s%% (%s/%s)" "$fill" "$empty" "$percent_calc" "$current" "$total"
+}
+
+# Function to finalize progress and move to a new line
+astral_progress_finish() {
+    local title="$1"
+    # Print a complete 100% bar and then a newline
+    printf "\r[${title}] [%s] 100%% (%s/%s)\n" "$(printf "%${PROGRESS_BAR_SIZE}s" | tr ' ' '#')" "$GLOBAL_PROGRESS_TOTAL" "$GLOBAL_PROGRESS_TOTAL"
 }
 
 # helper: find recipe path
