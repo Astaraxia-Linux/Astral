@@ -365,63 +365,6 @@ build_from_recipe() {
             || true
         )
 
-        # --- CONFLICT DETECTION ---
-        if [ "$FORCE_INSTALL" -eq 0 ]; then
-            info "Checking for package conflicts..."
-            local conflicts_file="$rpath/conflicts"
-            
-            # A. Check Metadata Conflicts
-            if [ -f "$conflicts_file" ]; then
-                # Use get_pkg_deps for robust filtering
-                get_pkg_deps "$pkg" | while IFS= read -r conflicting_pkg; do
-                    conflicting_pkg=$(echo "$conflicting_pkg" | tr -d '[:space:]')
-                    if is_pkg_installed "$conflicting_pkg"; then
-                        err "Metadata conflict detected! Package '$pkg' conflicts with installed package '$conflicting_pkg'. Aborting installation."
-                    fi
-                done
-            fi
-
-            # B. Check File Overlap Conflicts (FIXED: Critical bug where exit 1 in subshell failed to stop install)
-            local conflict_found=0
-            local conflict_file=""
-            local conflict_owner=""
-            local new_files_tmp="$TMPDIR/astral-newfiles-$$"
-            printf '%s\n' "$new_files" > "$new_files_tmp" # Write file list to temporary file
-
-            for installed_pkg_dir in "$DB_DIR"/*; do
-                [ -d "$installed_pkg_dir" ] || continue
-                installed_pkg_name=$(basename "$installed_pkg_dir")
-                [ "$installed_pkg_name" = "$pkg" ] && continue
-
-                local existing_files="$installed_pkg_dir/files"
-                [ -f "$existing_files" ] || continue
-
-                while IFS= read -r new_file; do
-                    # Check if the new file exists in the existing package's file list
-                    if grep -q "^$new_file$" "$existing_files"; then
-                        conflict_found=1
-                        conflict_file="$new_file"
-                        conflict_owner="$installed_pkg_name"
-                        break
-                    fi
-                done < "$new_files_tmp"
-                
-                [ "$conflict_found" -eq 1 ] && break # Exit the outer for loop
-            done
-
-            rm -f "$new_files_tmp"
-
-            if [ "$conflict_found" -eq 1 ]; then
-                err "File conflict detected! $conflict_file is already owned by package '$conflict_owner'. Aborting installation."
-            fi
-
-            info "No critical package conflicts found."
-        else
-            info "Conflict detection bypassed due to -f (force) flag."
-        fi
-        # --- END CONFLICT DETECTION ---
-
-
         # Install to target root (Transactional extract)
         info "Installing $pkg files to root filesystem ($INSTALL_ROOT)..."
         tar -C "$PKGDIR" -cf - . | tar -C "$INSTALL_ROOT" -xf - || err "failed to extract package files"
