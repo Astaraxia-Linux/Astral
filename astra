@@ -1,6 +1,7 @@
 #!/bin/sh
-# Astral v0.2.3 BLEEDING EGGE - minimal POSIX package manager for Astaraxia
-# Features: Source-only, Auto-recipe fetch, Version locking, Build isolation.
+# Astral v0.4.0 - minimal POSIX package manager for Astaraxia
+# Features: Source-only, Auto-recipe fetch, Version locking, Build isolation,
+#           Post-install/Pre-remove hooks, File conflict detection, SHA256 Checksums.
 
 set -eu
 
@@ -102,15 +103,14 @@ fetch_remote_recipe() {
     local pkg="$1"
     local local_dir="$RECIPES_DIR/$pkg"
     
-    # FIX: Removed the early return, ensuring the recipe is always refreshed.
-    
     info "Attempting to fetch or refresh recipe for '$pkg' from remote..."
     
-    # Create the directory (no need to check for existence, mkdir -p handles it)
+    # Create the directory 
     mkdir -p "$local_dir"
 
     local required_files="version build sources"
-    local optional_files="depends package" 
+    # Added optional recipe files: checksums and conflicts
+    local optional_files="depends package post_install post_remove checksums conflicts" 
     
     local clean_raw_url="${RECIPE_RAW_URL%/}"
     local remote_base="${clean_raw_url}/recipes/$pkg"
@@ -129,7 +129,7 @@ fetch_remote_recipe() {
                 rm -rf "$local_dir"
                 return 1
             fi
-            # If optional file fails (like depends/package) or if sources is empty/missing remotely, just remove the old local copy
+            # If optional file fails, just remove the old local copy
             rm -f "$dest"
         fi
     done
@@ -137,6 +137,10 @@ fetch_remote_recipe() {
     # Make scripts executable
     chmod +x "$local_dir/build" 2>/dev/null || true 
     chmod +x "$local_dir/package" 2>/dev/null || true
+    # Ensure hooks are executable
+    chmod +x "$local_dir/post_install" 2>/dev/null || true
+    chmod +x "$local_dir/post_remove" 2>/dev/null || true
+    
     info "Recipe for '$pkg' refreshed successfully."
 }
 
@@ -161,19 +165,72 @@ fetch_and_extract_sources() {
         
         info "  -> Downloading $filename"
         if curl -fsSL "$url" -o "$dest_file"; then
-            info "  -> Extracting $filename"
-            # Attempt to extract common archive formats
-            case "$filename" in
-                *.tar.gz|*.tgz) tar -xf "$dest_file" -C "$buildtmp" || err "Tar extract failed for $filename" ;;
-                *.tar.bz2|*.tbz) tar -xf "$dest_file" -C "$buildtmp" || err "Bzip2 extract failed for $filename" ;;
-                *.tar.xz|*.txz) tar -xf "$dest_file" -C "$buildtmp" || err "XZ extract failed for $filename" ;;
-                *.zip) unzip -q "$dest_file" -d "$buildtmp" || err "Unzip failed for $filename" ;;
-                *) info "  -> Warning: Unknown archive type, skipping extraction for $filename." ;;
-            esac
-            rm "$dest_file" # Clean up the archive file
+            : # Download successful, extraction happens later after checksum check
         else
             err "Failed to download source file from $url"
         fi
+    done < "$sources_file"
+}
+
+# Verifies SHA256 checksums of downloaded source files.
+verify_checksums() {
+    local pkg="$1"
+    local rpath="$2"
+    local buildtmp="$3"
+    
+    local checksums_file="$rpath/checksums"
+    [ -f "$checksums_file" ] || { info "No checksums provided for $pkg. Skipping integrity check."; return 0; }
+    
+    command -v sha256sum >/dev/null 2>&1 || err "sha256sum command not found. Cannot verify source integrity."
+
+    info "Verifying source integrity using checksums..."
+    
+    while IFS= read -r line; do
+        line=$(echo "$line" | tr -d '[:space:]')
+        [ -z "$line" ] && continue
+        [ "${line:0:1}" = "#" ] && continue
+        
+        # Expected format: <hash> <filename>
+        local expected_hash=$(echo "$line" | awk '{print $1}')
+        local filename=$(echo "$line" | awk '{print $2}')
+        local file_path="$buildtmp/$filename"
+
+        if [ ! -f "$file_path" ]; then
+            err "Checksum error: Source file '$filename' not found in build directory. Cannot verify."
+        fi
+
+        # Use sha256sum to check integrity
+        local actual_hash=$(sha256sum "$file_path" | awk '{print $1}')
+        
+        if [ "$actual_hash" != "$expected_hash" ]; then
+            err "Checksum mismatch for $filename! Expected $expected_hash, got $actual_hash. Source may be corrupted or compromised. Aborting."
+        else
+            info "  -> Checksum verified for $filename."
+        fi
+    done < "$checksums_file"
+
+    # Now that files are verified, extract them
+    info "Checksums verified. Extracting sources..."
+    local sources_file="$rpath/sources"
+    
+    while IFS= read -r url; do
+        url=$(echo "$url" | tr -d '[:space:]')
+        [ -z "$url" ] && continue
+        [ "${url:0:1}" = "#" ] && continue
+        
+        local filename=$(basename "$url")
+        local dest_file="$buildtmp/$filename"
+        
+        info "  -> Extracting $filename"
+        # Attempt to extract common archive formats
+        case "$filename" in
+            *.tar.gz|*.tgz) tar -xf "$dest_file" -C "$buildtmp" || err "Tar extract failed for $filename" ;;
+            *.tar.bz2|*.tbz) tar -xf "$dest_file" -C "$buildtmp" || err "Bzip2 extract failed for $filename" ;;
+            *.tar.xz|*.txz) tar -xf "$dest_file" -C "$buildtmp" || err "XZ extract failed for $filename" ;;
+            *.zip) unzip -q "$dest_file" -d "$buildtmp" || err "Unzip failed for $filename" ;;
+            *) info "  -> Warning: Unknown archive type, skipping extraction for $filename." ;;
+        esac
+        rm "$dest_file" # Clean up the archive file
     done < "$sources_file"
 }
 
@@ -196,7 +253,7 @@ sync_pkg_recursive() {
             dep_pkg=$(echo "$dep_pkg" | tr -d '[:space:]')
             if [ -z "$dep_pkg" ] || [ "${dep_pkg:0:1}" = "#" ]; then
                 continue
-            fi
+            }
             sync_pkg_recursive "$dep_pkg"
         done < "$depsf"
     fi
@@ -243,8 +300,12 @@ build_from_recipe() {
     # Set up a trap to ensure cleanup happens even if the script fails unexpectedly
     trap "rm -rf '$buildtmp'" EXIT 
 
-    # Fetch and extract source code before running ./build
+    # 1. Fetch source code
     fetch_and_extract_sources "$pkg" "$rpath" "$buildtmp"
+    
+    # 2. Verify Checksums and Extract (moved extraction here)
+    verify_checksums "$pkg" "$rpath" "$buildtmp"
+
 
     if [ -f "./build" ]; then
         chmod +x ./build || true
@@ -261,21 +322,68 @@ build_from_recipe() {
         
         create_meta "$pkg" "$recipe_ver" "x86_64" "$PKGDIR"
         
+        # Record file list for conflict check and database logging
+        local new_files=$(tar -C "$PKGDIR" -tf . | grep -v '^\.$' | grep -v '^\.\/$' | grep -v '^\.astral-meta$' || true)
+
+        # --- CONFLICT DETECTION (Feature: File overlap check + Metadata conflicts) ---
+        info "Checking for package conflicts..."
+        local conflicts_file="$rpath/conflicts"
+        
+        # A. Check Metadata Conflicts (Explicit conflicts defined in recipe)
+        if [ -f "$conflicts_file" ]; then
+            while IFS= read -r conflicting_pkg; do
+                conflicting_pkg=$(echo "$conflicting_pkg" | tr -d '[:space:]')
+                if is_pkg_installed "$conflicting_pkg"; then
+                    err "Metadata conflict detected! Package '$pkg' conflicts with installed package '$conflicting_pkg'. Aborting installation."
+                fi
+            done < "$conflicts_file"
+        fi
+
+        # B. Check File Overlap Conflicts (Implicit conflicts by file)
+        for installed_pkg_dir in "$DB_DIR"/*; do
+            [ -d "$installed_pkg_dir" ] || continue
+            installed_pkg_name=$(basename "$installed_pkg_dir")
+            # If upgrading, skip conflict check against self
+            [ "$installed_pkg_name" = "$pkg" ] && continue
+
+            local existing_files="$installed_pkg_dir/files"
+            [ -f "$existing_files" ] || continue
+
+            # Loop through new files and check if any existing package owns it
+            while IFS= read -r new_file; do
+                if grep -q "^$new_file$" "$existing_files"; then
+                    err "File conflict detected! $new_file is already owned by package '$installed_pkg_name'. Aborting installation."
+                fi
+            done <<-EOF
+            $new_files
+            EOF
+        done
+        info "No critical package conflicts found."
+        # --- END CONFLICT DETECTION ---
+
+
         info "Installing $pkg files to root filesystem..."
         
-        # Install to /
+        # Install to / (Transactional extract)
         tar -C "$PKGDIR" -cf - . | tar -C / -xf - || err "failed to extract package files"
         
         # Record database
-        local files=$(tar -C "$PKGDIR" -tf . | grep -v '^\.$' | grep -v '^\.\/$' | grep -v '^\.astral-meta$' || true)
         local pkgdir="$DB_DIR/$pkg"
         mkdir -p "$pkgdir"
         printf '%s\n' "$recipe_ver" > "$pkgdir/version"
-        printf '%s\n' "$files" > "$pkgdir/files"
+        printf '%s\n' "$new_files" > "$pkgdir/files"
         
         if [ -f "$buildtmp/depends" ]; then
             cp "$buildtmp/depends" "$pkgdir/depends"
         fi
+        
+        # --- POST-INSTALL HOOK ---
+        if [ -f "$buildtmp/post_install" ]; then
+            info "Running post_install hook for $pkg..."
+            # Execute the hook script. PKGDIR is useful for accessing installed files relative to the staging dir (if needed)
+            ( DESTDIR="/" PKGDIR="$PKGDIR" "$buildtmp/post_install" ) || info "Warning: post_install hook failed for $pkg. Continuing."
+        fi
+        # --- END HOOK ---
         
         info "Successfully installed $pkg ($recipe_ver)."
     else
@@ -358,6 +466,16 @@ remove_pkg() {
     pkg="$1"
     pkgdir="$DB_DIR/$pkg"
     [ -d "$pkgdir" ] || err "package $pkg not installed"
+
+    # --- PRE-REMOVE HOOK ---
+    local rpath=$(recipe_path "$pkg")
+    if [ -f "$rpath/post_remove" ]; then
+        info "Running post_remove hook for $pkg..."
+        # Execute the hook script from its recipe directory
+        ( "$rpath/post_remove" ) || info "Warning: post_remove hook failed for $pkg, continuing removal."
+    fi
+    # --- END HOOK ---
+
     info "Removing $pkg"
     local dirs_to_check=""
     
@@ -369,7 +487,6 @@ remove_pkg() {
         
         if [ -d "$fullpath" ]; then
             # 1. It's a directory. Add it to the list for rmdir (list is built reverse-order, deepest first).
-            # This order is CRUCIAL for rmdir to work.
             dirs_to_check="$f $dirs_to_check"
         elif [ -e "$fullpath" ]; then
             # 2. It's a file or symlink. Remove it immediately.
@@ -384,7 +501,7 @@ remove_pkg() {
     info "Attempting to clean up empty directories installed by $pkg..."
     # Iterate the reversed list of directories (deepest first)
     for d in $dirs_to_check; do
-        # rmdir will fail safely on non-empty/critical directories, which is the desired behavior.
+        # rmdir will fail safely on non-empty/critical directories
         if rmdir "/$d" 2>/dev/null; then
             info "  -> Deleted empty directory: /$d"
         fi
@@ -408,7 +525,7 @@ removedep_pkg() {
                 remove_pkg "$dep_name"
                 found_orphan=1
                 break
-            fi
+            }
         done
         [ "$found_orphan" -eq 0 ] && break
     done
