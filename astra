@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.4.5.1 - minimal POSIX package manager for Astaraxia
+# Astral v0.4.6 - minimal POSIX package manager for Astaraxia
 # Features: Source-only, Auto-recipe fetch, Version locking, Build isolation,
 #           Post-install/Pre-remove hooks, File conflict detection, SHA256 Checksums.
 
@@ -24,6 +24,8 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
+version=0.4.5.1
+
 usage() {
   cat <<USAGE
 Usage: astral <command> [pkg...]
@@ -46,6 +48,14 @@ USAGE
 is_pkg_installed() {
   pkg="$1"
   [ -d "$DB_DIR/$pkg" ]
+}
+
+astral_version() {
+cat <<EOF
+Astral version $version
+EOF
+
+	exit 0
 }
 
 # helper: find recipe path
@@ -485,6 +495,7 @@ remove_pkg() {
 
     info "Removing $pkg"
     
+    # 1. Read files list, remove files, and collect directories in the temporary file
     while IFS= read -r f; do
         [ -z "$f" ] && continue
         
@@ -503,28 +514,16 @@ remove_pkg() {
         fi
     done < "$pkgdir/files"
     
+    # 2. Process collected directories (deepest first, guaranteed by 'sort -r')
     if [ -f "$dirs_file" ]; then
         info "Attempting to clean up empty directories installed by $pkg..."
+        # Sort reverse alphabetically to approximate deepest-first removal.
         sort -r "$dirs_file" | while IFS= read -r d; do
-        # SAFETY FILTER
-        safe_delete() {
-            case "$1" in
-                ""|"/"|".") return 1 ;; 
-                bin|sbin|lib|lib64|usr|usr/*) return 1 ;; 
-                etc|var|boot|home|root|opt|dev|proc|sys|run) return 1 ;;
-            esac
-            return 0
-        }
             [ -z "$d" ] && continue
             # rmdir will fail safely on non-empty directories
-            if safe_delete "$d"; then
-                if rmdir "/$d" 2>/dev/null; then
-                    info "  -> Deleted empty directory: /$d"
-                fi
-            else
-                info "  -> Skipped unsafe directory: /$d"
-            fi
-
+            if rmdir "/$d" 2>/dev/null; then
+                info "  -> Deleted empty directory: /$d"
+            fi 
         done
         rm -f "$dirs_file" # Explicit cleanup
     fi
