@@ -1,7 +1,8 @@
 #!/bin/sh
 # Astral v0.4.7.3 BLEEDING EDGE - minimal POSIX package manager for Astaraxia
 # Features: Source-only, Auto-recipe fetch, Version locking, Build isolation,
-#           Post-install/Pre-remove hooks, File conflict detection, SHA256 Checksums, Info file support.
+#           Post-install/Pre-remove hooks, File conflict detection (now ignoring shared directories), 
+#           SHA256 Checksums, Info file support.
 
 # Set strict execution environment
 set -eu
@@ -388,6 +389,9 @@ build_from_recipe() {
             local new_files_tmp="$TMPDIR/astral-newfiles-$$"
             printf '%s\n' "$new_files" > "$new_files_tmp" # Write file list to temporary file
 
+            # List of top-level directories common to all Linux systems that should be ignored for conflict checks
+            local COMMON_TOP_LEVEL_DIRS="usr etc var lib bin sbin opt srv media mnt home root tmp run dev proc sys"
+
             for installed_pkg_dir in "$DB_DIR"/*; do
                 [ -d "$installed_pkg_dir" ] || continue
                 installed_pkg_name=$(basename "$installed_pkg_dir")
@@ -397,6 +401,24 @@ build_from_recipe() {
                 [ -f "$existing_files" ] || continue
 
                 while IFS= read -r new_file; do
+                    
+                    # FIX: Check if the file is a top-level directory (e.g., 'usr') and skip conflict check.
+                    local is_top_level_dir=0
+                    # Check if the path contains no slashes (is a top-level path like 'usr')
+                    if ! echo "$new_file" | grep -q '/'; then
+                        for root_dir in $COMMON_TOP_LEVEL_DIRS; do
+                            if [ "$new_file" = "$root_dir" ]; then
+                                is_top_level_dir=1
+                                break
+                            fi
+                        done
+                    fi
+
+                    if [ "$is_top_level_dir" -eq 1 ]; then
+                        info "  -> Ignoring common top-level directory '$new_file' for file conflict check."
+                        continue
+                    fi
+
                     # Check if the new file exists in the existing package's file list
                     if grep -q "^$new_file$" "$existing_files"; then
                         conflict_found=1
