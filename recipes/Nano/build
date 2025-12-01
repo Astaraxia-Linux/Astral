@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+
+echo "Downloading Neofetch 7.1.0 source..."
+
+wget -q https://www.nano-editor.org/dist/v8/nano-8.6.tar.xz
+tar xf nano-8.6.tar.xz
+cd nano-8.6
+
+[ -f "nano-8.6" ] || err "Nano not found after extraction"
