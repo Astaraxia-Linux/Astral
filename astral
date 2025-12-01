@@ -1,6 +1,6 @@
 #!/bin/sh
 # Astral v0.2 - minimal POSIX package manager for Astaraxia
-# Features: Source-only, Auto-recipe fetch, Version locking, Build isolation.
+# Features: Source-only, Auto-recipe fetch, Version locking, Build isolation..........
 
 set -eu
 
