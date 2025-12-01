@@ -622,6 +622,8 @@ case "$1" in
     list_installed
     ;;
   *)
+    echo "Error: Unknown command or option '$1'" >&2
     usage
+    exit 1
     ;;
 esac
