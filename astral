@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.2 - minimal POSIX package manager for Astaraxia
+# Astral v0.2.1 - minimal POSIX package manager for Astaraxia
 # Features: Source-only, Auto-recipe fetch, Version locking, Build isolation.
 
 set -eu
@@ -33,7 +33,8 @@ Commands:
   --search <pkg>          Searches for package in local recipes and remote index.
   -R, --Remove <pkg>      Remove package (leave deps).
   -r, --RemoveDep <pkg>   Remove package and attempt to remove orphan deps.
-  -U, --self-update       Update the astral script itself from GitHub.
+  -Cc, --Clean-Cache      Remove recipes for packages that are NOT currently installed.
+  -U, --self-update       Update the astral script itself from GitHub. **STILL IN WIP**
   --inspect <pkg>         Show recipe content.
   --list-installed        List installed packages.
 USAGE
@@ -162,8 +163,7 @@ sync_pkg_recursive() {
             dep_pkg=$(echo "$dep_pkg" | tr -d '[:space:]')
             if [ -z "$dep_pkg" ] || [ "${dep_pkg:0:1}" = "#" ]; then
                 continue
-            fi 
-
+            fi
             sync_pkg_recursive "$dep_pkg"
         done < "$depsf"
     fi
@@ -365,6 +365,26 @@ removedep_pkg() {
     done
 }
 
+clean_cache() {
+    info "Starting recipe cache cleanup in $RECIPES_DIR..."
+    local cleaned_count=0
+    for recipe_dir in "$RECIPES_DIR"/*; do
+        if [ ! -d "$recipe_dir" ]; then
+            continue
+        fi
+        local pkg=$(basename "$recipe_dir")
+        
+        if is_pkg_installed "$pkg"; then
+            info "Recipe for '$pkg' is installed. Skipping."
+        else
+            info "Recipe for '$pkg' is NOT installed. Removing cache files..."
+            rm -rf "$recipe_dir"
+            cleaned_count=$((cleaned_count + 1))
+        fi
+    done
+    info "Cache cleanup complete. Removed $cleaned_count orphaned recipe(s)."
+}
+
 list_installed() {
   for d in "$DB_DIR"/*; do
     [ -d "$d" ] || continue
@@ -398,6 +418,9 @@ case "$1" in
   -r|--RemoveDep)
     [ $# -gt 1 ] || err "pkg required"
     removedep_pkg "$2"
+    ;;
+  -Cc|--Clean-Cache)
+    clean_cache
     ;;
   -U|--self-update)
     self_update
