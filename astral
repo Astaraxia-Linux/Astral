@@ -201,27 +201,32 @@ fetch_remote_recipe() {
     info "Recipe for '$pkg' refreshed successfully."
 }
 
-# Helper function to download and extract source archives (Unchanged)
+# Helper function to download and extract source archives
 fetch_and_extract_sources() {
     local pkg="$1"
     local rpath="$2"
     local buildtmp="$3"
-    
+
     local sources_file="$rpath/sources"
-    [ -f "$sources_file" ] || return 0 # No sources to fetch
+    [ -f "$sources_file" ] || return 0 
 
     info "Downloading $pkg source..."
-    
+
+    # 1. Count total sources for extraction progress later
+    GLOBAL_PROGRESS_TOTAL=$(grep -v '^[[:space:]]*#' "$sources_file" | grep -v '^[[:space:]]*$' | wc -l)
+    GLOBAL_PROGRESS_CURRENT=0
+
     while IFS= read -r url; do
         url=$(echo "$url" | tr -d '[:space:]')
         [ -z "$url" ] && continue
         [ "${url:0:1}" = "#" ] && continue
-        
+
         local filename=$(basename "$url")
         local dest_file="$buildtmp/$filename"
-        
+
         info "  -> Downloading $filename"
-        if curl -fsSL "$url" -o "$dest_file"; then
+        # Using -# provides a basic progress bar for curl output to stderr
+        if curl -fsSL -# "$url" -o "$dest_file"; then
             :
         else
             err "Failed to download source file from $url"
