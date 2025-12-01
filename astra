@@ -511,7 +511,7 @@ remove_pkg() {
             # rmdir will fail safely on non-empty directories
             if rmdir "/$d" 2>/dev/null; then
                 info "  -> Deleted empty directory: /$d"
-            }
+            fi
         done
         rm -f "$dirs_file" # Explicit cleanup
     fi
