@@ -647,7 +647,7 @@ self_update() {
     if [ ! -s "$tmp_file" ]; then
         err "Downloaded file is empty or too small. Download failed."
         return 1
-    }
+    fi
 
     chmod +x "$tmp_file"
     if mv -f "$tmp_file" "$SELF_UPDATE_PATH"; then
