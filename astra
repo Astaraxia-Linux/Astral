@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.4.2 - minimal POSIX package manager for Astaraxia
+# Astral v0.4.3 - minimal POSIX package manager for Astaraxia
 # Features: Source-only, Auto-recipe fetch, Version locking, Build isolation,
 #           Post-install/Pre-remove hooks, File conflict detection, SHA256 Checksums.
 
@@ -352,14 +352,12 @@ build_from_recipe() {
             [ -f "$existing_files" ] || continue
 
             # Loop through new files and check if any existing package owns it
-            # Using the variable unquoted in the heredoc is the correct way to pass its content (list of paths)
-            while IFS= read -r new_file; do
+            # Replacing complex here-doc with robust echo pipeline to avoid whitespace/EOF errors.
+            echo "$new_files" | while IFS= read -r new_file; do
                 if grep -q "^$new_file$" "$existing_files"; then
                     err "File conflict detected! $new_file is already owned by package '$installed_pkg_name'. Aborting installation."
                 fi
-            done <<-EOF
-            $new_files
-            EOF
+            done
         done
         info "No critical package conflicts found."
         # --- END CONFLICT DETECTION ---
