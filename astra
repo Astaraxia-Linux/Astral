@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.4.0 - minimal POSIX package manager for Astaraxia
+# Astral v0.4.1 - minimal POSIX package manager for Astaraxia
 # Features: Source-only, Auto-recipe fetch, Version locking, Build isolation,
 #           Post-install/Pre-remove hooks, File conflict detection, SHA256 Checksums.
 
@@ -253,7 +253,7 @@ sync_pkg_recursive() {
             dep_pkg=$(echo "$dep_pkg" | tr -d '[:space:]')
             if [ -z "$dep_pkg" ] || [ "${dep_pkg:0:1}" = "#" ]; then
                 continue
-            }
+            fi # <-- FIX: Replaced '}' with 'fi'
             sync_pkg_recursive "$dep_pkg"
         done < "$depsf"
     fi
@@ -525,7 +525,7 @@ removedep_pkg() {
                 remove_pkg "$dep_name"
                 found_orphan=1
                 break
-            }
+            fi # <-- FIX: Replaced '}' with 'fi'
         done
         [ "$found_orphan" -eq 0 ] && break
     done
