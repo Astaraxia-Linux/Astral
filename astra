@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.4.1 - minimal POSIX package manager for Astaraxia
+# Astral v0.4.2 - minimal POSIX package manager for Astaraxia
 # Features: Source-only, Auto-recipe fetch, Version locking, Build isolation,
 #           Post-install/Pre-remove hooks, File conflict detection, SHA256 Checksums.
 
@@ -253,7 +253,7 @@ sync_pkg_recursive() {
             dep_pkg=$(echo "$dep_pkg" | tr -d '[:space:]')
             if [ -z "$dep_pkg" ] || [ "${dep_pkg:0:1}" = "#" ]; then
                 continue
-            fi # <-- FIX: Replaced '}' with 'fi'
+            fi 
             sync_pkg_recursive "$dep_pkg"
         done < "$depsf"
     fi
@@ -323,6 +323,8 @@ build_from_recipe() {
         create_meta "$pkg" "$recipe_ver" "x86_64" "$PKGDIR"
         
         # Record file list for conflict check and database logging
+        # The output of this command substitution is safe to pass unquoted into the heredoc 
+        # as it is a list of paths separated by newlines.
         local new_files=$(tar -C "$PKGDIR" -tf . | grep -v '^\.$' | grep -v '^\.\/$' | grep -v '^\.astral-meta$' || true)
 
         # --- CONFLICT DETECTION (Feature: File overlap check + Metadata conflicts) ---
@@ -350,6 +352,7 @@ build_from_recipe() {
             [ -f "$existing_files" ] || continue
 
             # Loop through new files and check if any existing package owns it
+            # Using the variable unquoted in the heredoc is the correct way to pass its content (list of paths)
             while IFS= read -r new_file; do
                 if grep -q "^$new_file$" "$existing_files"; then
                     err "File conflict detected! $new_file is already owned by package '$installed_pkg_name'. Aborting installation."
@@ -467,46 +470,55 @@ remove_pkg() {
     pkgdir="$DB_DIR/$pkg"
     [ -d "$pkgdir" ] || err "package $pkg not installed"
 
+    # Set up a trap to clean up the temporary directory list file
+    local dirs_file="$TMPDIR/astral-dirs-$pkg-$$"
+    trap "rm -f '$dirs_file'" EXIT 
+
     # --- PRE-REMOVE HOOK ---
     local rpath=$(recipe_path "$pkg")
     if [ -f "$rpath/post_remove" ]; then
         info "Running post_remove hook for $pkg..."
-        # Execute the hook script from its recipe directory
         ( "$rpath/post_remove" ) || info "Warning: post_remove hook failed for $pkg, continuing removal."
     fi
     # --- END HOOK ---
 
     info "Removing $pkg"
-    local dirs_to_check=""
     
-    # We must read the files list and remove files first, then attempt to remove empty directories.
+    # 1. Read files list, remove files, and collect directories in the temporary file
     while IFS= read -r f; do
         [ -z "$f" ] && continue
         
         local fullpath="/$f"
         
         if [ -d "$fullpath" ]; then
-            # 1. It's a directory. Add it to the list for rmdir (list is built reverse-order, deepest first).
-            dirs_to_check="$f $dirs_to_check"
+            # Directory found. Add to the temporary list.
+            printf "%s\n" "$f" >> "$dirs_file"
         elif [ -e "$fullpath" ]; then
-            # 2. It's a file or symlink. Remove it immediately.
+            # File or symlink. Remove it immediately.
             info "  -> Deleting file: $fullpath"
             rm -f "$fullpath"
         else
-            # 3. Path doesn't exist (e.g., already removed by another package or system default), skip it.
+            # Path doesn't exist, skip it.
             : 
         fi
     done < "$pkgdir/files"
     
-    info "Attempting to clean up empty directories installed by $pkg..."
-    # Iterate the reversed list of directories (deepest first)
-    for d in $dirs_to_check; do
-        # rmdir will fail safely on non-empty/critical directories
-        if rmdir "/$d" 2>/dev/null; then
-            info "  -> Deleted empty directory: /$d"
-        fi
-    done
+    # 2. Process collected directories (deepest first, guaranteed by 'sort -r')
+    if [ -f "$dirs_file" ]; then
+        info "Attempting to clean up empty directories installed by $pkg..."
+        # Sort reverse alphabetically to approximate deepest-first removal.
+        sort -r "$dirs_file" | while IFS= read -r d; do
+            [ -z "$d" ] && continue
+            # rmdir will fail safely on non-empty directories
+            if rmdir "/$d" 2>/dev/null; then
+                info "  -> Deleted empty directory: /$d"
+            fi
+        done
+        rm -f "$dirs_file" # Explicit cleanup
+    fi
     
+    # Reset trap before final deletion
+    trap - EXIT
     rm -rf "$pkgdir"
     info "Removed $pkg successfully from database."
 }
@@ -525,7 +537,7 @@ removedep_pkg() {
                 remove_pkg "$dep_name"
                 found_orphan=1
                 break
-            fi # <-- FIX: Replaced '}' with 'fi'
+            fi 
         done
         [ "$found_orphan" -eq 0 ] && break
     done
