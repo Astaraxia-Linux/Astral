@@ -56,7 +56,7 @@ libc
 ncurses
 ```
 
-#### 4. info (Info about the package)
+#### 4. info (Info about the package) - ***TODO***
 1. Purpose and Content
     The info file is optional and should contain descriptive text about the package. It should be formatted for easy reading in a terminal.
 - Suggested Content:
