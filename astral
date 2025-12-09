@@ -1,7 +1,7 @@
 #!/bin/sh
 # Astral v0.4.9.1 - minimal POSIX package manager for Astaraxia
 # Features: Source-only, Auto-recipe fetch, Version locking, Build isolation,
-#           added sum
+#           smol fixes
 
 # Set strict execution environment
 set -eu
@@ -35,7 +35,7 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-version="0.4.9.0"
+version="0.4.9.2"
 
 astral_version() {
 cat <<EOF
@@ -46,7 +46,9 @@ EOF
 
 usage() {
     cat <<USAGE
-$version
+############################
+# ASTRAL VERSION: $version #
+############################
 Usage: astral [global_opts] <command> [pkg...]
 Global Options:
   -f, --force             Do force installation/build/removal (e.g., bypass version check, conflict checks).
