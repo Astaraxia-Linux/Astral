@@ -139,5 +139,5 @@ Once these files are created and placed in the recipe directory, you can compile
 astral --compile example-app
 ```
 ## TODO
-- Making Astral Search A Repo for a new update
-- Astral Repo site
+- Making Astral Search A Repo for a new update - PARTITIALY
+- Astral Repo site - DONE
