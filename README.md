@@ -1,6 +1,9 @@
 # Astral
 Astaraxia Package Manager, made using shell scripts, because the dev is too dumb to make it in C or python
 
+## INTRODUCTION
+AStral is a source-based package manager
+
 ## Table of Contents
 - [Testing phase](#testing-phase)
 - [How to install](#how-to-install)
@@ -12,10 +15,7 @@ Astaraxia Package Manager, made using shell scripts, because the dev is too dumb
 1. Compiling wihout depend... - CHECK
 2. Compiling with depend... - CHECK
 3. Compiling with 2 or more apps using the same depend... - CHECK
-### Binary - 0/3 - ISNT IMPLEMENTED YET
-1. Installing wihout depend... - X
-2. Installing with depend... - X
-3. Installing with 2 or more apps using the same depend... - X
+4. Removing 1 app that rely on that depends but other apps needs it - IDK
 
 ## HOW TO INSTALL
 ### Manually
