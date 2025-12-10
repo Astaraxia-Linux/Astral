@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.5.3.1 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.5.4.0 Main - minimal POSIX package manager for Astaraxia
 # Modified: require root, safer RemoveDep, host dependency detection. Yeah right :3
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
@@ -43,7 +43,7 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-version="0.5.3.1 Main"
+version="0.5.4.0 Main"
 
 astral_version() {
 cat <<EOF
@@ -608,6 +608,7 @@ show_pkg_info() {
 }
 
 upgrade_all() {
+    FORCE_CMD=${1:-0}  # 0 = normal, 1 = force
     info "Starting full system upgrade (syncing all installed packages)..."
     count=0
     success_count=0
@@ -620,7 +621,7 @@ upgrade_all() {
     while IFS= read -r pkg_path; do
         pkg=$(basename "$pkg_path")
         info "\n>>> Checking $pkg_path <<<"
-        if sync_pkg_recursive "$pkg"; then
+        if sync_pkg_recursive "$pkg" "$FORCE_CMD"; then
             success_count=$((success_count + 1))
         else
             info "Warning: Failed to sync $pkg_path. Check logs."
@@ -630,6 +631,7 @@ upgrade_all() {
 
     info "\nUpgrade process finished. Checked $count installed packages. $success_count updated/verified."
 }
+
 
 self_update() {
     TMPDIR="${TMPDIR:-/tmp}"
@@ -927,8 +929,13 @@ case "$1" in
     show_pkg_info "$2"
     ;;
 
-  --upgrade-all|-ua)
-    upgrade_all
+--upgrade-all|-ua)
+    FORCE_INSTALL_CMD=0
+    if [ "$2" = "-f" ] || [ "$2" = "--force" ]; then
+        FORCE_INSTALL_CMD=1
+        shift
+    fi
+    upgrade_all "$FORCE_INSTALL_CMD"
     ;;
 
   --inspect|-ins)
