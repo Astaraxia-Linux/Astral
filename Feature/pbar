@@ -1,7 +1,7 @@
 #!/bin/sh
-# Astral v0.5.0 - minimal POSIX package manager for Astaraxia
+# Astral v0.5.1 - minimal POSIX package manager for Astaraxia
 # Features: Source-only, Auto-recipe fetch, Version locking, Build isolation,
-#           added sum, and fixed recursive recipe lookup for CATEGORY/PN structure.
+#           added sum, fixed recursive recipe lookup
 
 # Set strict execution environment
 set -eu
@@ -46,23 +46,23 @@ usage() {
 $version
 Usage: astral [global_opts] <command> [pkg...]
 Global Options:
-  -f, --force             Do force installation/build/removal.
-  --dir <DIR>             Specify root directory for installing packages (defaults to /).
+  -f, --force           Do force installation/build/removal.
+  --dir <DIR>           Specify root directory for installing packages (defaults to /).
 
 Commands:
-  -s, --sync <pkg>        Download recipe (if missing), check deps, and install/upgrade.
-  -comp, --compile <pkg>  Build from recipe and install (force build).
-  -u, --update            Updates the remote package index (for search).
-  --search <pkg>          Searches for package in local recipes and remote index.
-  -R, --Remove <pkg>      Remove package (leave deps).
-  -r, --RemoveDep <pkg>   Remove package and attempt to remove orphan deps.
-  -Cc, --Clean-Cache      Remove recipes for packages that are NOT currently installed.
-  -U, --self-update [BR]  Update the astral script itself from GitHub. BR can be 'main' (default) or 'bleeding-edge'.
-  -ins, --inspect <pkg>   Show recipe files, including package info and build script head.
-  -I, --info <pkg>        Show detailed information about an installed or remote package.
-  -ua, --upgrade-all      Perform system upgrade (syncs all installed packages).
-  -ll, --list-installed   List installed packages.
-  -V, --version           Show Astral version.
+  -s, --sync <pkg>      Download recipe (if missing), check deps, and install/upgrade.
+  -comp, --compile <pkg> Build from recipe and install (force build).
+  -u, --update          Updates the remote package index (for search).
+  --search <pkg>        Searches for package in local recipes and remote index.
+  -R, --Remove <pkg>    Remove package (leave deps).
+  -r, --RemoveDep <pkg> Remove package and attempt to remove orphan deps.
+  -Cc, --Clean-Cache    Remove recipes for packages that are NOT currently installed.
+  -U, --self-update [BR] Update the astral script itself from GitHub. BR can be 'main' (default) or 'bleeding-edge'.
+  -ins, --inspect <pkg> Show recipe files, including package info and build script head.
+  -I, --info <pkg>    Show detailed information about an installed or remote package.
+  -ua, --upgrade-all  Perform system upgrade (syncs all installed packages).
+  -ll, --list-installed List installed packages.
+  -V, --version       Show Astral version.
 USAGE
 }
 
@@ -70,7 +70,46 @@ USAGE
 
 is_pkg_installed() {
     pkg="$1"
-    [ -d "$DB_DIR/$pkg" ]
+    # Need to check if the exact path or leaf name is installed
+    [ -d "$DB_DIR/$pkg" ] || [ -n "$(find "$DB_DIR" -type d -name "$pkg" -maxdepth 2 2>/dev/null)" ]
+}
+
+# NEW HELPER: Resolves the simple package name (e.g., 'nano') or the full path (e.g., 'app-editors/nano') 
+# to the canonical path relative to $DB_DIR (e.g., 'app-editors/nano').
+resolve_installed_path() {
+    local requested_pkg="$1"
+    
+    # 1. Check if the input is already a full, installed path (e.g., app-editors/nano)
+    if [ -d "$DB_DIR/$requested_pkg" ]; then
+        echo "$requested_pkg"
+        return 0
+    fi
+    
+    # 2. Check if the input is just the leaf name (e.g., nano)
+    local found_path
+    # Search for a directory with the exact name, limiting search depth
+    found_path=$(find "$DB_DIR" -type d -name "$requested_pkg" -maxdepth 2 2>/dev/null | head -n 1)
+    
+    if [ -n "$found_path" ]; then
+        # Return path relative to $DB_DIR
+        echo "$found_path" | sed "s|^${DB_DIR}/||"
+        return 0
+    fi
+    
+    return 1
+}
+
+
+# NEW FUNCTION: Checks if a package is a declared host dependency and is available in PATH.
+check_host_dependency() {
+    local pkg="$1"
+    # Check if the package is in the HOST_TOOLS list
+    if echo "$HOST_TOOLS" | grep -w -q "$pkg"; then
+        # Check if the command exists in the host's PATH
+        command -v "$pkg" >/dev/null 2>&1
+    else
+        return 1
+    fi
 }
 
 # helper: find recipe path - NOW SEARCHES SUBDIRECTORIES
@@ -86,7 +125,6 @@ recipe_path() {
     
     # 2. Search in subdirectories (e.g., $RECIPES_DIR/app-editors/nano)
     # Find package directory matching the name, restricting depth to 2 (category/pkg)
-    # The -prune is not strictly needed here since we only want the path.
     # Using find is the most reliable POSIX way to search recursively.
     found_path=$(find "$RECIPES_DIR" -type d -name "$pkg" -maxdepth 2 2>/dev/null | head -n 1)
     
@@ -101,9 +139,12 @@ recipe_path() {
 
 # Get installed version (returns "none" if not installed)
 get_installed_ver() {
-    local pkg="$1"
-    if [ -f "$DB_DIR/$pkg/version" ]; then
-        cat "$DB_DIR/$pkg/version"
+    local requested_pkg="$1"
+    local pkg_path
+    pkg_path=$(resolve_installed_path "$requested_pkg") || { echo "none"; return 0; }
+
+    if [ -f "$DB_DIR/$pkg_path/version" ]; then
+        cat "$DB_DIR/$pkg_path/version"
     else
         echo "none"
     fi
@@ -123,8 +164,12 @@ get_pkg_deps() {
     local pkg="$1"
     local depfile
     
-    # First, check the installed DB (for info/removal)
-    depfile="$DB_DIR/$pkg/depends"
+    # First, try to resolve the installed path for dependencies
+    local pkg_path
+    pkg_path=$(resolve_installed_path "$pkg") 2>/dev/null || pkg_path="$pkg"
+
+    # Check the installed DB (for info/removal)
+    depfile="$DB_DIR/$pkg_path/depends"
     
     # If not in DB, check the recipe path
     if [ ! -f "$depfile" ]; then
@@ -141,15 +186,17 @@ get_pkg_deps() {
 
 # Checks if a package is required by any other installed package.
 is_pkg_required() {
-    local target_pkg="$1"
-    for other_pkg_dir in "$DB_DIR"/*; do
+    local target_pkg_path="$1"
+    local target_pkg=$(basename "$target_pkg_path")
+    
+    for other_pkg_dir in "$DB_DIR"/*/* "$DB_DIR"/*; do
         [ -d "$other_pkg_dir" ] || continue
-        local other_pkg=$(basename "$other_pkg_dir")
-        [ -z "$other_pkg" ] && continue
-        [ "$other_pkg" = "$target_pkg" ] && continue
+        local other_pkg_path=$(echo "$other_pkg_dir" | sed "s|^${DB_DIR}/||")
+        [ "$other_pkg_path" = "$target_pkg_path" ] && continue
         
-        # Check if the other package's installed dependency list contains target_pkg
-        if get_pkg_deps "$other_pkg" | grep -q "^${target_pkg}$"; then
+        # Check if the other package's installed dependency list contains target_pkg_path or target_pkg
+        local other_deps=$(get_pkg_deps "$other_pkg_path")
+        if echo "$other_deps" | grep -qE "^${target_pkg_path}$|^${target_pkg}$"; then
             return 0 # Required
         fi
     done
@@ -178,7 +225,6 @@ fetch_remote_recipe() {
         recipe_dir_name=$(basename "$existing_rpath")
     else
         # If not found, we cannot infer the category. We must guess based on typical names.
-        # For simplicity, we assume if the recipe is not found, we use the package name as the remote path.
         # A full system would require a remote index lookup here to get the category.
         category_pkg="$pkg"
     fi
@@ -326,6 +372,13 @@ verify_checksums_and_extract() {
 sync_pkg_recursive() {
     local pkg="$1"
     
+    # NEW FIX: Check if this is a host-provided dependency (like make, gcc).
+    # If found in PATH, we treat the dependency as satisfied and skip recipe fetch/build.
+    if check_host_dependency "$pkg"; then
+        info "Dependency '$pkg' satisfied by host system. Skipping recipe fetch and build."
+        return 0
+    fi
+    
     # 1. Ensure we have the recipe (Download/Refresh)
     fetch_remote_recipe "$pkg"
 
@@ -396,10 +449,12 @@ build_from_recipe() {
         mkdir -p "$PKGDIR"
         
         info "Starting isolated build for $pkg..."
+        # Execution environment for build.sh
         ( DESTDIR="$PKGDIR" ./build ) || err "build failed for $pkg" 
         
         if [ -f "./package" ]; then
             info "Running package hook for $pkg..."
+            # Execution environment for package.sh
             ( DESTDIR="$PKGDIR" PKGDIR="$PKGDIR" ./package ) || err "package() failed for $pkg"
         fi
         
@@ -416,7 +471,11 @@ build_from_recipe() {
         info "Installing $pkg files to root filesystem ($INSTALL_ROOT)..."
         tar -C "$PKGDIR" -cf - . | tar -C "$INSTALL_ROOT" -xf - || err "failed to extract package files"
         
-        local pkgdir="$DB_DIR/$pkg"
+        # Determine the database path based on the recipe path
+        local db_path
+        db_path=$(echo "$rpath" | sed "s|^${RECIPES_DIR}/||")
+        local pkgdir="$DB_DIR/$db_path"
+        
         mkdir -p "$pkgdir"
         printf '%s\n' "$recipe_ver" > "$pkgdir/version"
         printf '%s\n' "$new_files" > "$pkgdir/files"
@@ -464,7 +523,7 @@ search_pkg() {
         if echo "$pkg_name" | grep -iq "$query"; then
             local ver="unknown"
             [ -f "$r/version" ] && ver=$(cat "$r/version")
-            printf "L: %-20s (v%s) [%s]\n" "$pkg_name" "$ver" "$(basename $(dirname "$r"))"
+            printf "L: %-20s (v%s) [%s]\n" "$pkg_name" "$ver" "$(basename "$(dirname "$r")")"
             found_local=1
         fi
     done
@@ -485,27 +544,31 @@ search_pkg() {
 }
 
 show_pkg_info() {
-    local pkg="$1"
+    local requested_pkg="$1"
+    local pkg_path
+    pkg_path=$(resolve_installed_path "$requested_pkg") 2>/dev/null || pkg_path="$requested_pkg"
+    
     local rpath
-    rpath=$(recipe_path "$pkg") 2>/dev/null || rpath=""
+    rpath=$(recipe_path "$requested_pkg") 2>/dev/null || rpath=""
     local recipe_exists=0
     [ -n "$rpath" ] && recipe_exists=1
     
-    info "--- Package Information: $pkg ---"
+    info "--- Package Information: $pkg_path ---"
     
     # Installed Info
-    local installed_ver=$(get_installed_ver "$pkg")
+    local installed_ver=$(get_installed_ver "$requested_pkg")
     printf "Installed Version: %s\n" "$installed_ver"
     if [ "$installed_ver" != "none" ]; then
+        local pkgdir="$DB_DIR/$pkg_path"
         local installed_date="N/A"
-        [ -f "$DB_DIR/$pkg/files" ] && installed_date=$(stat -c "%y" "$DB_DIR/$pkg/files" 2>/dev/null || echo "N/A")
-        printf "Installed Path:    %s\n" "$DB_DIR/$pkg"
+        [ -f "$pkgdir/files" ] && installed_date=$(stat -c "%y" "$pkgdir/files" 2>/dev/null || echo "N/A")
+        printf "Installed Path:    %s\n" "$pkgdir"
         printf "Installation Date: %s\n" "$installed_date"
-        printf "Installed Files:   %s files\n" "$(wc -l < "$DB_DIR/$pkg/files" 2>/dev/null || echo 0)"
+        printf "Installed Files:   %s files\n" "$(wc -l < "$pkgdir/files" 2>/dev/null || echo 0)"
         
         local installed_deps_list="None"
         local installed_deps_count=0
-        local installed_deps=$(get_pkg_deps "$pkg")
+        local installed_deps=$(get_pkg_deps "$pkg_path")
         if [ -n "$installed_deps" ]; then
              installed_deps_list=$(echo "$installed_deps" | tr '\n' ' ')
              installed_deps_count=$(echo "$installed_deps" | wc -l)
@@ -522,7 +585,7 @@ show_pkg_info() {
         
         local recipe_deps_list="None"
         local recipe_deps_count=0
-        local recipe_deps=$(get_pkg_deps "$pkg")
+        local recipe_deps=$(get_pkg_deps "$requested_pkg")
         
         if [ -n "$recipe_deps" ]; then
             recipe_deps_list=$(echo "$recipe_deps" | tr '\n' ' ')
@@ -544,7 +607,7 @@ show_pkg_info() {
         printf "Package Script:    %s\n" "$( [ -f "$rpath/package" ] && echo "Yes" || echo "No" )"
         printf "Checksums:         %s\n" "$( [ -f "$rpath/checksums" ] && echo "Yes" || echo "No" )"
     else
-        printf "\nRecipe Found:      No (Run 'astral -s %s' to fetch)\n" "$pkg"
+        printf "\nRecipe Found:      No (Run 'astral -s %s' to fetch)\n" "$requested_pkg"
     fi
 }
 
@@ -557,18 +620,20 @@ upgrade_all() {
 
     info "\nChecking all installed packages for updates..."
 
-    for pkg_dir in "$DB_DIR"/*; do
-        if [ -d "$pkg_dir" ]; then
-            local pkg=$(basename "$pkg_dir")
-            info "\n>>> Checking $pkg <<<"
-            if sync_pkg_recursive "$pkg"; then
-                success_count=$((success_count + 1))
-            else
-                info "Warning: Failed to sync $pkg. Check logs."
-            fi
-            count=$((count + 1))
+    # Use find to list all installed packages by their path (e.g., app-editors/nano)
+    find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null | 
+    sed "s|^${DB_DIR}/||" | sed 's|/version$||' |
+    while IFS= read -r pkg_path; do
+        local pkg=$(basename "$pkg_path")
+        info "\n>>> Checking $pkg_path <<<"
+        if sync_pkg_recursive "$pkg"; then
+            success_count=$((success_count + 1))
+        else
+            info "Warning: Failed to sync $pkg_path. Check logs."
         fi
+        count=$((count + 1))
     done
+    
     info "\nUpgrade process finished. Checked $count installed packages. $success_count updated/verified."
 }
 
@@ -639,23 +704,30 @@ self_update() {
 }
 
 remove_pkg() {
-    pkg="$1"
-    pkgdir="$DB_DIR/$pkg"
-    [ -d "$pkgdir" ] || err "package $pkg not installed"
+    local requested_pkg="$1"
+    
+    # 1. Resolve the actual path (e.g., 'app-editors/nano') from the simple name or full path
+    local pkg_path
+    pkg_path=$(resolve_installed_path "$requested_pkg") || err "package $requested_pkg not installed"
+    
+    local pkgdir="$DB_DIR/$pkg_path"
 
-    local dirs_file="$TMPDIR/astral-dirs-$pkg-$$"
+    # 2. Sanitize the package path for use in the temporary filename (BUG FIX)
+    local safe_pkg_name=$(echo "$pkg_path" | tr '/' '_')
+    local dirs_file="$TMPDIR/astral-dirs-${safe_pkg_name}-$$"
+    
     trap "rm -f '$dirs_file'" EXIT 
 
     # Use the improved recipe_path to find the hook location
-    local rpath=$(recipe_path "$pkg") 
+    local rpath=$(recipe_path "$(basename "$pkg_path")") 
     
     # --- PRE-REMOVE HOOK ---
     if [ -n "$rpath" ] && [ -f "$rpath/post_remove" ]; then
-        info "Running post_remove hook for $pkg..."
-        ( "$rpath/post_remove" ) || info "Warning: post_remove hook failed for $pkg, continuing removal."
+        info "Running post_remove hook for $(basename "$pkg_path")..."
+        ( "$rpath/post_remove" ) || info "Warning: post_remove hook failed for $(basename "$pkg_path"), continuing removal."
     fi
     
-    info "Removing $pkg files from $INSTALL_ROOT"
+    info "Removing $pkg_path files from $INSTALL_ROOT"
     
     while IFS= read -r f; do
         [ -z "$f" ] && continue
@@ -669,9 +741,9 @@ remove_pkg() {
         fi
     done < "$pkgdir/files"
     
-    # 2. Process collected directories (deepest first)
+    # 3. Process collected directories (deepest first)
     if [ -f "$dirs_file" ]; then
-        info "Attempting to clean up empty directories installed by $pkg..."
+        info "Attempting to clean up empty directories installed by $pkg_path..."
         sort -r "$dirs_file" | while IFS= read -r d; do
             [ -z "$d" ] && continue
             local dir_path="$INSTALL_ROOT/$d"
@@ -682,24 +754,31 @@ remove_pkg() {
     
     trap - EXIT
     rm -rf "$pkgdir"
-    info "Removed $pkg successfully from database."
+    info "Removed $pkg_path successfully from database."
 }
 
 removedep_pkg() {
-    pkg="$1"
-    remove_pkg "$pkg"
+    local pkg="$1"
+    
+    # Get the canonical path for the initial package removal
+    local initial_pkg_path
+    initial_pkg_path=$(resolve_installed_path "$pkg") || err "package $pkg not installed"
+
+    remove_pkg "$initial_pkg_path"
     info "Scanning for orphaned dependencies..."
     
     while true; do
         found_orphan=0
-        for dep_dir in "$DB_DIR"/*; do
-            [ -d "$dep_dir" ] || continue
-            dep_name=$(basename "$dep_dir")
-            if ! is_pkg_required "$dep_name"; then
-                info "Removing orphan dependency: $dep_name"
-                remove_pkg "$dep_name"
+        # Iterate over all installed package directories
+        find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null | 
+        sed "s|^${DB_DIR}/||" | sed 's|/version$||' |
+        while IFS= read -r dep_path; do
+            # Check if package is required (uses the full path for is_pkg_required check)
+            if ! is_pkg_required "$dep_path"; then
+                info "Removing orphan dependency: $dep_path"
+                remove_pkg "$dep_path" # remove_pkg accepts the full path
                 found_orphan=1
-                break
+                break # Break inner loop to restart the dependency scan
             fi 
         done
         [ "$found_orphan" -eq 0 ] && break
@@ -713,19 +792,18 @@ clean_cache() {
     
     # Use find to iterate through all package directories (maxdepth 2 ensures category/pkg)
     find "$RECIPES_DIR" -type d -mindepth 2 -maxdepth 2 2>/dev/null | while IFS= read -r recipe_dir; do
-        local pkg=$(basename "$recipe_dir")
+        local pkg_name=$(basename "$recipe_dir")
         
-        if is_pkg_installed "$pkg"; then
-            info "Recipe for '$pkg' is installed. Skipping."
+        if is_pkg_installed "$pkg_name"; then
+            info "Recipe for '$pkg_name' is installed. Skipping."
         else
-            info "Recipe for '$pkg' is NOT installed. Removing cache files..."
+            info "Recipe for '$pkg_name' is NOT installed. Removing cache files..."
             rm -rf "$recipe_dir"
             cleaned_count=$((cleaned_count + 1))
         fi
     done
     
     # Note: cleaned_count outside the loop will be 0 due to subshell. 
-    # This is a limitation of POSIX shell scripting that we ignore here.
     info "Cache cleanup process initiated. Check output for removed recipes."
 }
 
@@ -734,14 +812,43 @@ list_installed() {
         info "No packages currently installed."
         return 0
     fi
+
     info "--- Installed Packages ---"
-    for d in "$DB_DIR"/*; do
-        # Check if the directory looks like a valid package DB entry
-        if [ -d "$d" ] && [ -f "$d/version" ]; then
-            printf '%-20s %s\n' "$(basename "$d")" "$(cat "$d/version" 2>/dev/null || echo unknown)"
-        # The 'app-editors unknown' issue likely came from looping over an invalid or temporary directory
+    
+    local last_category=""
+    
+    # 1. Find all 'version' files recursively, strip the DB_DIR prefix, and sort by path
+    # This finds package entries like 'app-editors/nano' or just 'package-name'
+    find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null | 
+    sed "s|^${DB_DIR}/||" | sed 's|/version$||' | sort |
+    
+    # 2. Loop through each discovered package path (e.g., app-editors/nano, base/coreutils)
+    while IFS= read -r pkg_path; do
+        local pkg_name=$(basename "$pkg_path")
+        local category=$(dirname "$pkg_path")
+        local pkg_ver=""
+        
+        # Fallback for root-level packages if dirname is '.'
+        if [ "$category" = "." ] || [ -z "$category" ] || [ "$category" = "/" ]; then
+            category="Uncategorized"
         fi
+        
+        # Check if category has changed (or is the first one)
+        if [ "$category" != "$last_category" ]; then
+            printf '\n---Installed-package---\n'
+            printf '%s\n' "$category"
+            last_category="$category"
+        fi
+        
+        # Get the version from the database path
+        if [ -f "$DB_DIR/$pkg_path/version" ]; then
+             pkg_ver=$(cat "$DB_DIR/$pkg_path/version")
+        fi
+        
+        printf "|- %-15s (v%s)\n" "$pkg_name" "$pkg_ver"
+        
     done
+    printf '\n'
 }
 
 # CLI dispatch
@@ -835,7 +942,7 @@ case "$1" in
     ;;
   --inspect|-ins)
     [ $# -gt 1 ] || err "package name required"
-    r=$(recipe_path "$2") || err "recipe not found for $2"
+    r=$(recipe_path "$2") || err "recipe not found for "$2""
     info "--- Files in Recipe Directory: $r ---"
     if [ -d "$r" ]; then
       ls -la "$r"
