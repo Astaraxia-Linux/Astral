@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.5.1.6 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.5.1.7 Main - minimal POSIX package manager for Astaraxia
 # Modified: require root, safer RemoveDep, host dependency detection
 # Set strict execution environment
 set -eu
@@ -38,7 +38,7 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-version="0.5.1.6 Main"
+version="0.5.1.7 Main"
 
 astral_version() {
 cat <<EOF
@@ -875,8 +875,11 @@ case "$1" in
     ;;
 
   -u|--update)
-    update_repo
+    repo="$2"
+    shift 2
+    update_repo "$repo"
     ;;
+
 
   --search)
     [ $# -gt 1 ] || err "package name required"
@@ -935,11 +938,6 @@ case "$1" in
  -sA|--Sync-Asura)
     [ $# -gt 1 ] || err "package name required"
     sync_pkg_asura "$2"
-    ;;
-
-  -u)
-    repo="${2:-}" 
-    update_repo "$repo_arg"
     ;;
 
   -https://www.youtube.com/watch?v=2EDcoWKH25o|FlashMeBack)
