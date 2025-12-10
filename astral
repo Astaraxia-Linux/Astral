@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.5.0.1 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.5.1.0 Main - minimal POSIX package manager for Astaraxia
 # Modified: require root, safer RemoveDep, host dependency detection
 # Set strict execution environment
 set -eu
@@ -13,10 +13,14 @@ RECIPES_DIR=${RECIPES_DIR:-/usr/src/astral/recipes}
 CACHE_SRC=${CACHE_SRC:-/var/cache/astral/src}
 CACHE_BIN=${CACHE_BIN:-/var/cache/astral/bin}
 DB_DIR=${DB_DIR:-/var/lib/astral/db}
-REPO_URL=${REPO_URL:-https://izumi-sonoka.github.io/Astral-Repo/}
-RECIPE_RAW_URL=${RECIPE_RAW_URL:-https://raw.githubusercontent.com/Izumi-Sonoka/Astral-Repo/main}
 INDEX_FILE="$DB_DIR/index"
 LOG_DIR=${LOG_DIR:-/var/log/astral}
+
+# --- REPOS ---
+REPO_URL=${REPO_URL:-https://izumi-sonoka.github.io/Astral-Repo/}
+RECIPE_RAW_URL=${RECIPE_RAW_URL:-https://raw.githubusercontent.com/Izumi-Sonoka/Astral-Repo/main}
+USER_REPO_URL=${USER_REPO_URL:-https://codeberg.org/Izumi/ASURA/raw/main} # just testing something GAHHH
+USER_RECIPE_RAW_URL=${USER_RECIPE_RAW_URL:-$USER_REPO_URL/recipes}
 
 # --- SELF-UPDATE URLs ---
 SELF_UPDATE_URL_MAIN=${SELF_UPDATE_URL_MAIN:-https://raw.githubusercontent.com/Astaraxia-Linux/Astral/refs/heads/main/astral}
@@ -30,7 +34,7 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-version="0.5.0.1 Main"
+version="0.5.1.0 Main"
 
 astral_version() {
 cat <<EOF
@@ -367,6 +371,22 @@ sync_pkg_recursive() {
     build_from_recipe "$pkg"
 }
 
+# hoping that this fucking asura sync doesnt explode
+sync_pkg_asura() {
+    pkg="$1"
+    info "Syncing package '$pkg' from Asura (user repository)..."
+
+    # temporarily override RECIPE_RAW_URL for this sync
+    old_url="$RECIPE_RAW_URL"
+    RECIPE_RAW_URL="$USER_RECIPE_RAW_URL"
+
+    sync_pkg_recursive "$pkg"
+
+    # restore
+    RECIPE_RAW_URL="$old_url"
+}
+
+
 build_from_recipe() {
     pkg="$1"
     rpath=$(recipe_path "$pkg") || err "recipe $pkg not found"
@@ -455,15 +475,30 @@ build_from_recipe() {
 }
 
 update_repo() {
-    info "Updating package database index..."
-    INDEX_URL="${REPO_URL}astral.index"
+    repo="$1"
+
+    case "$repo" in
+        aoharu|"")  # default or aoharu
+            info "Updating Axia Official Repository (AOHARU)..."
+            INDEX_URL="${REPO_URL}astral.index"
+            ;;
+        asura)
+            info "Updating Axia User Repository (ASURA)..."
+            INDEX_URL="${USER_REPO_URL}/astral.index"
+            ;;
+        *)
+            err "Unknown repository '$repo' for update"
+            ;;
+    esac
+
     if curl -fsSL "$INDEX_URL" -o "$INDEX_FILE"; then
         info "Database updated successfully."
     else
-        err "Failed to download index file from $INDEX_URL"
+        err "Failed to download index from $INDEX_URL"
         return 1
     fi
 }
+
 
 search_pkg() {
     query="$1"
@@ -864,6 +899,16 @@ case "$1" in
   -V|--version)
     astral_version
     ;;
+ -sA|--Sync-Asura)
+    [ $# -gt 1 ] || err "package name required"
+    sync_pkg_asura "$2"
+    ;;
+
+  -u)
+    repo="${2:-aoharu}"  # default to aoharu if not specified
+    update_repo "$repo"
+    ;;
+
   -https://www.youtube.com/watch?v=2EDcoWKH25o)
     echo "Flash Me Back - Camemellia. Peak btw"
     ;;
