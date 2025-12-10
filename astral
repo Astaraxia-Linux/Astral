@@ -1,6 +1,6 @@
 #!/bin/sh
-# Astral v0.5.6.1 Main - minimal POSIX package manager for Astaraxia
-# Modified: require root, safer RemoveDep, host dependency detection. Yeah right :3
+# Astral v0.5.6.2 Main - minimal POSIX package manager for Astaraxia
+# Modified: removed sources file
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
 # Set strict execution environment, meow~
@@ -43,7 +43,7 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-version="0.5.6.1 Main"
+version="0.5.6.2 Main"
 
 astral_version() {
 cat <<EOF
@@ -255,8 +255,8 @@ fetch_remote_recipe() {
 
     remote_base="${RECIPE_RAW_URL%/}/recipes/$(printf '%s' "$(printf '%s' "$local_dir" | sed "s|^${RECIPES_DIR}/||")")"
 
-    required_files="version build sources"
-    optional_files="depends package post_install post_remove checksums conflicts info"
+    required_files="version build"
+    optional_files="depends package post_install post_remove checksums conflicts info sources"
 
     for file in $required_files $optional_files; do
         url="$remote_base/$file"
@@ -427,7 +427,7 @@ build_from_recipe() {
 
     trap "rm -rf '$buildtmp'" EXIT
 
-    download_sources "$rpath" "$buildtmp"
+    # download_sources "$rpath" "$buildtmp"
     verify_checksums_and_extract "$pkg" "$rpath" "$buildtmp"
 
     if [ -f "./build" ]; then
