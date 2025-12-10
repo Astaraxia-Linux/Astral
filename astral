@@ -1,14 +1,15 @@
 #!/bin/sh
-# Astral v0.5.1.7 Main - minimal POSIX package manager for Astaraxia
-# Modified: require root, safer RemoveDep, host dependency detection
-# Set strict execution environment
+# Astral v0.5.2.0 Main - minimal POSIX package manager for Astaraxia
+# Modified: require root, safer RemoveDep, host dependency detection. Yeah right :3
+
+# Set strict execution environment, meow~
 set -eu
 
 # Global state variables
 INSTALL_ROOT="/"    # Installation target directory
 FORCE_INSTALL=0     # Force flag (0=off, 1=on)
 
-# wha
+# Locate where tf is astral
 SCRIPT_PATH="$(readlink -f "$0")"
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 
@@ -33,12 +34,16 @@ SELF_UPDATE_URL_BLEEDING_EDGE=${SELF_UPDATE_URL_BLEEDING_EDGE:-https://raw.githu
 SELF_UPDATE_PATH=/usr/bin/astral
 TMPDIR=${TMPDIR:-/tmp}
 
+# --- INDEKS --- Malay cuz why not
+INDEX_FILE_AOHARU="$DB_DIR/index_aoharu"
+INDEX_FILE_ASURA="$DB_DIR/index_asura"
+
 mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-version="0.5.1.7 Main"
+version="0.5.2.0 Main"
 
 astral_version() {
 cat <<EOF
@@ -486,12 +491,14 @@ update_repo() {
     repo="${1:-}"
 
     case "$repo" in
-        aoharu|"")  # default or aoharu
-            info "Updating Axia Official Repository (AOHARU)..."
+        aoharu|"")
+            info "Updating Axia Official Repository Index (AOHARU)..."
+            INDEX_FILE="$INDEX_FILE_AOHARU"
             INDEX_URL="${REPO_URL}astral.index"
             ;;
         asura)
-            info "Updating Axia User Repository (ASURA)..."
+            info "Updating Axia User Repository For All Indeks (ASURA)..."
+            INDEX_FILE="$INDEX_FILE_ASURA"
             INDEX_URL="${USER_REPO_URL}/astral.index"
             ;;
         *)
@@ -508,13 +515,15 @@ update_repo() {
 }
 
 
+# rewritten... hopes that it doesnt fucking explode
 search_pkg() {
     query="$1"
     info "Searching for package '$query'..."
+
+    # --- Local recipes ---
     info "--- Local Recipes ($RECIPES_DIR) ---"
     found_local=0
-
-    find "$RECIPES_DIR" -type d -mindepth 1 -maxdepth 2 2>/dev/null | while IFS= read -r r; do
+    for r in $(find "$RECIPES_DIR" -type d -mindepth 1 -maxdepth 2 2>/dev/null); do
         pkg_name=$(basename "$r")
         if printf '%s\n' "$pkg_name" | grep -iq "$query"; then
             ver="unknown"
@@ -525,19 +534,22 @@ search_pkg() {
     done
     [ "$found_local" -eq 0 ] && info "No local recipes found."
 
-    info "--- Remote Index ($INDEX_FILE) ---"
-    [ -f "$INDEX_FILE" ] || { info "Remote index not found. Run 'astral -u' to update."; return 0; }
-    found_remote=0
-    while IFS= read -r line; do
-        pkg_name=$(printf '%s' "$line" | awk '{print $1}')
-        pkg_ver=$(printf '%s' "$line" | awk '{print $2}')
-        if printf '%s\n' "$pkg_name" | grep -iq "$query"; then
-            printf "R: %-20s (v%s)\n" "$pkg_name" "$pkg_ver"
-            found_remote=1
-        fi
-    done < "$INDEX_FILE"
-    [ "$found_remote" -eq 0 ] && info "No remote packages found."
+
+    # Remote indexes
+    info "--- Remote Indexes ---"
+    for idx in "$INDEX_FILE_AOHARU" "$INDEX_FILE_ASURA"; do
+        [ -f "$idx" ] || continue
+        while IFS= read -r line; do
+            pkg_name=$(printf '%s' "$line" | awk '{print $1}')
+            pkg_ver=$(printf '%s' "$line" | awk '{print $2}')
+            repo_label=$(basename "$idx" | sed 's/index_//')
+            if printf '%s\n' "$pkg_name" | grep -iq "$query"; then
+                printf "R(%s): %-20s (v%s)\n" "$repo_label" "$pkg_name" "$pkg_ver"
+            fi
+        done < "$idx"
+    done
 }
+
 
 show_pkg_info() {
     requested_pkg="$1"
