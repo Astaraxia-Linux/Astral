@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.5.5.0 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.5.6.0 Main - minimal POSIX package manager for Astaraxia
 # Modified: require root, safer RemoveDep, host dependency detection. Yeah right :3
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
@@ -43,7 +43,7 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-version="0.5.5.0 Main"
+version="0.5.6.0 Main"
 
 astral_version() {
 cat <<EOF
@@ -66,7 +66,6 @@ usage() {
 │ Usage: astral [global_opts] <command> [pkg...]                                                                         │
 │                                                                                                                        │
 │ Global Options:                                                                                                        │
-│   -f, --force             Do force installation/build/removal.                                                         │
 │   --dir <DIR>             Specify root directory for installing packages (defaults to /).                              │
 │                                                                                                                        │
 │ Commands:                                                                                                              │
@@ -828,11 +827,6 @@ fi
 # --- Global Option Parsing ---
 while [ $# -gt 0 ]; do
     case "$1" in
-        -f|--force)
-            FORCE_INSTALL=1
-            info "Global: Force mode activated."
-            shift
-            ;;
         --dir)
             [ $# -lt 2 ] && err "Missing argument for $1"
             INSTALL_ROOT="$2"
@@ -866,26 +860,23 @@ if [ "$INSTALL_ROOT" != "/" ]; then
 fi
 
 case "$1" in
-  -s|--Sync)
+-s|--Sync)
     [ $# -gt 1 ] || err "package name required"
-    pkg="$2"
-    FORCE_CMD=$FORCE_INSTALL  # default from global
-    if [ "$3" = "-f" ] || [ "$3" = "--force" ]; then
-        FORCE_CMD=1
-        shift
-    fi
-    sync_pkg_recursive "$pkg" "$FORCE_CMD"
+    sync_pkg_recursive "$2"
     ;;
 
 -c|--compile)
     [ $# -gt 1 ] || err "package name required"
-    pkg="$2"
-    FORCE_CMD=$FORCE_INSTALL
-    if [ "$3" = "-f" ] || [ "$3" = "--force" ]; then
-        FORCE_CMD=1
-        shift
-    fi
-    build_from_recipe "$pkg" "$FORCE_CMD"
+    build_from_recipe "$2"
+    ;;
+
+-sA|--Sync-Asura)
+    [ $# -gt 1 ] || err "package name required"
+    sync_pkg_asura "$2"
+    ;;
+
+--upgrade-all|-ua)
+    upgrade_all
     ;;
 
   -u|--update)
@@ -922,10 +913,6 @@ case "$1" in
     show_pkg_info "$2"
     ;;
 
---upgrade-all|-ua)
-    upgrade_all "$FORCE_INSTALL"
-    ;;
-
   --inspect|-ins)
     [ $# -gt 1 ] || err "package name required"
     r=$(recipe_path "$2") || err "recipe not found for $2"
@@ -946,17 +933,6 @@ case "$1" in
 
   -V|--version)
     astral_version
-    ;;
-
--sA|--Sync-Asura)
-    [ $# -gt 1 ] || err "package name required"
-    pkg="$2"
-    FORCE_CMD=$FORCE_INSTALL  # default global
-    if [ "$3" = "-f" ] || [ "$3" = "--force" ]; then
-        FORCE_CMD=1
-        shift
-    fi
-    sync_pkg_asura "$pkg" "$FORCE_CMD"
     ;;
 
   -https://www.youtube.com/watch?v=2EDcoWKH25o|FlashMeBack)
