@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.5.6.0 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.5.6.1 Main - minimal POSIX package manager for Astaraxia
 # Modified: require root, safer RemoveDep, host dependency detection. Yeah right :3
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
@@ -43,7 +43,7 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-version="0.5.6.0 Main"
+version="0.5.6.1 Main"
 
 astral_version() {
 cat <<EOF
@@ -607,7 +607,10 @@ show_pkg_info() {
 upgrade_all() {
     FORCE_CMD=${1:-0}  # 0 if not passed
     info "Starting full system upgrade (syncing all installed packages)..."
-    ...
+
+    count=0
+    success_count=0
+
     find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null |
     sed "s|^${DB_DIR}/||" | sed 's|/version$||' |
     while IFS= read -r pkg_path; do
@@ -620,10 +623,9 @@ upgrade_all() {
         fi
         count=$((count + 1))
     done
+
     info "\nUpgrade process finished. Checked $count installed packages. $success_count updated/verified."
 }
-
-
 
 self_update() {
     TMPDIR="${TMPDIR:-/tmp}"
