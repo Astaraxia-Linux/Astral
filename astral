@@ -936,7 +936,7 @@ case "$1" in
 
   -u)
     repo="${2:-}" 
-    update_repo "$repo"
+    update_repo "$repo_arg"
     ;;
 
   -https://www.youtube.com/watch?v=2EDcoWKH25o|FlashMeBack)
