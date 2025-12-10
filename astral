@@ -750,7 +750,7 @@ list_installed() {
             category="Uncategorized"
         fi
         if [ "$category" != "$last_category" ]; then
-            printf '\n"--- Installed Packages ---"\n'
+            printf '\n--- Installed Packages ---\n'
             printf '%s\n' "$category"
             last_category="$category"
         fi
