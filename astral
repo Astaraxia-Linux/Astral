@@ -910,10 +910,10 @@ case "$1" in
     update_repo "$repo"
     ;;
 
-  -https://www.youtube.com/watch?v=2EDcoWKH25o)
+  -https://www.youtube.com/watch?v=2EDcoWKH25o| Flash Me Back)
     echo "Flash Me Back - Camemellia. Peak btw"
     ;;
-  *)
+  *|-*|--*)
     echo "Error: Unknown command or option '$1'" >&2
     usage
     exit 1
