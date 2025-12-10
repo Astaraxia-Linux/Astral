@@ -8,6 +8,10 @@ set -eu
 INSTALL_ROOT="/"    # Installation target directory
 FORCE_INSTALL=0     # Force flag (0=off, 1=on)
 
+# wha
+SCRIPT_PATH="$(readlink -f "$0")"
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+
 # Directory Layout
 RECIPES_DIR=${RECIPES_DIR:-/usr/src/astral/recipes}
 CACHE_SRC=${CACHE_SRC:-/var/cache/astral/src}
@@ -50,7 +54,7 @@ usage() {
 ┌──────────────────────┐
 │ Astral: $version │
 └──────────────────────┘
-Astral File is in /usr/bin/astral
+Astral File is in $SCRIPT_PATH
 ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ Usage: astral [global_opts] <command> [pkg...]                                                                        │
 │                                                                                                                       │
@@ -849,38 +853,48 @@ case "$1" in
     [ $# -gt 1 ] || err "package name required"
     sync_pkg_recursive "$2"
     ;;
+
   -c|--compile)
     [ $# -gt 1 ] || err "package name required"
     build_from_recipe "$2"
     ;;
+
   -u|--update)
     update_repo
     ;;
+
   --search)
     [ $# -gt 1 ] || err "package name required"
     search_pkg "$2"
     ;;
+
   -R|--Remove)
     [ $# -gt 1 ] || err "package name required"
     remove_pkg "$2"
     ;;
+
   -r|--RemoveDep)
     [ $# -gt 1 ] || err "package name required"
     removedep_pkg "$2"
     ;;
+
   -Cc|--Clean-Cache)
     clean_cache
     ;;
+
   -U|--self-update)
     self_update "${2:-main}"
     ;;
+
   --info|-I)
     [ $# -gt 1 ] || err "package name required"
     show_pkg_info "$2"
     ;;
+
   --upgrade-all|-ua)
     upgrade_all
     ;;
+
   --inspect|-ins)
     [ $# -gt 1 ] || err "package name required"
     r=$(recipe_path "$2") || err "recipe not found for $2"
@@ -894,12 +908,15 @@ case "$1" in
       sed -n '1,20p' "$r"
     fi
     ;;
+
   --list-installed|-ll)
     list_installed
     ;;
+
   -V|--version)
     astral_version
     ;;
+
  -sA|--Sync-Asura)
     [ $# -gt 1 ] || err "package name required"
     sync_pkg_asura "$2"
@@ -910,12 +927,14 @@ case "$1" in
     update_repo "$repo"
     ;;
 
-  -https://www.youtube.com/watch?v=2EDcoWKH25o| Flash Me Back)
+  -https://www.youtube.com/watch?v=2EDcoWKH25o|Flash Me Back)
     echo "Flash Me Back - Camemellia. Peak btw"
     ;;
+
   *|-*|--*)
     echo "Error: Unknown command or option '$1'" >&2
     usage
     exit 1
     ;;
+
 esac
