@@ -1,8 +1,6 @@
 #!/bin/sh
 # Astral v0.5.1.1 - minimal POSIX package manager for Astaraxia
-# Features: Source-only, Auto-recipe fetch, Version locking, Build isolation,
-#           added sum, fixed recursive recipe lookup
-
+# Modified: require root, safer RemoveDep, host dependency detection
 # Set strict execution environment
 set -eu
 
@@ -55,7 +53,7 @@ Commands:
   -u, --update          Updates the remote package index (for search).
   --search <pkg>        Searches for package in local recipes and remote index.
   -R, --Remove <pkg>    Remove package (leave deps).
-  -r, --RemoveDep <pkg> Remove package and attempt to remove orphan deps.
+  -r, --RemoveDep <pkg> Remove package and attempt to remove orphan deps (safe).
   -Cc, --Clean-Cache    Remove recipes for packages that are NOT currently installed.
   -U, --self-update [BR] Update the astral script itself from GitHub. BR can be 'main' (default) or 'bleeding-edge'.
   -ins, --inspect <pkg> Show recipe files, including package info and build script head.
@@ -70,70 +68,54 @@ USAGE
 
 is_pkg_installed() {
     pkg="$1"
-    # Need to check if the exact path or leaf name is installed
     [ -d "$DB_DIR/$pkg" ] || [ -n "$(find "$DB_DIR" -type d -name "$pkg" -maxdepth 2 2>/dev/null)" ]
 }
 
-# NEW HELPER: Resolves the simple package name (e.g., 'nano') or the full path (e.g., 'app-editors/nano') 
-# to the canonical path relative to $DB_DIR (e.g., 'app-editors/nano').
+# Resolve simple name or full path to canonical path relative to $DB_DIR
 resolve_installed_path() {
-    local requested_pkg="$1"
-    
-    # 1. Check if the input is already a full, installed path (e.g., app-editors/nano)
+    requested_pkg="$1"
+
     if [ -d "$DB_DIR/$requested_pkg" ]; then
-        echo "$requested_pkg"
+        printf '%s\n' "$requested_pkg"
         return 0
     fi
-    
-    # 2. Check if the input is just the leaf name (e.g., nano)
-    local found_path
-    # Search for a directory with the exact name, limiting search depth
-    found_path=$(find "$DB_DIR" -type d -name "$requested_pkg" -maxdepth 2 2>/dev/null | head -n 1)
-    
+
+    found_path=$(find "$DB_DIR" -type d -name "$requested_pkg" -maxdepth 2 2>/dev/null | head -n 1 || true)
     if [ -n "$found_path" ]; then
-        # Return path relative to $DB_DIR
-        echo "$found_path" | sed "s|^${DB_DIR}/||"
+        printf '%s\n' "$(printf '%s' "$found_path" | sed "s|^${DB_DIR}/||")"
         return 0
     fi
-    
+
     return 1
 }
 
-# helper: find recipe path - NOW SEARCHES SUBDIRECTORIES
+# helper: find recipe path - search subdirectories
 recipe_path() {
-    local pkg="$1"
-    local found_path=""
-    
-    # 1. Search directly (e.g., $RECIPES_DIR/nano)
+    pkg="$1"
+
     if [ -d "$RECIPES_DIR/$pkg" ]; then
-        echo "$RECIPES_DIR/$pkg"
+        printf '%s\n' "$RECIPES_DIR/$pkg"
         return 0
     fi
-    
-    # 2. Search in subdirectories (e.g., $RECIPES_DIR/app-editors/nano)
-    # Find package directory matching the name, restricting depth to 2 (category/pkg)
-    # Using find is the most reliable POSIX way to search recursively.
-    found_path=$(find "$RECIPES_DIR" -type d -name "$pkg" -maxdepth 2 2>/dev/null | head -n 1)
-    
+
+    found_path=$(find "$RECIPES_DIR" -type d -name "$pkg" -maxdepth 2 2>/dev/null | head -n 1 || true)
     if [ -n "$found_path" ] && [ -d "$found_path" ]; then
-        echo "$found_path"
+        printf '%s\n' "$found_path"
         return 0
     fi
-    
-    # 3. Check for single file (ignored in favor of directory recipes)
+
     return 1
 }
 
 # Get installed version (returns "none" if not installed)
 get_installed_ver() {
-    local requested_pkg="$1"
-    local pkg_path
-    pkg_path=$(resolve_installed_path "$requested_pkg") || { echo "none"; return 0; }
+    requested_pkg="$1"
+    pkg_path=$(resolve_installed_path "$requested_pkg") || { printf 'none\n'; return 0; }
 
     if [ -f "$DB_DIR/$pkg_path/version" ]; then
         cat "$DB_DIR/$pkg_path/version"
     else
-        echo "none"
+        printf 'none\n'
     fi
 }
 
@@ -148,79 +130,100 @@ M
 
 # Extracts dependency names from the depends file, filtering comments and empty lines.
 get_pkg_deps() {
-    local pkg="$1"
-    local depfile
-    
-    # First, try to resolve the installed path for dependencies
-    local pkg_path
-    pkg_path=$(resolve_installed_path "$pkg") 2>/dev/null || pkg_path="$pkg"
+    pkg="$1"
+    depfile=""
 
-    # Check the installed DB (for info/removal)
+    pkg_path=$(resolve_installed_path "$pkg") 2>/dev/null || pkg_path="$pkg"
     depfile="$DB_DIR/$pkg_path/depends"
-    
-    # If not in DB, check the recipe path
+
     if [ ! -f "$depfile" ]; then
-        local rpath
         rpath=$(recipe_path "$pkg") 2>/dev/null || rpath=""
-        [ -n "$rpath" ] && depfile="$rpath/depends"
+        [ -n "${rpath}" ] && depfile="$rpath/depends"
     fi
-    
+
     [ -f "$depfile" ] || return 0
-    
-    # Use POSIX ERE [[:space:]] to filter comments and empty lines, preserving newlines.
-    grep -v '^[[:space:]]*#' "$depfile" | grep -E -v '^[[:space:]]*$'
+
+    # Print each non-empty non-comment line
+    grep -v '^[[:space:]]*#' "$depfile" | grep -E -v '^[[:space:]]*$' || true
 }
 
-# Checks if a package is required by any other installed package.
+# Checks if a package (by DB relative path) is required by any other installed package.
 is_pkg_required() {
-    local target_pkg_path="$1"
-    local target_pkg=$(basename "$target_pkg_path")
-    
+    target_pkg_path="$1"
+    target_pkg=$(basename "$target_pkg_path")
+
     for other_pkg_dir in "$DB_DIR"/*/* "$DB_DIR"/*; do
         [ -d "$other_pkg_dir" ] || continue
-        local other_pkg_path=$(echo "$other_pkg_dir" | sed "s|^${DB_DIR}/||")
+        other_pkg_path=$(printf '%s' "$other_pkg_dir" | sed "s|^${DB_DIR}/||")
         [ "$other_pkg_path" = "$target_pkg_path" ] && continue
-        
-        # Check if the other package's installed dependency list contains target_pkg_path or target_pkg
-        local other_deps=$(get_pkg_deps "$other_pkg_path")
-        if echo "$other_deps" | grep -qE "^${target_pkg_path}$|^${target_pkg}$"; then
-            return 0 # Required
+
+        other_deps=$(get_pkg_deps "$other_pkg_path" 2>/dev/null || true)
+        if printf '%s\n' "$other_deps" | grep -qE "^${target_pkg_path}$|^${target_pkg}$"; then
+            return 0
         fi
     done
-    return 1 # Not required
+
+    return 1
 }
 
-# --- NETWORKING FUNCTIONS ---
+# --- HOST DEPENDENCY DETECTION ---
+# Returns 0 if dependency is satisfied by host (binary in PATH or shared lib)
+check_host_dependency() {
+    dep="$1"
 
-# Fetch recipe files from remote
+    # If looks like a common binary name, check PATH
+    if command -v "$dep" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    # If dep looks like a library (lib*.so or ending with .so), check ldconfig and common lib dirs
+    # Normalize: if dep contains .so or lib prefix
+    case "$dep" in
+        lib*.so*|*.so*)
+            # try ldconfig -p if available
+            if command -v ldconfig >/dev/null 2>&1; then
+                if ldconfig -p 2>/dev/null | grep -q "$(printf '%s' "$dep" | sed 's/[]\/$*.^[]/\\&/g')"; then
+                    return 0
+                fi
+            fi
+            # fallback to scanning /lib /usr/lib /usr/local/lib (and multiarch)
+            for p in /lib /usr/lib /usr/local/lib /lib64 /usr/local/lib64 /usr/lib64; do
+                if ls "$p" 2>/dev/null | grep -q "$(printf '%s' "$dep" | sed 's/[]\/$*.^[]/\\&/g')"; then
+                    return 0
+                fi
+            done
+            ;;
+        *)
+            # Not obviously a .so file; additionally check for lib<name>.so patterns
+            libname="lib${dep}.so"
+            if command -v ldconfig >/dev/null 2>&1; then
+                if ldconfig -p 2>/dev/null | grep -q "$libname"; then
+                    return 0
+                fi
+            fi
+            for p in /lib /usr/lib /usr/local/lib /lib64 /usr/lib64 /usr/local/lib64; do
+                if ls "$p" 2>/dev/null | grep -q "^${libname}" ; then
+                    return 0
+                fi
+            done
+            ;;
+    esac
+
+    return 1
+}
+
+# --- NETWORKING / RECIPE FUNCTIONS ---
+
 fetch_remote_recipe() {
-    local pkg="$1"
-    local local_dir="$RECIPES_DIR/$pkg" # NOTE: We assume $pkg is the name, but remote URL needs category
+    pkg="$1"
+    local_dir="$RECIPES_DIR/$pkg"
 
     info "Attempting to fetch or refresh recipe for '$pkg' from remote..."
-    
-    # If the recipe is found locally, we can infer the category for remote fetch.
-    local category_pkg=""
-    local recipe_dir_name="$pkg"
-    
-    local existing_rpath
+
     existing_rpath=$(recipe_path "$pkg") 2>/dev/null || existing_rpath=""
 
     if [ -n "$existing_rpath" ]; then
-        # Example: /usr/src/astral/recipes/app-editors/nano -> app-editors/nano
-        category_pkg=$(echo "$existing_rpath" | sed "s|^${RECIPES_DIR}/||")
-        recipe_dir_name=$(basename "$existing_rpath")
-    else
-        # If not found, we cannot infer the category. We must guess based on typical names.
-        # A full system would require a remote index lookup here to get the category.
-        category_pkg="$pkg"
-    fi
-    
-    local remote_base="${RECIPE_RAW_URL%/}/recipes/$category_pkg"
-
-    # Create the local directory structure (e.g., $RECIPES_DIR/app-editors/nano)
-    # We must use the *full* inferred path if possible, or fall back to simple $pkg name.
-    if [ -n "$category_pkg" ] && [ "$category_pkg" != "$pkg" ]; then
+        category_pkg=$(printf '%s' "$existing_rpath" | sed "s|^${RECIPES_DIR}/||")
         local_dir="$RECIPES_DIR/$category_pkg"
         mkdir -p "$local_dir"
     else
@@ -228,181 +231,152 @@ fetch_remote_recipe() {
         mkdir -p "$local_dir"
     fi
 
-    local required_files="version build sources"
-    local optional_files="depends package post_install post_remove checksums conflicts info"
-    
+    remote_base="${RECIPE_RAW_URL%/}/recipes/$(printf '%s' "$(printf '%s' "$local_dir" | sed "s|^${RECIPES_DIR}/||")")"
+
+    required_files="version build sources"
+    optional_files="depends package post_install post_remove checksums conflicts info"
+
     for file in $required_files $optional_files; do
-        local url="$remote_base/$file"
-        local dest="$local_dir/$file"
-        
-        # Download silently (-s), fail on 404 (-f).
+        url="$remote_base/$file"
+        dest="$local_dir/$file"
         if curl -fsSL "$url" -o "$dest" 2>/dev/null; then
             :
         else
-            # Check against mandatory files
-            if echo "$required_files" | grep -q "$file"; then
+            if printf '%s' "$required_files" | grep -q "$file"; then
                 err "Failed to fetch mandatory file '$file' for package '$pkg' from $url"
                 rm -rf "$local_dir"
                 return 1
             fi
-            # If optional file fails, just remove the old local copy
             rm -f "$dest"
         fi
     done
-    
-    # Make scripts executable
+
     chmod +x "$local_dir/build" 2>/dev/null || true
     chmod +x "$local_dir/package" 2>/dev/null || true
     chmod +x "$local_dir/post_install" 2>/dev/null || true
     chmod +x "$local_dir/post_remove" 2>/dev/null || true
-    
+
     info "Recipe for '$pkg' refreshed successfully at $local_dir."
 }
 
-# Helper function to download source archives
 download_sources() {
-    local rpath="$1"
-    local buildtmp="$2"
-    local sources_file="$rpath/sources"
-    [ -f "$sources_file" ] || return 0 
+    rpath="$1"; buildtmp="$2"
+    sources_file="$rpath/sources"
+    [ -f "$sources_file" ] || return 0
 
     info "Downloading source archives..."
 
-    local filtered_sources
-    filtered_sources=$(grep -v '^[[:space:]]*#' "$sources_file" | grep -E -v '^[[:space:]]*$')
+    filtered_sources=$(grep -v '^[[:space:]]*#' "$sources_file" | grep -E -v '^[[:space:]]*$' || true)
 
-    echo "$filtered_sources" | while IFS= read -r url; do
-        url=$(echo "$url" | tr -d '[:space:]')
+    printf '%s\n' "$filtered_sources" | while IFS= read -r url; do
+        url=$(printf '%s' "$url" | tr -d '[:space:]')
         [ -z "$url" ] && continue
-        
-        local filename=$(basename "$url")
-        local dest_file="$buildtmp/$filename"
-        
-        info "  -> Downloading $filename"
+        filename=$(basename "$url")
+        dest_file="$buildtmp/$filename"
 
+        info "  -> Downloading $filename"
         if ! curl -fsSL "$url" -o "$dest_file"; then
             err "Failed to download source file from $url"
         fi
     done
 }
 
-# Verify checksums and extract archives
 verify_checksums_and_extract() {
-    local pkg="$1"
-    local rpath="$2"
-    local buildtmp="$3"
-    
-    local checksums_file="$rpath/checksums"
+    pkg="$1"; rpath="$2"; buildtmp="$3"
+    checksums_file="$rpath/checksums"
     [ -f "$checksums_file" ] || { info "No checksums provided for $pkg. Skipping integrity check."; return 0; }
-    
+
     command -v sha256sum >/dev/null 2>&1 || err "sha256sum command not found. Cannot verify source integrity."
 
     info "Verifying source integrity using checksums..."
-    
+
     while IFS= read -r line; do
-        line=$(echo "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        line=$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
         [ -z "$line" ] && continue
-        [ "${line:0:1}" = "#" ] && continue
-        
-        local expected_hash=$(echo "$line" | awk '{print $1}')
-        local filename=$(echo "$line" | awk '{print $2}')
+        case "$line" in \#*) continue ;; esac
 
-        if [ -z "$expected_hash" ] || [ -z "$filename" ]; then
-            err "Checksum file format error for $pkg. Line: '$line'"
-        fi
+        expected_hash=$(printf '%s' "$line" | awk '{print $1}')
+        filename=$(printf '%s' "$line" | awk '{print $2}')
 
-        local file_path="$buildtmp/$filename"
+        [ -n "$expected_hash" ] || err "Checksum file format error for $pkg. Line: '$line'"
+        [ -n "$filename" ] || err "Checksum file format error for $pkg. Line: '$line'"
 
-        if [ ! -f "$file_path" ]; then
-            err "Checksum error: Source file '$filename' not found in build directory. Cannot verify."
-        fi
+        file_path="$buildtmp/$filename"
+        [ -f "$file_path" ] || err "Checksum error: Source file '$filename' not found in build directory. Cannot verify."
 
-        local actual_hash=$(sha256sum "$file_path" | awk '{print $1}')
-        
+        actual_hash=$(sha256sum "$file_path" | awk '{print $1}')
         if [ "$actual_hash" != "$expected_hash" ]; then
-            err "Checksum mismatch for $filename! Expected $expected_hash, got $actual_hash. Source may be corrupted or compromised. Aborting."
+            err "Checksum mismatch for $filename! Expected $expected_hash, got $actual_hash. Aborting."
         else
             info "  -> Checksum verified for $filename."
         fi
     done < "$checksums_file"
 
     info "Checksums verified. Extracting sources..."
-    local sources_file="$rpath/sources"
-    
+    sources_file="$rpath/sources"
     while IFS= read -r url; do
-        url=$(echo "$url" | grep -E -v '^[[:space:]]*#' | grep -E -v '^[[:space:]]*$')
+        url=$(printf '%s' "$url" | grep -E -v '^[[:space:]]*#' | grep -E -v '^[[:space:]]*$' || true)
         [ -z "$url" ] && continue
-        
-        local filename=$(basename "$url")
-        local dest_file="$buildtmp/$filename"
-        
+        filename=$(basename "$url")
+        dest_file="$buildtmp/$filename"
         info "  -> Extracting $filename"
-        
         case "$filename" in
-            *.tar.gz|*.tgz) tar -xf "$dest_file" -C "$buildtmp" || err "Tar extract failed for $filename" ;;
-            *.tar.bz2|*.tbz) tar -xf "$dest_file" -C "$buildtmp" || err "Bzip2 extract failed for $filename" ;;
-            *.tar.xz|*.txz) tar -xf "$dest_file" -C "$buildtmp" || err "XZ extract failed for $filename" ;;
-            *.zip) 
-                command -v unzip >/dev/null 2>&1 || err "unzip command not found. Cannot extract ZIP archive."
+            *.tar.gz|*.tgz|*.tar.bz2|*.tbz|*.tar.xz|*.txz) tar -xf "$dest_file" -C "$buildtmp" || err "Extract failed for $filename" ;;
+            *.zip)
+                command -v unzip >/dev/null 2>&1 || err "unzip not found"
                 unzip -q "$dest_file" -d "$buildtmp" || err "Unzip failed for $filename" ;;
-            *) 
-                info "  -> Warning: Unknown archive type for $filename. Skipping extraction/treating as a file." 
+            *)
+                info "  -> Unknown archive type for $filename. Leaving as file."
                 ;;
         esac
-        
         rm -f "$dest_file"
     done < "$sources_file"
 }
 
-# --- COMMAND IMPLEMENTATION FUNCTIONS ---
+# --- BUILD / SYNC ---
 
 sync_pkg_recursive() {
-    local pkg="$1"
-    
-    # NEW FIX: Check if this is a host-provided dependency (like make, gcc).
-    # If found in PATH, we treat the dependency as satisfied and skip recipe fetch/build.
+    pkg="$1"
+
+    # If host provides it, skip
     if check_host_dependency "$pkg"; then
-        info "Dependency '$pkg' satisfied by host system. Skipping recipe fetch and build."
+        info "Dependency '$pkg' satisfied by host. Skipping build/fetch."
         return 0
     fi
-    
-    # 1. Ensure we have the recipe (Download/Refresh)
+
     fetch_remote_recipe "$pkg"
+    recipe_dir=$(recipe_path "$pkg") || err "Recipe for '$pkg' not found."
 
-    local recipe_dir
-    recipe_dir=$(recipe_path "$pkg") || err "Recipe for '$pkg' could not be found or downloaded."
-
-    # 2. Handle Dependencies (Recursive)
     info "Checking dependencies for $pkg..."
     get_pkg_deps "$pkg" | while IFS= read -r dep_pkg; do
-        dep_pkg=$(echo "$dep_pkg" | tr -d '[:space:]')
+        dep_pkg=$(printf '%s' "$dep_pkg" | tr -d '[:space:]')
         [ -z "$dep_pkg" ] && continue
-        
+        if check_host_dependency "$dep_pkg"; then
+            info "  -> $dep_pkg provided by host, skipping."
+            continue
+        fi
         sync_pkg_recursive "$dep_pkg"
     done
 
-    # 3. Build/Install
     build_from_recipe "$pkg"
 }
 
 build_from_recipe() {
-    local pkg="$1"
-    local rpath
+    pkg="$1"
     rpath=$(recipe_path "$pkg") || err "recipe $pkg not found"
-    
-    # --- VERSION CHECK LOGIC ---
-    local recipe_ver="unknown"
+
+    recipe_ver="unknown"
     [ -f "$rpath/version" ] && recipe_ver=$(cat "$rpath/version")
-    
-    local installed_ver=$(get_installed_ver "$pkg")
-    
+
+    installed_ver=$(get_installed_ver "$pkg")
+
     if [ "$installed_ver" != "none" ]; then
         if [ "$installed_ver" = "$recipe_ver" ]; then
             if [ "$FORCE_INSTALL" -eq 0 ]; then
-                info "Package '$pkg' is already installed at version $installed_ver. Up to date. Skipping build."
+                info "Package '$pkg' is already installed at version $installed_ver. Skipping."
                 return 0
             else
-                info "Package '$pkg' is installed, but force-rebuilding/reinstalling due to -f."
+                info "Force rebuilding $pkg."
             fi
         else
             info "Upgrading '$pkg' from $installed_ver to $recipe_ver..."
@@ -410,44 +384,36 @@ build_from_recipe() {
     else
         info "Installing '$pkg' version $recipe_ver..."
     fi
-    # ---------------------------------------------------------------------
 
-    local buildtmp="$TMPDIR/astral-build-$pkg-$$"
+    buildtmp="$TMPDIR/astral-build-$pkg-$$"
     mkdir -p "$buildtmp"
-
     if [ -d "$rpath" ]; then
         cp -a "$rpath"/* "$buildtmp"/ 2>/dev/null || true
     else
         err "Directory recipe structure not found for $pkg."
     fi
-    cd "$buildtmp"
+    cd "$buildtmp" || err "cd failed"
 
-    trap "rm -rf '$buildtmp'" EXIT 
+    trap "rm -rf '$buildtmp'" EXIT
 
-    # 1. Fetch source code
     download_sources "$rpath" "$buildtmp"
-    
-    # 2. Verify Checksums and Extract
     verify_checksums_and_extract "$pkg" "$rpath" "$buildtmp"
 
     if [ -f "./build" ]; then
         chmod +x ./build || true
-        local PKGDIR="$buildtmp/pkg"
+        PKGDIR="$buildtmp/pkg"
         mkdir -p "$PKGDIR"
-        
+
         info "Starting isolated build for $pkg..."
-        # Execution environment for build.sh
-        ( DESTDIR="$PKGDIR" ./build ) || err "build failed for $pkg" 
-        
+        ( DESTDIR="$PKGDIR" ./build ) || err "build failed for $pkg"
+
         if [ -f "./package" ]; then
             info "Running package hook for $pkg..."
-            # Execution environment for package.sh
             ( DESTDIR="$PKGDIR" PKGDIR="$PKGDIR" ./package ) || err "package() failed for $pkg"
         fi
-        
+
         create_meta "$pkg" "$recipe_ver" "x86_64" "$PKGDIR"
-        
-        local new_files
+
         new_files=$(
             ( cd "$PKGDIR" && find . -mindepth 1 -print ) \
             | sed 's/^\.\///' \
@@ -457,58 +423,52 @@ build_from_recipe() {
 
         info "Installing $pkg files to root filesystem ($INSTALL_ROOT)..."
         tar -C "$PKGDIR" -cf - . | tar -C "$INSTALL_ROOT" -xf - || err "failed to extract package files"
-        
-        # Determine the database path based on the recipe path
-        local db_path
-        db_path=$(echo "$rpath" | sed "s|^${RECIPES_DIR}/||")
-        local pkgdir="$DB_DIR/$db_path"
-        
+
+        db_path=$(printf '%s' "$rpath" | sed "s|^${RECIPES_DIR}/||")
+        pkgdir="$DB_DIR/$db_path"
         mkdir -p "$pkgdir"
         printf '%s\n' "$recipe_ver" > "$pkgdir/version"
         printf '%s\n' "$new_files" > "$pkgdir/files"
-        
+
         if [ -f "$buildtmp/depends" ]; then
             cp "$buildtmp/depends" "$pkgdir/depends"
         fi
-        
-        # --- POST-INSTALL HOOK ---
+
         if [ -f "$buildtmp/post_install" ]; then
             info "Running post_install hook for $pkg..."
-            ( DESTDIR="$INSTALL_ROOT" PKGDIR="$PKGDIR" "$buildtmp/post_install" ) || info "Warning: post_install hook failed for $pkg. Continuing."
+            ( DESTDIR="$INSTALL_ROOT" PKGDIR="$PKGDIR" "$buildtmp/post_install" ) || info "Warning: post_install failed for $pkg"
         fi
-        
-        info "Successfully installed $pkg ($recipe_ver) to $INSTALL_ROOT."
+
+        info "Successfully installed $pkg ($recipe_ver)."
     else
         err "Recipe $pkg has no build script"
     fi
-    
+
     trap - EXIT
-    rm -rf "$buildtmp" 
+    rm -rf "$buildtmp"
 }
 
 update_repo() {
     info "Updating package database index..."
-    local INDEX_URL="${REPO_URL}astral.index"
+    INDEX_URL="${REPO_URL}astral.index"
     if curl -fsSL "$INDEX_URL" -o "$INDEX_FILE"; then
         info "Database updated successfully."
     else
-        err "Failed to download index file from "$INDEX_URL"."
+        err "Failed to download index file from $INDEX_URL"
         return 1
     fi
 }
 
 search_pkg() {
-    local query="$1"
+    query="$1"
     info "Searching for package '$query'..."
     info "--- Local Recipes ($RECIPES_DIR) ---"
-    local found_local=0
-    
-    # Use find to search all subdirectories
+    found_local=0
+
     find "$RECIPES_DIR" -type d -mindepth 1 -maxdepth 2 2>/dev/null | while IFS= read -r r; do
-        # Extract the package name (the deepest directory name)
-        local pkg_name=$(basename "$r")
-        if echo "$pkg_name" | grep -iq "$query"; then
-            local ver="unknown"
+        pkg_name=$(basename "$r")
+        if printf '%s\n' "$pkg_name" | grep -iq "$query"; then
+            ver="unknown"
             [ -f "$r/version" ] && ver=$(cat "$r/version")
             printf "L: %-20s (v%s) [%s]\n" "$pkg_name" "$ver" "$(basename "$(dirname "$r")")"
             found_local=1
@@ -518,11 +478,11 @@ search_pkg() {
 
     info "--- Remote Index ($INDEX_FILE) ---"
     [ -f "$INDEX_FILE" ] || { info "Remote index not found. Run 'astral -u' to update."; return 0; }
-    local found_remote=0
+    found_remote=0
     while IFS= read -r line; do
-        local pkg_name=$(echo "$line" | awk '{print $1}')
-        local pkg_ver=$(echo "$line" | awk '{print $2}')
-        if echo "$pkg_name" | grep -iq "$query"; then
+        pkg_name=$(printf '%s' "$line" | awk '{print $1}')
+        pkg_ver=$(printf '%s' "$line" | awk '{print $2}')
+        if printf '%s\n' "$pkg_name" | grep -iq "$query"; then
             printf "R: %-20s (v%s)\n" "$pkg_name" "$pkg_ver"
             found_remote=1
         fi
@@ -531,65 +491,58 @@ search_pkg() {
 }
 
 show_pkg_info() {
-    local requested_pkg="$1"
-    local pkg_path
+    requested_pkg="$1"
     pkg_path=$(resolve_installed_path "$requested_pkg") 2>/dev/null || pkg_path="$requested_pkg"
-    
-    local rpath
+
     rpath=$(recipe_path "$requested_pkg") 2>/dev/null || rpath=""
-    local recipe_exists=0
+    recipe_exists=0
     [ -n "$rpath" ] && recipe_exists=1
-    
+
     info "--- Package Information: $pkg_path ---"
-    
-    # Installed Info
-    local installed_ver=$(get_installed_ver "$requested_pkg")
+
+    installed_ver=$(get_installed_ver "$requested_pkg")
     printf "Installed Version: %s\n" "$installed_ver"
     if [ "$installed_ver" != "none" ]; then
-        local pkgdir="$DB_DIR/$pkg_path"
-        local installed_date="N/A"
+        pkgdir="$DB_DIR/$pkg_path"
+        installed_date="N/A"
         [ -f "$pkgdir/files" ] && installed_date=$(stat -c "%y" "$pkgdir/files" 2>/dev/null || echo "N/A")
         printf "Installed Path:    %s\n" "$pkgdir"
         printf "Installation Date: %s\n" "$installed_date"
         printf "Installed Files:   %s files\n" "$(wc -l < "$pkgdir/files" 2>/dev/null || echo 0)"
-        
-        local installed_deps_list="None"
-        local installed_deps_count=0
-        local installed_deps=$(get_pkg_deps "$pkg_path")
+
+        installed_deps_list="None"
+        installed_deps_count=0
+        installed_deps=$(get_pkg_deps "$pkg_path" || true)
         if [ -n "$installed_deps" ]; then
-             installed_deps_list=$(echo "$installed_deps" | tr '\n' ' ')
-             installed_deps_count=$(echo "$installed_deps" | wc -l)
+             installed_deps_list=$(printf '%s' "$installed_deps" | tr '\n' ' ')
+             installed_deps_count=$(printf '%s\n' "$installed_deps" | wc -l)
         fi
         printf "Dependencies (%s): %s\n" "$installed_deps_count" "$installed_deps_list"
     fi
-    
-    # Recipe Info
+
     if [ "$recipe_exists" -eq 1 ]; then
-        local recipe_ver=$(cat "$rpath/version" 2>/dev/null || echo "unknown")
+        recipe_ver=$(cat "$rpath/version" 2>/dev/null || echo "unknown")
         printf "\nRecipe Found:      Yes\n"
         printf "Recipe Version:    %s\n" "$recipe_ver"
         printf "Recipe Path:       %s\n" "$rpath"
-        
-        local recipe_deps_list="None"
-        local recipe_deps_count=0
-        local recipe_deps=$(get_pkg_deps "$requested_pkg")
-        
+
+        recipe_deps_list="None"
+        recipe_deps_count=0
+        recipe_deps=$(get_pkg_deps "$requested_pkg" || true)
         if [ -n "$recipe_deps" ]; then
-            recipe_deps_list=$(echo "$recipe_deps" | tr '\n' ' ')
-            recipe_deps_count=$(echo "$recipe_deps" | wc -l)
+            recipe_deps_list=$(printf '%s' "$recipe_deps" | tr '\n' ' ')
+            recipe_deps_count=$(printf '%s\n' "$recipe_deps" | wc -l)
         fi
         printf "Recipe Deps (%s):   %s\n" "$recipe_deps_count" "$recipe_deps_list"
-        
-        local conflicts_list="None"
-        local conflicts_count=0
 
+        conflicts_list="None"
+        conflicts_count=0
         if [ -f "$rpath/conflicts" ]; then
-            local filtered_conflicts=$(grep -v '^[[:space:]]*#' "$rpath/conflicts" | grep -E -v '^[[:space:]]*$')
-            conflicts_list=$(echo "$filtered_conflicts" | tr '\n' ' ')
-            conflicts_count=$(echo "$filtered_conflicts" | wc -l)
+            filtered_conflicts=$(grep -v '^[[:space:]]*#' "$rpath/conflicts" | grep -E -v '^[[:space:]]*$' || true)
+            conflicts_list=$(printf '%s' "$filtered_conflicts" | tr '\n' ' ')
+            conflicts_count=$(printf '%s\n' "$filtered_conflicts" | wc -l)
         fi
         printf "Conflicts (%s):     %s\n" "$conflicts_count" "$conflicts_list"
-        
         printf "Build Script:      %s\n" "$( [ -f "$rpath/build" ] && echo "Yes" || echo "No" )"
         printf "Package Script:    %s\n" "$( [ -f "$rpath/package" ] && echo "Yes" || echo "No" )"
         printf "Checksums:         %s\n" "$( [ -f "$rpath/checksums" ] && echo "Yes" || echo "No" )"
@@ -600,18 +553,16 @@ show_pkg_info() {
 
 upgrade_all() {
     info "Starting full system upgrade (syncing all installed packages)..."
-    local count=0
-    local success_count=0
-    
-    update_repo || info "Warning: Could not update remote index. Continuing with local recipes."
+    count=0
+    success_count=0
 
+    update_repo || info "Warning: Could not update remote index. Continuing with local recipes."
     info "\nChecking all installed packages for updates..."
 
-    # Use find to list all installed packages by their path (e.g., app-editors/nano)
-    find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null | 
+    find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null |
     sed "s|^${DB_DIR}/||" | sed 's|/version$||' |
     while IFS= read -r pkg_path; do
-        local pkg=$(basename "$pkg_path")
+        pkg=$(basename "$pkg_path")
         info "\n>>> Checking $pkg_path <<<"
         if sync_pkg_recursive "$pkg"; then
             success_count=$((success_count + 1))
@@ -620,178 +571,160 @@ upgrade_all() {
         fi
         count=$((count + 1))
     done
-    
+
     info "\nUpgrade process finished. Checked $count installed packages. $success_count updated/verified."
 }
 
-
 self_update() {
     TMPDIR="${TMPDIR:-/tmp}"
-    
-    local tmp_file
-    tmp_file=$(mktemp "$TMPDIR/astral-new.XXXXXX")
-    if [ $? -ne 0 ]; then
-        err "Failed to create secure temporary file using mktemp."
-    fi
-
+    tmp_file=$(mktemp "$TMPDIR/astral-new.XXXXXX") || err "mktemp failed"
     trap 'rm -f "$tmp_file"' EXIT
 
-    local branch="${1:-main}"
-    local update_url=""
-    
+    branch="${1:-main}"
     case "$branch" in
-        main)
-            update_url="$SELF_UPDATE_URL_MAIN"
-            info "Starting astral self-update from 'main' branch ($update_url)..."
-            ;;
-        cutting-edge)
-            update_url="$SELF_UPDATE_URL_CUTTING_EDGE"
-            info "Starting astral self-update from 'cutting-edge' branch ($update_url)..."
-            ;;
-        bleeding-edge)
-            update_url="$SELF_UPDATE_URL_BLEEDING_EDGE"
-            info "Starting astral self-update from 'bleeding-edge' branch ($update_url)..."
-            ;;
-        *)
-            err "Unknown update branch/channel '$branch'. Please use 'main' (default), 'cutting-edge', or 'bleeding-edge'."
-            return 1 
-            ;;
+        main) update_url="$SELF_UPDATE_URL_MAIN" ;;
+        cutting-edge) update_url="$SELF_UPDATE_URL_CUTTING_EDGE" ;;
+        bleeding-edge) update_url="$SELF_UPDATE_URL_BLEEDING_EDGE" ;;
+        *) err "Unknown update branch '$branch'"; return 1 ;;
     esac
 
-    command -v curl >/dev/null 2>&1 || { err "curl not found."; return 1; }
-
-    if [ -z "$update_url" ]; then
-        err "Internal error: Update URL is empty."
-        return 1
-    fi
+    command -v curl >/dev/null 2>&1 || { err "curl not found"; return 1; }
 
     if ! curl -fsSL "$update_url" -o "$tmp_file"; then
-        err "Failed to download new astral script from $update_url."
-        return 1
+        err "Failed to download new astral script from $update_url"; return 1
     fi
-    
-    if ! head -n 1 "$tmp_file" | grep -qE '^#!([[:space:]]*/bin/sh|[[:space:]]*/usr/bin/env)'; then
-        err "Downloaded file invalid (missing shebang or invalid content)."
-        return 1
-    fi
-    
-    if [ ! -s "$tmp_file" ]; then
-        err "Downloaded file is empty or too small. Download failed."
-        return 1
+
+    if ! head -n 1 "$tmp_file" | grep -qE '^#!'; then
+        err "Downloaded file invalid (missing shebang)"; return 1
     fi
 
     chmod +x "$tmp_file"
     if mv -f "$tmp_file" "$SELF_UPDATE_PATH"; then
-        info "Self-update successful! New script installed to $SELF_UPDATE_PATH."
-        trap - EXIT 
+        info "Self-update successful"
+        trap - EXIT
     else
-        err "Failed to replace $SELF_UPDATE_PATH. Check permissions."
+        err "Failed to replace $SELF_UPDATE_PATH"
         return 1
     fi
 }
 
-remove_pkg() {
-    local requested_pkg="$1"
-    
-    # 1. Resolve the actual path (e.g., 'app-editors/nano') from the simple name or full path
-    local pkg_path
-    pkg_path=$(resolve_installed_path "$requested_pkg") || err "package $requested_pkg not installed"
-    
-    local pkgdir="$DB_DIR/$pkg_path"
+# --- SAFE REMOVAL HELPERS ---
 
-    # 2. Sanitize the package path for use in the temporary filename (BUG FIX)
-    local safe_pkg_name=$(echo "$pkg_path" | tr '/' '_')
-    local dirs_file="$TMPDIR/astral-dirs-${safe_pkg_name}-$$"
-    
-    trap "rm -f '$dirs_file'" EXIT 
+remove_pkg_only() {
+    # Accepts canonical pkg path (relative to DB_DIR)
+    pkg_path="$1"
+    pkgdir="$DB_DIR/$pkg_path"
+    [ -d "$pkgdir" ] || return 0
 
-    # Use the improved recipe_path to find the hook location
-    local rpath=$(recipe_path "$(basename "$pkg_path")") 
-    
-    # --- PRE-REMOVE HOOK ---
+    info "Removing package database entry: $pkg_path"
+
+    # Pre-remove hook (try recipe's post_remove if present)
+    rpath=$(recipe_path "$(basename "$pkg_path")") 2>/dev/null || rpath=""
     if [ -n "$rpath" ] && [ -f "$rpath/post_remove" ]; then
         info "Running post_remove hook for $(basename "$pkg_path")..."
-        ( "$rpath/post_remove" ) || info "Warning: post_remove hook failed for $(basename "$pkg_path"), continuing removal."
+        ( "$rpath/post_remove" ) || info "Warning: post_remove hook failed for $pkg_path"
     fi
-    
-    info "Removing $pkg_path files from $INSTALL_ROOT"
-    
-    while IFS= read -r f; do
-        [ -z "$f" ] && continue
-        
-        local fullpath="$INSTALL_ROOT/$f"
-        
-        if [ -d "$fullpath" ]; then
-            printf "%s\n" "$f" >> "$dirs_file"
-        elif [ -e "$fullpath" ]; then
-            rm -f "$fullpath"
-        fi
-    done < "$pkgdir/files"
-    
-    # 3. Process collected directories (deepest first)
-    if [ -f "$dirs_file" ]; then
-        info "Attempting to clean up empty directories installed by $pkg_path..."
-        sort -r "$dirs_file" | while IFS= read -r d; do
+
+    if [ -f "$pkgdir/files" ]; then
+        while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            fullpath="$INSTALL_ROOT/$f"
+            if [ -f "$fullpath" ] || [ -L "$fullpath" ]; then
+                rm -f "$fullpath" 2>/dev/null || true
+            fi
+            # collect directories for later cleanup: append only directories (will be rmdir attempted)
+            case "$f" in
+                */)
+                    echo "$f" >> "$TMPDIR/astral-dirs-$$" ;;
+                *)
+                    dirp=$(dirname "$f")
+                    [ "$dirp" != "." ] && echo "$dirp" >> "$TMPDIR/astral-dirs-$$" || true
+                    ;;
+            esac
+        done < "$pkgdir/files"
+    fi
+
+    # Clean up directories (deepest first)
+    if [ -f "$TMPDIR/astral-dirs-$$" ]; then
+        sort -r "$TMPDIR/astral-dirs-$$" | while IFS= read -r d; do
             [ -z "$d" ] && continue
-            local dir_path="$INSTALL_ROOT/$d"
-            rmdir "$dir_path" 2>/dev/null || : # Ignore failure if not empty
+            rmdir "$INSTALL_ROOT/$d" 2>/dev/null || true
         done
-        rm -f "$dirs_file"
+        rm -f "$TMPDIR/astral-dirs-$$"
     fi
-    
-    trap - EXIT
+
+    # Remove DB entry
     rm -rf "$pkgdir"
-    info "Removed $pkg_path successfully from database."
+    info "Removed $pkg_path from database."
 }
 
 removedep_pkg() {
-    local pkg="$1"
-    
-    # Get the canonical path for the initial package removal
-    local initial_pkg_path
+    pkg="$1"
     initial_pkg_path=$(resolve_installed_path "$pkg") || err "package $pkg not installed"
 
-    remove_pkg "$initial_pkg_path"
-    info "Scanning for orphaned dependencies..."
-    
-    while true; do
-        found_orphan=0
-        # Iterate over all installed package directories
-        find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null | 
-        sed "s|^${DB_DIR}/||" | sed 's|/version$||' |
-        while IFS= read -r dep_path; do
-            # Check if package is required (uses the full path for is_pkg_required check)
+    # Capture the initial package's declared dependencies (from DB or recipe)
+    declared_deps=$(get_pkg_deps "$initial_pkg_path" || true)
+
+    # Remove only the initial package
+    remove_pkg_only "$initial_pkg_path"
+
+    # For safety: only consider deps that were declared by the removed package.
+    # Remove only those deps that are now orphans (no other package requires them).
+    if [ -n "$declared_deps" ]; then
+        printf '%s\n' "$declared_deps" | while IFS= read -r dep; do
+            dep=$(printf '%s' "$dep" | tr -d '[:space:]')
+            [ -z "$dep" ] && continue
+            # If host provides it, skip removal
+            if check_host_dependency "$dep"; then
+                info "Dependency '$dep' provided by host; not removing."
+                continue
+            fi
+            dep_path=$(resolve_installed_path "$dep") 2>/dev/null || true
+            [ -z "$dep_path" ] && continue
             if ! is_pkg_required "$dep_path"; then
                 info "Removing orphan dependency: $dep_path"
-                remove_pkg "$dep_path" # remove_pkg accepts the full path
-                found_orphan=1
-                break # Break inner loop to restart the dependency scan
-            fi 
+                remove_pkg_only "$dep_path"
+                # after removing this dep, we should also consider its declared deps recursively (safe recursion)
+                # collect its declared deps and process them similarly
+                subdeps=$(get_pkg_deps "$dep_path" || true)
+                if [ -n "$subdeps" ]; then
+                    printf '%s\n' "$subdeps" | while IFS= read -r sdep; do
+                        sdep=$(printf '%s' "$sdep" | tr -d '[:space:]')
+                        [ -z "$sdep" ] && continue
+                        sdep_path=$(resolve_installed_path "$sdep") 2>/dev/null || true
+                        if [ -n "$sdep_path" ] && ! is_pkg_required "$sdep_path"; then
+                            info "Removing transitive orphan dependency: $sdep_path"
+                            remove_pkg_only "$sdep_path"
+                        fi
+                    done
+                fi
+            else
+                info "Keeping dependency $dep_path (still required)."
+            fi
         done
-        [ "$found_orphan" -eq 0 ] && break
-    done
-    info "Orphan dependency scan complete."
+    fi
+
+    info "Orphan dependency cleanup complete."
+}
+
+remove_pkg() {
+    requested_pkg="$1"
+    pkg_path=$(resolve_installed_path "$requested_pkg") || err "package $requested_pkg not installed"
+    remove_pkg_only "$pkg_path"
 }
 
 clean_cache() {
     info "Starting recipe cache cleanup in $RECIPES_DIR..."
-    local cleaned_count=0
-    
-    # Use find to iterate through all package directories (maxdepth 2 ensures category/pkg)
     find "$RECIPES_DIR" -type d -mindepth 2 -maxdepth 2 2>/dev/null | while IFS= read -r recipe_dir; do
-        local pkg_name=$(basename "$recipe_dir")
-        
+        pkg_name=$(basename "$recipe_dir")
         if is_pkg_installed "$pkg_name"; then
             info "Recipe for '$pkg_name' is installed. Skipping."
         else
-            info "Recipe for '$pkg_name' is NOT installed. Removing cache files..."
+            info "Removing cached recipe for '$pkg_name'..."
             rm -rf "$recipe_dir"
-            cleaned_count=$((cleaned_count + 1))
         fi
     done
-    
-    # Note: cleaned_count outside the loop will be 0 due to subshell. 
-    info "Cache cleanup process initiated. Check output for removed recipes."
+    info "Cache cleanup complete."
 }
 
 list_installed() {
@@ -801,50 +734,34 @@ list_installed() {
     fi
 
     info "--- Installed Packages ---"
-    
-    local last_category=""
-    
-    # 1. Find all 'version' files recursively, strip the DB_DIR prefix, and sort by path
-    # This finds package entries like 'app-editors/nano' or just 'package-name'
-    find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null | 
+    last_category=""
+    find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null |
     sed "s|^${DB_DIR}/||" | sed 's|/version$||' | sort |
-    
-    # 2. Loop through each discovered package path (e.g., app-editors/nano, base/coreutils)
     while IFS= read -r pkg_path; do
-        local pkg_name=$(basename "$pkg_path")
-        local category=$(dirname "$pkg_path")
-        local pkg_ver=""
-        
-        # Fallback for root-level packages if dirname is '.'
+        pkg_name=$(basename "$pkg_path")
+        category=$(dirname "$pkg_path")
+        pkg_ver=""
         if [ "$category" = "." ] || [ -z "$category" ] || [ "$category" = "/" ]; then
             category="Uncategorized"
         fi
-        
-        # Check if category has changed (or is the first one)
         if [ "$category" != "$last_category" ]; then
             printf '\n---Installed-package---\n'
             printf '%s\n' "$category"
             last_category="$category"
         fi
-        
-        # Get the version from the database path
         if [ -f "$DB_DIR/$pkg_path/version" ]; then
              pkg_ver=$(cat "$DB_DIR/$pkg_path/version")
         fi
-        
         printf "|- %-15s (v%s)\n" "$pkg_name" "$pkg_ver"
-        
     done
     printf '\n'
 }
 
-# CLI dispatch
+# --- ENTRY / CLI PARSING ---
 
-# Feature 1: Root Check
-if ! echo "$@" | grep -qE '(-V|--version|-u|--update|--search|--inspect|-ins|-I|--info|--list-installed|-ll)'; then
-    if [ "$(id -u)" -ne 0 ]; then 
-        err "Astral must be run as root (UID 0) to perform installation, removal, or self-update operations."
-    fi
+# Require root for all operations (astral must be invoked by root, sudo, or doas)
+if [ "$(id -u)" -ne 0 ]; then
+    err "Astral must be run as root (via sudo or doas)."
 fi
 
 # --- Global Option Parsing ---
@@ -867,14 +784,14 @@ while [ $# -gt 0 ]; do
         -V|--version)
             astral_version
             ;;
-        --) # End of options
+        --)
             shift
             break
             ;;
-        -*) # Unknown option or command (or a command itself)
+        -*) # unknown option or start of command
             break
             ;;
-        *) # Command (or package name)
+        *)
             break
             ;;
     esac
@@ -882,20 +799,17 @@ done
 
 if [ $# -lt 1 ]; then usage; exit 1; fi
 
-# Ensure INSTALL_ROOT has no trailing slash (unless it is just "/")
 if [ "$INSTALL_ROOT" != "/" ]; then
     INSTALL_ROOT="${INSTALL_ROOT%/}"
     info "Global: Installation root set to: $INSTALL_ROOT"
 fi
-
-# Now $1 is the command, and $2, $3... are its arguments.
 
 case "$1" in
   -s|--sync)
     [ $# -gt 1 ] || err "package name required"
     sync_pkg_recursive "$2"
     ;;
-  -comp|--compile)
+  -c|--compile)
     [ $# -gt 1 ] || err "package name required"
     build_from_recipe "$2"
     ;;
@@ -929,7 +843,7 @@ case "$1" in
     ;;
   --inspect|-ins)
     [ $# -gt 1 ] || err "package name required"
-    r=$(recipe_path "$2") || err "recipe not found for "$2""
+    r=$(recipe_path "$2") || err "recipe not found for $2"
     info "--- Files in Recipe Directory: $r ---"
     if [ -d "$r" ]; then
       ls -la "$r"
@@ -942,6 +856,12 @@ case "$1" in
     ;;
   --list-installed|-ll)
     list_installed
+    ;;
+  -V|--version)
+    astral_version
+    ;;
+  -https://www.youtube.com/watch?v=2EDcoWKH25o)
+    echo "Flash Me Back - Camemellia. Peak btw"
     ;;
   *)
     echo "Error: Unknown command or option '$1'" >&2
