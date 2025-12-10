@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.5.4.0 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.5.4.1 Main - minimal POSIX package manager for Astaraxia
 # Modified: require root, safer RemoveDep, host dependency detection. Yeah right :3
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
@@ -43,7 +43,7 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-version="0.5.4.0 Main"
+version="0.5.4.1 Main"
 
 astral_version() {
 cat <<EOF
@@ -931,7 +931,7 @@ case "$1" in
 
 --upgrade-all|-ua)
     FORCE_INSTALL_CMD=0
-    if [ "$2" = "-f" ] || [ "$2" = "--force" ]; then
+    if [ "${2:-}" = "-f" ] || [ "${2:-}" = "--force" ]; then
         FORCE_INSTALL_CMD=1
         shift
     fi
