@@ -65,7 +65,7 @@ Astral File is in $SCRIPT_PATH
 │ Commands:                                                                                                             │
 │   -s, --sync <pkg>       Download recipe (if missing), check deps, and install/upgrade.                               │
 │   -, --compile <pkg>     Build from recipe and install (force build).                                                 │
-│   -u, --update           Updates the remote package index (for search).                                               │
+│   -u, --update [REPO]    Updates the remote package index (for search). Repo can only be 'aoharu' (default) or asura. │
 │   --search <pkg>         Searches for package in local recipes and remote index.                                      │
 │   -R, --Remove <pkg>     Remove package (leave deps).                                                                 │
 │   -r, --RemoveDep <pkg>  Remove package and attempt to remove orphan deps (safe, hopefully).                          │
