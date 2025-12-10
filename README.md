@@ -31,7 +31,7 @@ Every recipe requires at least three files and is housed in its own directory:
 ├── build          # Shell script for downloading and building the source (required)
 ├── package        # Shell script for installing files into $PKGDIR (required)
 └── depends        # List of other Astaraxia packages required (optional, but recommended)
-└── sources        # List of URLs for source files (required if compiling)
+└── sources (Discouraged)# List of URLs for source files (required if compiling)
 └── info           # optional and should contain descriptive text about the package. It should be formatted for easy reading in a terminal
 ```
 
