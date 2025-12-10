@@ -99,19 +99,6 @@ resolve_installed_path() {
     return 1
 }
 
-
-# NEW FUNCTION: Checks if a package is a declared host dependency and is available in PATH.
-check_host_dependency() {
-    local pkg="$1"
-    # Check if the package is in the HOST_TOOLS list
-    if echo "$HOST_TOOLS" | grep -w -q "$pkg"; then
-        # Check if the command exists in the host's PATH
-        command -v "$pkg" >/dev/null 2>&1
-    else
-        return 1
-    fi
-}
-
 # helper: find recipe path - NOW SEARCHES SUBDIRECTORIES
 recipe_path() {
     local pkg="$1"
