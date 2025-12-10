@@ -41,9 +41,9 @@ EOF
 
 usage() {
     cat <<USAGE
-┌───────────────────┐
+┌─────────────────────┐
 │ Astral: $version │
-└───────────────────┘
+└─────────────────────┘
 Astral File is in /usr/bin/astral
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ Usage: astral [global_opts] <command> [pkg...]                                                                       │
@@ -738,7 +738,7 @@ list_installed() {
         info "No packages currently installed."
         return 0
     fi
-
+    info "--- Installed Packages ---"
     last_category=""
     find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null |
     sed "s|^${DB_DIR}/||" | sed 's|/version$||' | sort |
@@ -750,7 +750,6 @@ list_installed() {
             category="Uncategorized"
         fi
         if [ "$category" != "$last_category" ]; then
-            printf '\n--- Installed Packages ---\n'
             printf '%s\n' "$category"
             last_category="$category"
         fi
