@@ -628,10 +628,22 @@ self_update() {
 
     branch="${1:-main}"
     case "$branch" in
-        main) update_url="$SELF_UPDATE_URL_MAIN" ;;
-        cutting-edge) update_url="$SELF_UPDATE_URL_CUTTING_EDGE" ;;
-        bleeding-edge) update_url="$SELF_UPDATE_URL_BLEEDING_EDGE" ;;
-        *) err "Unknown update branch '$branch'"; return 1 ;;
+        main) 
+            update_url="$SELF_UPDATE_URL_MAIN"
+            info "Starting astral self-update from 'main' branch ($update_url)..."
+        ;;
+        cutting-edge) 
+            update_url="$SELF_UPDATE_URL_CUTTING_EDGE" 
+            info "Starting astral self-update from 'cutting-edge' branch ($update_url)..."
+        ;;
+        bleeding-edge) 
+            update_url="$SELF_UPDATE_URL_BLEEDING_EDGE" 
+            info "Starting astral self-update from 'bleeding-edge' branch ($update_url)..."
+        ;;
+        *)    
+            err "Unknown update branch '$branch'"; 
+            return 1 
+        ;;
     esac
 
     command -v curl >/dev/null 2>&1 || { err "curl not found"; return 1; }
