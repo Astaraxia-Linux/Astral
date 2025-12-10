@@ -939,7 +939,7 @@ case "$1" in
     update_repo "$repo"
     ;;
 
-  -https://www.youtube.com/watch?v=2EDcoWKH25o|Flash Me Back)
+  -https://www.youtube.com/watch?v=2EDcoWKH25o|FlashMeBack)
     echo "Flash Me Back - Camemellia. Peak btw"
     ;;
 
