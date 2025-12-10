@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.5.4.1 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.5.5.0 Main - minimal POSIX package manager for Astaraxia
 # Modified: require root, safer RemoveDep, host dependency detection. Yeah right :3
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
@@ -43,7 +43,7 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-version="0.5.4.1 Main"
+version="0.5.5.0 Main"
 
 astral_version() {
 cat <<EOF
@@ -384,18 +384,16 @@ sync_pkg_recursive() {
 # hoping that this fucking asura sync doesnt explode
 sync_pkg_asura() {
     pkg="$1"
+    FORCE_CMD=${2:-0}  # default 0 if not provided
     info "Syncing package '$pkg' from Asura (user repository)..."
 
-    # temporarily override RECIPE_RAW_URL for this sync
     old_url="$RECIPE_RAW_URL"
     RECIPE_RAW_URL="$USER_RECIPE_RAW_URL"
 
-    sync_pkg_recursive "$pkg"
+    sync_pkg_recursive "$pkg" "$FORCE_CMD"
 
-    # restore
     RECIPE_RAW_URL="$old_url"
 }
-
 
 build_from_recipe() {
     pkg="$1"
@@ -608,14 +606,9 @@ show_pkg_info() {
 }
 
 upgrade_all() {
-    FORCE_CMD=${1:-0}  # 0 = normal, 1 = force
+    FORCE_CMD=${1:-0}  # 0 if not passed
     info "Starting full system upgrade (syncing all installed packages)..."
-    count=0
-    success_count=0
-
-    update_repo || info "Warning: Could not update remote index. Continuing with local recipes."
-    info "\nChecking all installed packages for updates..."
-
+    ...
     find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null |
     sed "s|^${DB_DIR}/||" | sed 's|/version$||' |
     while IFS= read -r pkg_path; do
@@ -628,9 +621,9 @@ upgrade_all() {
         fi
         count=$((count + 1))
     done
-
     info "\nUpgrade process finished. Checked $count installed packages. $success_count updated/verified."
 }
+
 
 
 self_update() {
@@ -875,23 +868,24 @@ fi
 case "$1" in
   -s|--Sync)
     [ $# -gt 1 ] || err "package name required"
-    FORCE_INSTALL_CMD=0
-    # Check if next arg is -f
-    if [ "$2" = "-f" ] || [ "$2" = "--force" ]; then
-        FORCE_INSTALL_CMD=1
+    pkg="$2"
+    FORCE_CMD=$FORCE_INSTALL  # default from global
+    if [ "$3" = "-f" ] || [ "$3" = "--force" ]; then
+        FORCE_CMD=1
         shift
     fi
-    sync_pkg_recursive "$2" "$FORCE_INSTALL_CMD"
+    sync_pkg_recursive "$pkg" "$FORCE_CMD"
     ;;
 
 -c|--compile)
     [ $# -gt 1 ] || err "package name required"
-    FORCE_INSTALL_CMD=0
-    if [ "$2" = "-f" ] || [ "$2" = "--force" ]; then
-        FORCE_INSTALL_CMD=1
+    pkg="$2"
+    FORCE_CMD=$FORCE_INSTALL
+    if [ "$3" = "-f" ] || [ "$3" = "--force" ]; then
+        FORCE_CMD=1
         shift
     fi
-    build_from_recipe "$2" "$FORCE_INSTALL_CMD"
+    build_from_recipe "$pkg" "$FORCE_CMD"
     ;;
 
   -u|--update)
@@ -899,7 +893,6 @@ case "$1" in
     shift 2
     update_repo "$repo"
     ;;
-
 
   --search)
     [ $# -gt 1 ] || err "package name required"
@@ -930,12 +923,7 @@ case "$1" in
     ;;
 
 --upgrade-all|-ua)
-    FORCE_INSTALL_CMD=0
-    if [ "${2:-}" = "-f" ] || [ "${2:-}" = "--force" ]; then
-        FORCE_INSTALL_CMD=1
-        shift
-    fi
-    upgrade_all "$FORCE_INSTALL_CMD"
+    upgrade_all "$FORCE_INSTALL"
     ;;
 
   --inspect|-ins)
@@ -960,9 +948,15 @@ case "$1" in
     astral_version
     ;;
 
- -sA|--Sync-Asura)
+-sA|--Sync-Asura)
     [ $# -gt 1 ] || err "package name required"
-    sync_pkg_asura "$2"
+    pkg="$2"
+    FORCE_CMD=$FORCE_INSTALL  # default global
+    if [ "$3" = "-f" ] || [ "$3" = "--force" ]; then
+        FORCE_CMD=1
+        shift
+    fi
+    sync_pkg_asura "$pkg" "$FORCE_CMD"
     ;;
 
   -https://www.youtube.com/watch?v=2EDcoWKH25o|FlashMeBack)
