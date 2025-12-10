@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.5.1.1 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.5.1.2 Main - minimal POSIX package manager for Astaraxia
 # Modified: require root, safer RemoveDep, host dependency detection
 # Set strict execution environment
 set -eu
@@ -34,7 +34,7 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-version="0.5.1.1 Main"
+version="0.5.1.2 Main"
 
 astral_version() {
 cat <<EOF
@@ -58,7 +58,7 @@ Astral File is in /usr/bin/astral
 │                                                                                                                       │
 │ Commands:                                                                                                             │
 │   -s, --sync <pkg>       Download recipe (if missing), check deps, and install/upgrade.                               │
-│   -comp, --compile <pkg> Build from recipe and install (force build).                                                 │
+│   -, --compile <pkg>     Build from recipe and install (force build).                                                 │
 │   -u, --update           Updates the remote package index (for search).                                               │
 │   --search <pkg>         Searches for package in local recipes and remote index.                                      │
 │   -R, --Remove <pkg>     Remove package (leave deps).                                                                 │
@@ -81,7 +81,6 @@ is_pkg_installed() {
     [ -d "$DB_DIR/$pkg" ] || [ -n "$(find "$DB_DIR" -type d -name "$pkg" -maxdepth 2 2>/dev/null)" ]
 }
 
-# Resolve simple name or full path to canonical path relative to $DB_DIR
 resolve_installed_path() {
     requested_pkg="$1"
 
