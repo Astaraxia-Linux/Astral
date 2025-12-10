@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.5.1.2 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.5.1.3 Main - minimal POSIX package manager for Astaraxia
 # Modified: require root, safer RemoveDep, host dependency detection
 # Set strict execution environment
 set -eu
@@ -17,8 +17,8 @@ INDEX_FILE="$DB_DIR/index"
 LOG_DIR=${LOG_DIR:-/var/log/astral}
 
 # --- REPOS ---
-REPO_URL=${REPO_URL:-https://izumi-sonoka.github.io/Astral-Repo/}
-RECIPE_RAW_URL=${RECIPE_RAW_URL:-https://raw.githubusercontent.com/Izumi-Sonoka/Astral-Repo/main}
+REPO_URL=${REPO_URL:-https://izumi-sonoka.github.io/AOHARU/}
+RECIPE_RAW_URL=${RECIPE_RAW_URL:-https://raw.githubusercontent.com/Izumi-Sonoka/AOHARU/main}
 USER_REPO_URL=${USER_REPO_URL:-https://codeberg.org/Izumi/ASURA/raw/main} # just testing something GAHHH
 USER_RECIPE_RAW_URL=${USER_RECIPE_RAW_URL:-$USER_REPO_URL/recipes}
 
@@ -34,7 +34,7 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-version="0.5.1.2 Main"
+version="0.5.1.3 Main"
 
 astral_version() {
 cat <<EOF
