@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.5.0 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.5.0.1 Main - minimal POSIX package manager for Astaraxia
 # Modified: require root, safer RemoveDep, host dependency detection
 # Set strict execution environment
 set -eu
@@ -30,7 +30,7 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-version="0.5.0 Main"
+version="0.5.0.1 Main"
 
 astral_version() {
 cat <<EOF
@@ -41,9 +41,9 @@ EOF
 
 usage() {
     cat <<USAGE
-####################
-# Astral: $version #
-####################
+┌───────────────────┐
+│ Astral: $version │
+└───────────────────┘
 Astral File is in /usr/bin/astral
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ Usage: astral [global_opts] <command> [pkg...]                                                                       │
@@ -606,7 +606,7 @@ self_update() {
 
     chmod +x "$tmp_file"
     if mv -f "$tmp_file" "$SELF_UPDATE_PATH"; then
-        info "Self-update successful"
+        info "Self-update successful!"
         trap - EXIT
     else
         err "Failed to replace $SELF_UPDATE_PATH"
