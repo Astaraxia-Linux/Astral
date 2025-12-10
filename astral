@@ -7,7 +7,6 @@ set -eu
 
 # Global state variables
 INSTALL_ROOT="/"    # Installation target directory
-FORCE_INSTALL=0     # Force flag (0=off, 1=on)
 
 # Locate where tf is astral
 SCRIPT_PATH="$(readlink -f "$0")"
@@ -360,9 +359,10 @@ verify_checksums_and_extract() {
 
 sync_pkg_recursive() {
     pkg="$1"
+    FORCE_CMD=${2:-0}  # Default 0 if not passed
 
-    # If host provides it, skip
-    if check_host_dependency "$pkg"; then
+    # If host provides it, skip unless forced
+    if [ "$FORCE_CMD" -eq 0 ] && check_host_dependency "$pkg"; then
         info "Dependency '$pkg' satisfied by host. Skipping build/fetch."
         return 0
     fi
@@ -374,14 +374,10 @@ sync_pkg_recursive() {
     get_pkg_deps "$pkg" | while IFS= read -r dep_pkg; do
         dep_pkg=$(printf '%s' "$dep_pkg" | tr -d '[:space:]')
         [ -z "$dep_pkg" ] && continue
-        if check_host_dependency "$dep_pkg"; then
-            info "  -> $dep_pkg provided by host, skipping."
-            continue
-        fi
-        sync_pkg_recursive "$dep_pkg"
+        sync_pkg_recursive "$dep_pkg" "$FORCE_CMD"
     done
 
-    build_from_recipe "$pkg"
+    build_from_recipe "$pkg" "$FORCE_CMD"
 }
 
 # hoping that this fucking asura sync doesnt explode
@@ -402,21 +398,19 @@ sync_pkg_asura() {
 
 build_from_recipe() {
     pkg="$1"
-    rpath=$(recipe_path "$pkg") || err "recipe $pkg not found"
+    FORCE_CMD=${2:-0}
 
+    rpath=$(recipe_path "$pkg") || err "recipe $pkg not found"
     recipe_ver="unknown"
     [ -f "$rpath/version" ] && recipe_ver=$(cat "$rpath/version")
-
     installed_ver=$(get_installed_ver "$pkg")
 
     if [ "$installed_ver" != "none" ]; then
-        if [ "$installed_ver" = "$recipe_ver" ]; then
-            if [ "$FORCE_INSTALL" -eq 0 ]; then
-                info "Package '$pkg' is already installed at version $installed_ver. Skipping."
-                return 0
-            else
-                info "Force rebuilding $pkg."
-            fi
+        if [ "$installed_ver" = "$recipe_ver" ] && [ "$FORCE_CMD" -eq 0 ]; then
+            info "Package '$pkg' is already installed at version $installed_ver. Skipping."
+            return 0
+        elif [ "$FORCE_CMD" -eq 1 ]; then
+            info "Force rebuilding $pkg."
         else
             info "Upgrading '$pkg' from $installed_ver to $recipe_ver..."
         fi
@@ -878,12 +872,23 @@ fi
 case "$1" in
   -s|--Sync)
     [ $# -gt 1 ] || err "package name required"
-    sync_pkg_recursive "$2"
+    FORCE_INSTALL_CMD=0
+    # Check if next arg is -f
+    if [ "$2" = "-f" ] || [ "$2" = "--force" ]; then
+        FORCE_INSTALL_CMD=1
+        shift
+    fi
+    sync_pkg_recursive "$2" "$FORCE_INSTALL_CMD"
     ;;
 
-  -c|--compile)
+-c|--compile)
     [ $# -gt 1 ] || err "package name required"
-    build_from_recipe "$2"
+    FORCE_INSTALL_CMD=0
+    if [ "$2" = "-f" ] || [ "$2" = "--force" ]; then
+        FORCE_INSTALL_CMD=1
+        shift
+    fi
+    build_from_recipe "$2" "$FORCE_INSTALL_CMD"
     ;;
 
   -u|--update)
