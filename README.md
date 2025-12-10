@@ -2,7 +2,7 @@
 Astaraxia Package Manager, made using shell scripts, because the dev is too dumb to make it in C or python
 
 ## INTRODUCTION
-AStral is a source-based package manager
+Astral is a source-based package manager
 
 ## Table of Contents
 - [Testing phase](#testing-phase)
