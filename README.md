@@ -140,4 +140,5 @@ astral --compile example-app
 ```
 ## TODO
 - Making Astral Search A Repo for a new update - PARTITIALY
-- Astral Repo site - DONE
+- Add -f for Forcing
+- Fix Dependency Check for `Sync` and `Sync-Asura`
