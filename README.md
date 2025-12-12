@@ -18,8 +18,8 @@ Astral is a **source-based** package manager designed for extremely small, hand-
 * [TODO](#todo)
 * [FAQ](#faq)
 
-## CHANGES (v5.1.3)
-
+## CHANGES (v0.6.0.0)
+Added Depends check
 Added astral.conf in /etc/astral/astral.conf for make
 
 ---
