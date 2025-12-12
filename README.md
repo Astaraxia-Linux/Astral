@@ -4,6 +4,67 @@ Astaraxia Package Manager, written entirely in POSIX shell, because writing it i
 
 Astral is a **source-based** package manager designed for extremely small, hand-rolled Linux systems like [Astaraxia](https://github.com/Astaraxia-Linux/Astaraxia/) (LFS, custom distros, experimental systems). The goal is a simple, transparent, hackable package manager with minimal assumptions.
 
+## Why Astral Exists (And Why It’s Standalone)
+
+Astral is intentionally designed to work **outside of Astaraxia**. This is not an accident.
+
+### The reasoning
+
+* **LFS-first reality**
+  Astral is built to function *before* a full distro exists. When bootstrapping from LFS, you need a package manager **before** Python, Rust, systemd, or abstractions appear.
+
+* **Policy vs mechanism separation**
+  Astral provides *mechanism* (build, stage, install, register).
+  Astaraxia provides *policy* (filesystem layout, defaults, rollback strategy, official repos).
+
+* **Transparency over magic**
+  Astral does not attempt to own your system. It executes shell scripts, stages files, and records metadata. Everything it does is visible and auditable.
+
+* **Minimal assumptions**
+  Astral assumes:
+
+  * `/bin/sh`
+  * basic coreutils
+  * a working toolchain
+
+  If those are missing, your system has larger problems.
+
+### What Astral is **not**
+
+Astral is **not**:
+
+* A universal replacement for pacman, emerge, or nix-env
+* A dependency solver with global system awareness
+* A safety net for arbitrary distributions
+
+Using Astral outside Astaraxia is supported **only if you understand and accept the consequences**.
+
+### Relationship to Astaraxia
+
+> Astaraxia is Astral plus policy.
+
+If Astral works well on its own, that is a feature — not scope creep.
+
+---
+
+## Supported Environments
+
+Astral is known to work (or is expected to work) on:
+
+* Linux From Scratch (LFS / BLFS)
+* Minimal chroots
+* Custom source-based systems
+* Experimental or educational Linux environments
+
+Astral is **not officially supported** on:
+
+* Arch Linux (Does work)
+* Gentoo (i dont want to brick gentoo for this)
+* Debian / Ubuntu (tested every astral version on crositini)
+* NixOS
+
+It may work. It may also break things.
+
 # Table Of Content
 
 * [CHANGES](#changes)
