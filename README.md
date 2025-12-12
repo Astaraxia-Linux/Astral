@@ -260,19 +260,19 @@ Current behavior:
 
 ## FAQ
 
-* **Why not Rust?**
+* **Why not Rust?**  
   Because Astral is supposed to boot on systems that don’t even have `bash` yet, let alone a 200-MB Rust toolchain.
 
-* **Why POSIX sh?**
+* **Why POSIX sh?**  
   Because if `/bin/sh` isn’t working, you have bigger problems than package management.
 
-* **Why not Python?**
+* **Why not Python?**  
   Because Python isn’t installed in LFS unless *you* install it, and Astral must work before that.
 
-* **Will Astral break your system?**
+* **Will Astral break your system?**  
   Only if you intentionally ignore `$PKGDIR` rules or remove `/bin/sh`.
 
-* **Is Astral fast?**
+* **Is Astral fast?**  
   Depends how fast you can type `make` and `curl`. Don’t expect Rust-level performance.
 
 ---
