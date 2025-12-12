@@ -2,7 +2,7 @@
 
 Astaraxia Package Manager, written entirely in POSIX shell, because writing it in C would make me lose 10 years of lifespan.
 
-Astral is a **source-based** package manager designed for extremely small, hand-rolled Linux systems like Astaraxia (LFS, custom distros, experimental systems). The goal is a simple, transparent, hackable package manager with minimal assumptions.
+Astral is a **source-based** package manager designed for extremely small, hand-rolled Linux systems like [Astaraxia](https://github.com/Astaraxia-Linux/Astaraxia/) (LFS, custom distros, experimental systems). The goal is a simple, transparent, hackable package manager with minimal assumptions.
 
 # Table Of Content
 
