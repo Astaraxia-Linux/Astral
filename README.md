@@ -277,4 +277,4 @@ Current behavior:
 
 ---
 
-Astral is still evolving. Expect the code to be scuffed, the philo
+Astral is still evolving. Expect the code to be scuffed, the philosophy to be based, and the implementation to be extremely transparent.
