@@ -1,105 +1,184 @@
 # Astral
-Astaraxia Package Manager, made using shell scripts, because the dev is too dumb to make it in C or python
 
-## INTRODUCTION
-Astral is a source-based package manager
+Astaraxia Package Manager, written entirely in POSIX shell, because writing it in C would make me lose 10 years of lifespan.
 
-## Table of Contents
-- [Testing phase](#testing-phase)
-- [How to install](#how-to-install)
-- [How to make the recipes](#how-to-make-the-recipes)
-- [TODO](#todo)
+Astral is a **source-based** package manager designed for extremely small, hand-rolled Linux systems like Astaraxia (LFS, custom distros, experimental systems). The goal is a simple, transparent, hackable package manager with minimal assumptions.
 
-## TESTING PHASE
-### Compiling - 3/3
-1. Compiling wihout depend... - CHECK
-2. Compiling with depend... - CHECK
-3. Compiling with 2 or more apps using the same depend... - CHECK
-4. Removing 1 app that rely on that depends but other apps needs it - IDK
+# Table Of Content
 
-## HOW TO INSTALL
-### Manually
-Copy Everyting in [Astral](https://raw.githubusercontent.com/Astaraxia-Linux/Astral/refs/heads/main/astral) and place it on /usr/bin/astral (***MUST BE A FILE***)
+* [CHANGES](#changes)
+* [Features](#features-current-state)
+* [Architecture Overview](#architecture-overview)
+* [Installation](#installation)
+* [Recipe Format](#recipe-format)
+* [Build Script Example](#build-script-example-build)
+* [Package Script Example](#package-script-example-package)
+* [Using Astral](#using-astral)
+* [Behavior Notes (Important)](#behavior-notes-important)
+* [TODO](#todo)
+* [FAQ](#faq)
 
-## HOW TO MAKE THE RECIPES
+## CHANGES (v5.1.3)
 
-### I. Recipe Directory Structure
-Every recipe requires at least three files and is housed in its own directory:
+Added astral.conf in /etc/astral/astral.conf for make
+
+---
+
+## Features (Current State)
+
+* Build from source using plain POSIX sh
+* Staged installs using `$PKGDIR`
+* Dependency listing via `depends` file
+* Repo sync support
+* Optional `sources` and `info` metadata
+* Automatic build environment: `CFLAGS`, `MAKEFLAGS`, etc.
+* Error-safe execution via `set -e`
+
+### Not implemented yet (but planned)
+
+* File ownership database
+* Full conflict detection
+* Safe uninstall of unused dependency files
+* Proper upgrade file removal
+* Signature checking
+* Multiple repositories
+
+---
+
+## Architecture Overview
+
+Astral’s pipeline:
+
 ```
-/usr/src/astral/recipes/pkgname/
-├── version        # The version number of the software (e.g., 7.1.0)
-├── build          # Shell script for downloading and building the source (required)
-├── package        # Shell script for installing files into $PKGDIR (required)
-└── depends        # List of other Astaraxia packages required (optional, but recommended)
-└── sources (Discouraged)# List of URLs for source files (required if compiling)
-└── info           # optional and should contain descriptive text about the package. It should be formatted for easy reading in a terminal
+recipe → build stage ($buildtmp) → package stage ($PKGDIR) → root install → DB register
 ```
 
-### II. The Core Recipe File
-We will use ```example-app``` as an example
+### Key Directories
 
-#### 1. version (Simple Metadata)
-This file should contain just the version string.
+```
+/usr/src/astral/recipes/      # All recipes
+/var/cache/astral/            # Cached source and binary data
+/var/lib/astral/db/           # Installed package metadata
+/etc/astral/                  # Astral configs
+```
+
+Planned DB structure:
+
+```
+/var/lib/astral/db/<pkg>/
+    version
+    files
+/var/lib/astral/db/index      # file → owner map (future)
+```
+
+---
+
+## Installation
+
+### Manual Installation
+
+Place the script into `/usr/bin/astral`:
+
+```
+curl -o /usr/bin/astral https://raw.githubusercontent.com/Astaraxia-Linux/Astral/main/astral
+chmod +x /usr/bin/astral
+```
+
+Astral must be a single executable file.
+
+---
+
+## Recipe Format
+
+Each package lives in:
+
+```
+/usr/src/astral/recipes/<pkgname>/
+```
+
+A valid recipe **requires** at least:
+
+```
+version   # REQUIRED – version string
+build     # REQUIRED – build script
+package   # REQUIRED – packaging script
+```
+
+Optional files:
+
+```
+depends   # OPTIONAL – one package per line
+sources   # OPTIONAL – URLs for source tarballs
+info      # OPTIONAL – human-readable description
+```
+
+### File Rules (Strict)
+
+```
+version — must contain ONLY the version string
+build   — MUST NOT write outside $buildtmp
+package — MUST NOT write outside $PKGDIR
+depends — plain list, no commas
+sources — URLs only
+info    — free text
+```
+
+---
+
+## Example Recipe Structure
+
+```
+example-app/
+├── version
+├── sources
+├── depends
+├── build
+├── package
+└── info
+```
+
+### Example: `version`
+
 ```
 1.0.0
 ```
-#### 2. sources (Source Retrieval)
-List the remote URLs for the source code archives.
+
+### Example: `sources`
+
 ```
-https://example.com/downloads/example-app-1.0.0.tar.gz
+https://example.com/example-app-1.0.0.tar.gz
 ```
 
-#### 3. depends (Dependency Tracking)
-List one required package name per line. This is used by astral --compile to check if dependencies are met, and by astral --RemoveDep to safely clean up.
+### Example: `depends`
+
 ```
 libc
 ncurses
 ```
 
-#### 4. info (Info about the package) - ***TODO***
-1. Purpose and Content
-    The info file is optional and should contain descriptive text about the package. It should be formatted for easy reading in a terminal.
-- Suggested Content:
-```
-    Short Description: A one-sentence summary of the package.
-    Long Description: A brief paragraph explaining the package's function, features, and target audience.
-    Upstream URL: The official website or repository link.
-    Maintainer: The name and contact information of the recipe creator.
-    License: The software license (e.g., GPLv3, MIT).
-```
+---
 
-### III. The Build Workflow (Scripts)
-The build and package scripts are executed sequentially by astral. They are always run from the main temporary build directory ($buildtmp).
+## Build Script Example (`build`)
 
-#### 1. build Script (Download, Extract, and Compile): /usr/src/astral/recipes/example-app/build
 ```
 #!/bin/sh
-set -e # Exit immediately if any command fails
+set -e
 
 PKG_NAME="example-app"
-PKG_VERSION=$(cat version) # Read version from file
+PKG_VERSION=$(cat version)
 
-# 1. Download and Check Integrity (manual for now, but crucial!)
-echo "Downloading $PKG_NAME $PKG_VERSION..."
-# Use URL from the 'sources' file
 wget -q "$(cat sources)" -O "${PKG_NAME}-${PKG_VERSION}.tar.gz"
-
-# 2. Extract and move into the source directory
 tar xf "${PKG_NAME}-${PKG_VERSION}.tar.gz"
-cd "${PKG_NAME}-${PKG_VERSION}" # Move into the extracted source folder
+cd "${PKG_NAME}-${PKG_VERSION}"
 
-# 3. Configure (for standard source packages)
 ./configure --prefix=/usr --sysconfdir=/etc
-
-# 4. Compile
 make
-
-# Leave the shell in the source directory for the package script!
 ```
 
-#### 2. package Script (Install into $PKGDIR): /usr/src/astral/recipes/example-app/package
-This script's primary job is to move all built files into the safe staging area, $PKGDIR. It must NEVER write outside of $PKGDIR. If it does open an issue on this repo
-- Key Concept: The $PKGDIR variable is injected by astral and points to the safe, isolated install location. All files destined for /usr must go to $PKGDIR/usr, etc.
+---
+
+## Package Script Example (`package`)
+
 ```
 #!/bin/sh
 set -e
@@ -107,38 +186,95 @@ set -e
 PKG_NAME="example-app"
 SOURCE_DIR="${PKG_NAME}-$(cat version)"
 
-# --- Installation Step 1: Standard Make Install ---
-# Use the DESTDIR variable, which points to the safe package directory.
-# This assumes the 'make' process finished successfully in the build script.
-# We must first change into the source directory if the build script did not persist.
 cd "$SOURCE_DIR"
-
-echo "Installing files to safe stage: $PKGDIR"
+echo "Installing to $PKGDIR"
 make DESTDIR="$PKGDIR" install
 
-# --- Installation Step 2: Custom Files (e.g., Neofetch files) ---
-# For packages without make install (like Neofetch), you must manually copy files.
-# Example: If you needed to copy a custom license file:
-# mkdir -p "$PKGDIR/usr/share/doc/$PKG_NAME"
-# cp LICENSE "$PKGDIR/usr/share/doc/$PKG_NAME/"
-
-# 3. Final cleanup (optional)
-# Remove documentation or examples we don't need in the final system
 rm -rf "$PKGDIR/usr/share/doc/$PKG_NAME/examples" || true
 ```
 
-#### IV. Summary of Key Variables
-| Variable | Source | Purpose |
-| :------- | :----: | ------: |
-|$PKGDIR|Injected by ```astral```|CRITICAL! The temporary, isolated staging directory. All files must be installed here. ($PKGDIR/usr/, $PKGDIR/etc/, etc.)|
-|version|File content|Provides the version string used to name binaries and source archives.|
-|$buildtmp|Internal to astral|The main temporary location where all source archives and extracted folders reside.|
+---
 
-Once these files are created and placed in the recipe directory, you can compile the package using:
+## Using Astral
+
+Compile from recipes:
+
 ```
-astral --compile example-app
+astral --Compile category/example-app
 ```
+
+Remove (Leaves Depends):
+
+```
+astral --Remove example-app
+```
+
+RemoveDeps:
+
+```
+astral --RemoveDep example-app
+```
+
+Sync repos (FROM [AOHARU](https://github.com/Izumi-Sonoka/AOHARU/tree/main)):
+
+```
+astral --Sync category/example-app
+```
+
+---
+
+## Behavior Notes (Important)
+
+### Upgrades
+
+Current behavior:
+
+* Installs new version over the old one
+* Does **not** remove old files yet
+* No conflict resolution yet
+
+### Dependencies
+
+* `depends` is respected during build
+* Removal of dependency packages is not fully safe until file ownership DB is implemented
+
+### Safety Guarantees
+
+* All scripts run under `set -e`
+* Package scripts cannot write to `/` directly
+* Only final install phase touches the root filesystem
+* All build work is isolated in `$buildtmp`
+
+---
+
 ## TODO
-- Making Astral Search A Repo for a new update - PARTITIALY
-- Add -f for Forcing
-- Fix Dependency Check for `Sync` and `Sync-Asura`
+
+* Repo update detection
+* Force install flag (`-f`)
+* Proper uninstall with reverse-dependency tracking
+* File ownership DB
+* Conflict detection
+* ~~- Rewrite in Rust for “speed”~~ (never happening)
+
+---
+
+## FAQ
+
+* **Why not Rust?**
+  Because Astral is supposed to boot on systems that don’t even have `bash` yet, let alone a 200-MB Rust toolchain.
+
+* **Why POSIX sh?**
+  Because if `/bin/sh` isn’t working, you have bigger problems than package management.
+
+* **Why not Python?**
+  Because Python isn’t installed in LFS unless *you* install it, and Astral must work before that.
+
+* **Will Astral break your system?**
+  Only if you intentionally ignore `$PKGDIR` rules or remove `/bin/sh`.
+
+* **Is Astral fast?**
+  Depends how fast you can type `make` and `curl`. Don’t expect Rust-level performance.
+
+---
+
+Astral is still evolving. Expect the code to be scuffed, the philo
