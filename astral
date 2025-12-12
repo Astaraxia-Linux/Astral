@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.5.6.3 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.6.0.0 Main - minimal POSIX package manager for Astaraxia
 # Modified: added Astral.conf for make!
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
@@ -43,7 +43,7 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-version="0.5.6.3 Main"
+version="0.6.0.0 Main"
 
 # --- CONFIG SYSTEM () ---
 CONFIG_FILE=${CONFIG_FILE:-/etc/astral/make.conf}
@@ -137,9 +137,9 @@ usage() {
 │   -Ins, --Inspect <pkg>   Show recipe files, including package info and build script head.                             │
 │   -I, --info <pkg>        Show detailed information about an installed or remote package.                              │
 │   -UA, --Upgrade-All      Perform system upgrade (syncs all installed packages).                                       │
-│   -D,   --Deps <pkg>       Show dependency tree for package.                                                           │
-│   -Dc,  --DepCheck         Check system for broken dependencies.                                                       │
-│   --config                 Show current configuration.                                                                 │
+│   -D,   --Deps <pkg>      Show dependency tree for package.                                                            │
+│   -Dc,  --DepCheck        Check system for broken dependencies.                                                        │
+│   --config                Show current configuration.                                                                  │
 │   -ll, --List-Installed   List installed packages.                                                                     │
 │   -V, --Version           Show Astral version.                                                                         │
 └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
