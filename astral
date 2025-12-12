@@ -1,6 +1,6 @@
 #!/bin/sh
-# Astral v0.5.6.2 Main - minimal POSIX package manager for Astaraxia
-# Modified: removed sources file
+# Astral v0.5.6.3 Main - minimal POSIX package manager for Astaraxia
+# Modified: added Astral.conf for make!
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
 # Set strict execution environment, meow~
@@ -43,7 +43,63 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-version="0.5.6.2 Main"
+version="0.5.6.3 Main"
+
+# --- CONFIG SYSTEM () ---
+CONFIG_FILE=${CONFIG_FILE:-/etc/astral/make.conf}
+USE_FLAGS=""
+CFLAGS="-O2 -pipe"
+CXXFLAGS=""
+LDFLAGS=""
+MAKEFLAGS="-j1"
+CCACHE_ENABLED="no"
+FEATURES=""
+BINPKG_ENABLED="no"
+CACHE_BIN=${CACHE_BIN:-/var/cache/astral/bin}
+
+load_config() {
+    if [ -f "$CONFIG_FILE" ]; then
+        . "$CONFIG_FILE"
+    fi
+    
+    [ -z "$CXXFLAGS" ] && CXXFLAGS="$CFLAGS"
+    
+    if [ "$CCACHE_ENABLED" = "yes" ]; then
+        if command -v ccache >/dev/null 2>&1; then
+            export CC="ccache gcc"
+            export CXX="ccache g++"
+            info "ccache enabled"
+        fi
+    fi
+    
+    export CFLAGS CXXFLAGS LDFLAGS MAKEFLAGS
+}
+
+has_feature() {
+    feature="$1"
+    case " $FEATURES " in
+        *" $feature "*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+ensure_default_config() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        mkdir -p "$(dirname "$CONFIG_FILE")"
+        cat > "$CONFIG_FILE" <<EOF
+# astral configuration
+
+USE_FLAGS=""
+CFLAGS="-O2 -pipe"
+CXXFLAGS=""
+LDFLAGS=""
+MAKEFLAGS="-j1"
+CCACHE_ENABLED="no"
+FEATURES=""
+BINPKG_ENABLED="no"
+EOF
+    fi
+}
+
 
 astral_version() {
 cat <<EOF
@@ -69,20 +125,23 @@ usage() {
 │   --dir <DIR>             Specify root directory for installing packages (defaults to /).                              │
 │                                                                                                                        │
 │ Commands:                                                                                                              │
-│   -s, --Sync <pkg>        Download recipe from AOHARU (if missing), check deps, and install/upgrade.                   │
-│   -sA, --Sync-Asura <pkg> Download recipe from ASURA (if missing), check deps, and install/upgrade.                    │
-│   -, --compile <pkg>      Build from recipe and install (force build).                                                 │
-│   -u, --update [REPO]     Updates the remote package index (for search). Repo can only be 'aoharu' (default) or asura. │
-│   --search <pkg>          Searches for package in local recipes and remote index.                                      │
+│   -S, --Sync <pkg>        Download recipe from AOHARU (if missing), check deps, and install/upgrade.                   │
+│   -Sa, --Sync-Asura <pkg> Download recipe from ASURA (if missing), check deps, and install/upgrade.                    │
+│   -C, --Compile <pkg>     Build from recipe and install (force build).                                                 │
+│   -u, --Update [REPO]     Updates the remote package index (for search). Repo can only be 'aoharu' (default) or asura. │
+│   -S, --search <pkg>      Searches for package in local recipes and remote index.                                      │
 │   -R, --Remove <pkg>      Remove package (leave deps).                                                                 │
 │   -r, --RemoveDep <pkg>   Remove package and attempt to remove orphan deps (safe, hopefully).                          │
 │   -Cc, --Clean-Cache      Remove recipes for packages that are NOT currently installed.                                │
 │   -U, --self-update [BR]  Update the astral script itself from GitHub. BR can be 'main' (default) or 'bleeding-edge'.  │
-│   -ins, --inspect <pkg>   Show recipe files, including package info and build script head.                             │
+│   -Ins, --Inspect <pkg>   Show recipe files, including package info and build script head.                             │
 │   -I, --info <pkg>        Show detailed information about an installed or remote package.                              │
-│   -ua, --upgrade-all      Perform system upgrade (syncs all installed packages).                                       │
-│   -ll, --list-installed   List installed packages.                                                                     │
-│   -V, --version           Show Astral version.                                                                         │
+│   -UA, --Upgrade-All      Perform system upgrade (syncs all installed packages).                                       │
+│   -D,   --Deps <pkg>       Show dependency tree for package.                                                           │
+│   -Dc,  --DepCheck         Check system for broken dependencies.                                                       │
+│   --config                 Show current configuration.                                                                 │
+│   -ll, --List-Installed   List installed packages.                                                                     │
+│   -V, --Version           Show Astral version.                                                                         │
 └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 USAGE
 }
@@ -818,6 +877,98 @@ list_installed() {
     done
     printf '\n'
 }
+# Add after list_installed() function
+
+check_deps_tree() {
+    pkg="$1"
+    prefix="${2:-}"
+    visited="${3:-}"
+    
+    is_visited=0
+    for v in $visited; do
+        [ "$v" = "$pkg" ] && is_visited=1 && break
+    done
+    
+    if [ $is_visited -eq 1 ]; then
+        printf '%s%s [CIRCULAR]\n' "$prefix" "$pkg"
+        return 0
+    fi
+    
+    visited="$visited $pkg"
+    
+    if is_pkg_installed "$pkg"; then
+        installed_ver=$(get_installed_ver "$pkg")
+        printf '%s%s [installed: v%s]\n' "$prefix" "$pkg" "$installed_ver"
+    else
+        if check_host_dependency "$pkg"; then
+            printf '%s%s [host-provided]\n' "$prefix" "$pkg"
+            return 0
+        fi
+        
+        if recipe_path "$pkg" >/dev/null 2>&1; then
+            rpath=$(recipe_path "$pkg")
+            recipe_ver=$(cat "$rpath/version" 2>/dev/null || echo "unknown")
+            printf '%s%s [available: v%s]\n' "$prefix" "$pkg" "$recipe_ver"
+        else
+            printf '%s%s [NOT FOUND!]\n' "$prefix" "$pkg"
+            return 0
+        fi
+    fi
+    
+    deps=$(get_pkg_deps "$pkg" || true)
+    [ -z "$deps" ] && return 0
+    
+    printf '%s\n' "$deps" | while IFS= read -r dep; do
+        dep=$(printf '%s' "$dep" | tr -d '[:space:]')
+        [ -z "$dep" ] && continue
+        check_deps_tree "$dep" "$prefix  ├─ " "$visited"
+    done
+}
+
+show_deps() {
+    pkg="$1"
+    info "=== Dependency Tree for '$pkg' ==="
+    check_deps_tree "$pkg" "" ""
+    info ""
+}
+
+check_system_deps() {
+    info "=== Checking System Dependencies ==="
+    broken_count=0
+    
+    pkgs_tmp=$(mktemp "$TMPDIR/astral-depcheck.XXXXXX") || err "mktemp failed"
+    find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null | \
+        sed "s|^${DB_DIR}/||" | sed 's|/version$||' > "$pkgs_tmp"
+    
+    while IFS= read -r pkg_path; do
+        pkg_name=$(basename "$pkg_path")
+        deps=$(get_pkg_deps "$pkg_path" || true)
+        [ -z "$deps" ] && continue
+        
+        has_broken=0
+        printf '%s\n' "$deps" | while IFS= read -r dep; do
+            dep=$(printf '%s' "$dep" | tr -d '[:space:]')
+            [ -z "$dep" ] && continue
+            
+            if ! is_pkg_installed "$dep" && ! check_host_dependency "$dep"; then
+                if [ $has_broken -eq 0 ]; then
+                    info "✗ $pkg_name has broken dependencies:"
+                    has_broken=1
+                fi
+                info "  - Missing: $dep"
+            fi
+        done
+        
+        [ $has_broken -eq 1 ] && broken_count=$((broken_count + 1))
+    done < "$pkgs_tmp"
+    rm -f "$pkgs_tmp"
+    
+    if [ $broken_count -eq 0 ]; then
+        info "✓ No broken dependencies found!"
+    else
+        info "✗ Found packages with broken dependencies."
+    fi
+}
 
 # --- ENTRY / CLI PARSING ---
 
@@ -860,34 +1011,36 @@ if [ "$INSTALL_ROOT" != "/" ]; then
     INSTALL_ROOT="${INSTALL_ROOT%/}"
     info "Global: Installation root set to: $INSTALL_ROOT"
 fi
+ensure_default_config
+load_config
 
 case "$1" in
--s|--Sync)
+-S|--Sync)
     [ $# -gt 1 ] || err "package name required"
     sync_pkg_recursive "$2"
     ;;
 
--c|--compile)
+-C|--Compile)
     [ $# -gt 1 ] || err "package name required"
     build_from_recipe "$2"
     ;;
 
--sA|--Sync-Asura)
+-SA|--Sync-Asura)
     [ $# -gt 1 ] || err "package name required"
     sync_pkg_asura "$2"
     ;;
 
---upgrade-all|-ua)
+--Upgrade-All|-UA)
     upgrade_all
     ;;
 
-  -u|--update)
+  -u|--Update)
     repo="$2"
     shift 2
     update_repo "$repo"
     ;;
 
-  --search)
+  -s|--Search)
     [ $# -gt 1 ] || err "package name required"
     search_pkg "$2"
     ;;
@@ -915,7 +1068,7 @@ case "$1" in
     show_pkg_info "$2"
     ;;
 
-  --inspect|-ins)
+  --inspect|-Ins)
     [ $# -gt 1 ] || err "package name required"
     r=$(recipe_path "$2") || err "recipe not found for $2"
     info "--- Files in Recipe Directory: $r ---"
@@ -932,12 +1085,31 @@ case "$1" in
   --list-installed|-ll)
     list_installed
     ;;
+-D|--Deps)
+    [ $# -gt 1 ] || err "package name required"
+    show_deps "$2"
+    ;;
 
-  -V|--version)
+-Dc|--DepCheck)
+    check_system_deps
+    ;;
+
+--config)
+    info "=== Astral Configuration ==="
+    printf "Config File:      %s\n" "$CONFIG_FILE"
+    printf "USE_FLAGS:        %s\n" "$USE_FLAGS"
+    printf "CFLAGS:           %s\n" "$CFLAGS"
+    printf "MAKEFLAGS:        %s\n" "$MAKEFLAGS"
+    printf "CCACHE_ENABLED:   %s\n" "$CCACHE_ENABLED"
+    printf "BINPKG_ENABLED:   %s\n" "$BINPKG_ENABLED"
+    printf "FEATURES:         %s\n" "$FEATURES"
+    ;;
+
+  -V|--Version)
     astral_version
     ;;
 
-  -https://www.youtube.com/watch?v=2EDcoWKH25o|FlashMeBack)
+  -https://www.youtube.com/watch?v=2EDcoWKH25o)
     echo "Flash Me Back - Camemellia. Peak btw"
     ;;
 
