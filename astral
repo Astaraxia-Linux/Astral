@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.6.0.0 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.7.0.0 Main - minimal POSIX package manager for Astaraxia
 # Modified: added Astral.conf for make!
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
@@ -8,6 +8,9 @@ set -eu
 
 # Global state variables
 INSTALL_ROOT="/"    # Installation target directory
+FORCE_BUILD=0
+DRY_RUN=0
+VISITED_PACKAGES=""
 
 # Locate where tf is astral
 SCRIPT_PATH="$(readlink -f "$0")"
@@ -43,7 +46,7 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-version="0.6.0.0 Main"
+version="0.7.0.0 Main"
 
 # --- CONFIG SYSTEM () ---
 CONFIG_FILE=${CONFIG_FILE:-/etc/astral/make.conf}
@@ -100,6 +103,215 @@ EOF
     fi
 }
 
+check_script_safety() {
+    script_file="$1"
+    pkg_name="$2"
+    
+    [ ! -f "$script_file" ] && return 0
+    
+    info "Running safety checks on '$pkg_name'..."
+    
+    # Blocks: rm -rf $PKGDIR/ or rm -rf $DESTDIR/
+    if grep -qE '\$(\{)?(PKGDIR|DESTDIR)(\})?[[:space:]]*/[[:space:]]*$' "$script_file" 2>/dev/null; then
+        err "SECURITY: Refusing to run '$pkg_name' - unsafe PKGDIR usage detected (expands to /)"
+    fi
+    
+    # Dangerous command patterns
+    if grep -qE 'rm[[:space:]]+-[rf][rf][[:space:]]+(\$(\{)?(PKGDIR|DESTDIR)(\})?)?/[[:space:]]*$' "$script_file" 2>/dev/null; then
+        err "SECURITY: Refusing to run '$pkg_name' - dangerous rm -rf / detected"
+    fi
+    
+    if grep -qE 'rm[[:space:]]+-[rf][rf][[:space:]]+/($|[^a-zA-Z])' "$script_file" 2>/dev/null; then
+        err "SECURITY: Refusing to run '$pkg_name' - rm -rf on root paths detected"
+    fi
+    
+    # Block disk destruction commands
+    if grep -qE '>[[:space:]]*/dev/sd|dd[[:space:]]+.*of=/dev/[sh]d|mkfs\.|wipefs' "$script_file" 2>/dev/null; then
+        err "SECURITY: Refusing to run '$pkg_name' - disk destruction command detected"
+    fi
+    
+    # Block fork bombs
+    if grep -qE ':[[:space:]]*\(\)[[:space:]]*\{[[:space:]]*:[[:space:]]*\|:[[:space:]]*&[[:space:]]*\}' "$script_file" 2>/dev/null; then
+        err "SECURITY: Refusing to run '$pkg_name' - fork bomb detected"
+    fi
+    
+    # Block recursive chmod 777
+    if grep -qE 'chmod[[:space:]]+-R[[:space:]]+777[[:space:]]+/' "$script_file" 2>/dev/null; then
+        err "SECURITY: Refusing to run '$pkg_name' - recursive chmod 777 on root detected"
+    fi
+    
+    # Block curl|sh and wget|sh
+    if grep -qE '(curl|wget).*\|[[:space:]]*(ba)?sh' "$script_file" 2>/dev/null; then
+        err "SECURITY: Refusing to run '$pkg_name' - curl/wget piped to shell detected"
+    fi
+    
+    # Warn about eval (not blocked, just warned)
+    if grep -qE '^[[:space:]]*eval[[:space:]]' "$script_file" 2>/dev/null; then
+        warn "Script '$pkg_name' contains 'eval' - review carefully before running"
+    fi
+    
+    info "✓ Safety check passed for '$pkg_name'"
+}
+
+# --- FILE OWNERSHIP DATABASE ---
+get_file_owner() {
+    file="$1"
+    file_normalized=$(printf '%s' "$file" | sed 's|^/||')
+
+    # Search all package databases for file ownership
+    for pkgdir in "$DB_DIR"/*/* "$DB_DIR"/*; do
+        [ -d "$pkgdir" ] || continue
+        [ -f "$pkgdir/files" ] || continue
+
+        if grep -qxF "$file_normalized" "$pkgdir/files" 2>/dev/null; then
+            pkg_path=$(printf '%s' "$pkgdir" | sed "s|^${DB_DIR}/||")
+            printf '%s' "$pkg_path"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+check_file_conflicts() {
+    pkg="$1"
+    pkgdir="$2"
+    force="$3"
+
+    [ "$DRY_RUN" -eq 1 ] && info "[DRY-RUN] Checking for file conflicts..."
+    [ "$DRY_RUN" -eq 0 ] && info "Checking for file conflicts..."
+
+    [ ! -d "$pkgdir" ] && return 0
+
+    conflicts=""
+    conflict_count=0
+
+    ( cd "$pkgdir" && find . -type f -o -type l ) | sed 's|^\./||' | while IFS= read -r file; do
+        [ -z "$file" ] && continue
+        [ "$file" = ".astral-meta" ] && continue
+
+        target_path="$INSTALL_ROOT/$file"
+
+        # Skip if file doesn't exist yet
+        [ ! -e "$target_path" ] && [ ! -L "$target_path" ] && continue
+
+        # Check who owns this file
+        owner=$(get_file_owner "$file") || owner=""
+
+        if [ -n "$owner" ]; then
+            owner_name=$(basename "$owner")
+            if [ "$owner_name" != "$pkg" ]; then
+                conflict_count=$((conflict_count + 1))
+                warn "  ✗ CONFLICT: $file (owned by $owner)"
+                printf '%s|%s\n' "$file" "$owner"
+            fi
+        else
+            # File exists but not tracked
+            conflict_count=$((conflict_count + 1))
+            warn "  ✗ CONFLICT: $file (untracked file on system)"
+            printf '%s|%s\n' "$file" "UNTRACKED"
+        fi
+    done > "$TMPDIR/conflicts.$$"
+
+    conflict_count=$(wc -l < "$TMPDIR/conflicts.$$" 2>/dev/null || echo 0)
+
+    if [ "$conflict_count" -gt 0 ]; then
+        if [ "$force" -eq 0 ]; then
+            cat "$TMPDIR/conflicts.$$" >&2
+            rm -f "$TMPDIR/conflicts.$$"
+            err "Found $conflict_count file conflict(s). Use -f/--force to override."
+        else
+            warn "Overriding $conflict_count file conflict(s) due to --force"
+            cat "$TMPDIR/conflicts.$$" >&2
+        fi
+    else
+        info "  ✓ No file conflicts detected"
+    fi
+
+    rm -f "$TMPDIR/conflicts.$$"
+}
+
+# --- VERSION COMPARISON ---
+version_compare() {
+    ver1="$1"
+    op="$2"
+    ver2="$3"
+    
+    # Handle equal versions first
+    if [ "$ver1" = "$ver2" ]; then
+        case "$op" in
+            "="|">="|"<=") return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
+    
+    # Convert versions to comparable integers
+    # Example: 2.38.1 -> 002038001
+    v1_num=$(printf '%s' "$ver1" | awk -F. '{printf "%03d%03d%03d\n", $1, $2, $3}')
+    v2_num=$(printf '%s' "$ver2" | awk -F. '{printf "%03d%03d%03d\n", $1, $2, $3}')
+    
+    case "$op" in
+        ">")  [ "$v1_num" -gt "$v2_num" ] && return 0 || return 1 ;;
+        ">=") [ "$v1_num" -ge "$v2_num" ] && return 0 || return 1 ;;
+        "<")  [ "$v1_num" -lt "$v2_num" ] && return 0 || return 1 ;;
+        "<=") [ "$v1_num" -le "$v2_num" ] && return 0 || return 1 ;;
+        "=")  [ "$v1_num" -eq "$v2_num" ] && return 0 || return 1 ;;
+        *)    return 1 ;;
+    esac
+}
+
+check_versioned_deps() {
+    pkg="$1"
+    
+    deps_file=""
+    pkg_path=$(resolve_installed_path "$pkg") 2>/dev/null || pkg_path="$pkg"
+    deps_file="$DB_DIR/$pkg_path/depends"
+    
+    if [ ! -f "$deps_file" ]; then
+        rpath=$(recipe_path "$pkg") 2>/dev/null || rpath=""
+        [ -n "$rpath" ] && deps_file="$rpath/depends"
+    fi
+    
+    [ ! -f "$deps_file" ] && return 0
+    
+    info "Checking versioned dependencies for $pkg..."
+    
+    while IFS= read -r depline; do
+        depline=$(printf '%s' "$depline" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        [ -z "$depline" ] && continue
+        case "$depline" in \#*) continue ;; esac
+        
+        # Parse: package_name [>=/<=/>/<] version
+        dep_pkg=$(printf '%s' "$depline" | awk '{print $1}')
+        dep_op=$(printf '%s' "$depline" | awk '{print $2}')
+        dep_ver=$(printf '%s' "$depline" | awk '{print $3}')
+        
+        # No version constraint
+        if [ -z "$dep_op" ] || [ -z "$dep_ver" ]; then
+            continue
+        fi
+        
+        # Check if installed
+        if ! is_pkg_installed "$dep_pkg"; then
+            warn "  ✗ $dep_pkg $dep_op $dep_ver (NOT INSTALLED)"
+            return 1
+        fi
+        
+        # Get version
+        installed_ver=$(get_installed_ver "$dep_pkg")
+        [ "$installed_ver" = "none" ] && installed_ver="0.0.0"
+        
+        # Compare
+        if version_compare "$installed_ver" "$dep_op" "$dep_ver"; then
+            info "  ✓ $dep_pkg $dep_op $dep_ver (installed: $installed_ver)"
+        else
+            warn "  ✗ $dep_pkg $dep_op $dep_ver (installed: $installed_ver) - VERSION MISMATCH"
+            return 1
+        fi
+    done < "$deps_file"
+    
+    return 0
+}
 
 astral_version() {
 cat <<EOF
@@ -123,6 +335,8 @@ usage() {
 │                                                                                                                        │
 │ Global Options:                                                                                                        │
 │   --dir <DIR>             Specify root directory for installing packages (defaults to /).                              │
+│   -f, --force             Force operation (override conflicts) - PER COMMAND, not global.                              │
+│   -n, --dry-run           Dry-run mode: show what would happen without doing it.                                       │
 │                                                                                                                        │
 │ Commands:                                                                                                              │
 │   -S, --Sync <pkg>        Download recipe from AOHARU (if missing), check deps, and install/upgrade.                   │
@@ -224,8 +438,8 @@ get_pkg_deps() {
 
     [ -f "$depfile" ] || return 0
 
-    # Print each non-empty non-comment line
-    grep -v '^[[:space:]]*#' "$depfile" | grep -E -v '^[[:space:]]*$' || true
+    # Return only package names (first field) for dependency resolution
+    grep -v '^[[:space:]]*#' "$depfile" | grep -E -v '^[[:space:]]*$' | awk '{print $1}' || true
 }
 
 # Checks if a package (by DB relative path) is required by any other installed package.
@@ -455,12 +669,49 @@ sync_pkg_asura() {
 
 build_from_recipe() {
     pkg="$1"
-    FORCE_CMD=${2:-0}
+    FORCE_CMD=${2:-$FORCE_BUILD}
+    BUILD_BINPKG=${3:-0}
 
     rpath=$(recipe_path "$pkg") || err "recipe $pkg not found"
     recipe_ver="unknown"
     [ -f "$rpath/version" ] && recipe_ver=$(cat "$rpath/version")
     installed_ver=$(get_installed_ver "$pkg")
+    
+    # DRY-RUN MODE
+    if [ "$DRY_RUN" -eq 1 ]; then
+        info "[DRY-RUN] Would build package: $pkg"
+        info "[DRY-RUN] Recipe version: $recipe_ver"
+        info "[DRY-RUN] Installed version: $installed_ver"
+        
+        # Check dependencies
+        info "[DRY-RUN] Dependencies:"
+        deps=$(get_pkg_deps "$pkg")
+        if [ -n "$deps" ]; then
+            printf '%s\n' "$deps" | while IFS= read -r dep; do
+                dep=$(printf '%s' "$dep" | tr -d '[:space:]')
+                [ -z "$dep" ] && continue
+                if is_pkg_installed "$dep"; then
+                    info "[DRY-RUN]   ✓ $dep (installed)"
+                else
+                    info "[DRY-RUN]   ✗ $dep (would be installed)"
+                fi
+            done
+        else
+            info "[DRY-RUN]   (none)"
+        fi
+        
+        # Run safety checks
+        check_script_safety "$rpath/build" "$pkg"
+        [ -f "$rpath/package" ] && check_script_safety "$rpath/package" "$pkg"
+        
+        info "[DRY-RUN] Build would complete successfully (no actual build performed)"
+        return 0
+    fi
+    
+    # Run safety checks on build scripts
+    check_script_safety "$rpath/build" "$pkg"
+    [ -f "$rpath/package" ] && check_script_safety "$rpath/package" "$pkg"
+    [ -f "$rpath/post_install" ] && check_script_safety "$rpath/post_install" "$pkg"
 
     if [ "$installed_ver" != "none" ]; then
         if [ "$installed_ver" = "$recipe_ver" ] && [ "$FORCE_CMD" -eq 0 ]; then
@@ -474,7 +725,8 @@ build_from_recipe() {
     else
         info "Installing '$pkg' version $recipe_ver..."
     fi
-
+    check_file_conflicts "$pkg" "$PKGDIR" "$FORCE_CMD"
+    info "Installing $pkg files to root filesystem ($INSTALL_ROOT)..."
     buildtmp="$TMPDIR/astral-build-$pkg-$$"
     mkdir -p "$buildtmp"
     if [ -d "$rpath" ]; then
@@ -989,6 +1241,14 @@ while [ $# -gt 0 ]; do
             INSTALL_ROOT="${1#*=}"
             shift
             ;;
+        -f|--force)
+            FORCE_BUILD=1
+            shift
+            ;;
+        -n|--dry-run)
+            DRY_RUN=1
+            shift
+            ;;
         -V|--version)
             astral_version
             ;;
@@ -996,7 +1256,7 @@ while [ $# -gt 0 ]; do
             shift
             break
             ;;
-        -*) # unknown option or start of command
+        -*) # start of command
             break
             ;;
         *)
@@ -1017,17 +1277,23 @@ load_config
 case "$1" in
 -S|--Sync)
     [ $# -gt 1 ] || err "package name required"
-    sync_pkg_recursive "$2"
+    VISITED_PACKAGES=""
+    sync_pkg_recursive "$2" "$FORCE_BUILD"
+    FORCE_BUILD=0
     ;;
 
 -C|--Compile)
     [ $# -gt 1 ] || err "package name required"
-    build_from_recipe "$2"
+    VISITED_PACKAGES=""
+    build_from_recipe "$2" "$FORCE_BUILD"
+    FORCE_BUILD=0
     ;;
 
 -SA|--Sync-Asura)
     [ $# -gt 1 ] || err "package name required"
+    VISTED_PACKAGES=""
     sync_pkg_asura "$2"
+    FORCE_BUILD=0
     ;;
 
 --Upgrade-All|-UA)
