@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.7.0.0 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.7.1.0 Main - minimal POSIX package manager for Astaraxia
 # Modified: added Astral.conf for make!
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
