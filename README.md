@@ -79,9 +79,12 @@ It may work. It may also break things.
 * [TODO](#todo)
 * [FAQ](#faq)
 
-## CHANGES (v0.6.0.0)
-Added Depends check
-Added astral.conf in /etc/astral/astral.conf for make
+## CHANGES (v0.7.0.0)
+Added 2 Global Funtions:
+```
+-f, --force              Force operation (override conflicts) - PER COMMAND, not global.  
+-n, --dry-run            Dry-run mode: show what would happen without doing it.
+```
 
 ---
 
@@ -93,7 +96,7 @@ Added astral.conf in /etc/astral/astral.conf for make
 * Repo sync support
 * Optional `sources` and `info` metadata
 * Automatic build environment: `CFLAGS`, `MAKEFLAGS`, etc.
-* Error-safe execution via `set -e`
+* Error-safe execution via `set -eu`
 
 ### Not implemented yet (but planned)
 
@@ -211,11 +214,20 @@ https://example.com/example-app-1.0.0.tar.gz
 ```
 
 ### Example: `depends`
+### Old Version (Still eh idk Supported i guess?)
 
 ```
 libc
 ncurses
 ```
+### New Version
+```
+libc >= 2.38
+gcc >= 12.0.0
+python <= 3.11
+zlib = 1.2.13
+```
+
 
 ---
 
