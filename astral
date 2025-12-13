@@ -725,8 +725,6 @@ build_from_recipe() {
     else
         info "Installing '$pkg' version $recipe_ver..."
     fi
-    check_file_conflicts "$pkg" "$PKGDIR" "$FORCE_CMD"
-    info "Installing $pkg files to root filesystem ($INSTALL_ROOT)..."
     buildtmp="$TMPDIR/astral-build-$pkg-$$"
     mkdir -p "$buildtmp"
     if [ -d "$rpath" ]; then
@@ -745,7 +743,8 @@ build_from_recipe() {
         chmod +x ./build || true
         PKGDIR="$buildtmp/pkg"
         mkdir -p "$PKGDIR"
-
+        check_file_conflicts "$pkg" "$PKGDIR" "$FORCE_CMD"
+        info "Installing $pkg files to root filesystem ($INSTALL_ROOT)..."
         info "Starting isolated build for $pkg..."
         ( DESTDIR="$PKGDIR" ./build ) || err "build failed for $pkg"
 
