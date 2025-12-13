@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.7.0.0 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.7.1.0 Main - minimal POSIX package manager for Astaraxia
 # Modified: added Astral.conf for make!
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
@@ -46,7 +46,7 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-version="0.7.0.0 Main"
+version="0.7.1.0 Main"
 
 # --- CONFIG SYSTEM () ---
 CONFIG_FILE=${CONFIG_FILE:-/etc/astral/make.conf}
@@ -173,63 +173,7 @@ get_file_owner() {
     return 1
 }
 
-check_file_conflicts() {
-    pkg="$1"
-    pkgdir="$2"
-    force="$3"
 
-    [ "$DRY_RUN" -eq 1 ] && info "[DRY-RUN] Checking for file conflicts..."
-    [ "$DRY_RUN" -eq 0 ] && info "Checking for file conflicts..."
-
-    [ ! -d "$pkgdir" ] && return 0
-
-    conflicts=""
-    conflict_count=0
-
-    ( cd "$pkgdir" && find . -type f -o -type l ) | sed 's|^\./||' | while IFS= read -r file; do
-        [ -z "$file" ] && continue
-        [ "$file" = ".astral-meta" ] && continue
-
-        target_path="$INSTALL_ROOT/$file"
-
-        # Skip if file doesn't exist yet
-        [ ! -e "$target_path" ] && [ ! -L "$target_path" ] && continue
-
-        # Check who owns this file
-        owner=$(get_file_owner "$file") || owner=""
-
-        if [ -n "$owner" ]; then
-            owner_name=$(basename "$owner")
-            if [ "$owner_name" != "$pkg" ]; then
-                conflict_count=$((conflict_count + 1))
-                warn "  ✗ CONFLICT: $file (owned by $owner)"
-                printf '%s|%s\n' "$file" "$owner"
-            fi
-        else
-            # File exists but not tracked
-            conflict_count=$((conflict_count + 1))
-            warn "  ✗ CONFLICT: $file (untracked file on system)"
-            printf '%s|%s\n' "$file" "UNTRACKED"
-        fi
-    done > "$TMPDIR/conflicts.$$"
-
-    conflict_count=$(wc -l < "$TMPDIR/conflicts.$$" 2>/dev/null || echo 0)
-
-    if [ "$conflict_count" -gt 0 ]; then
-        if [ "$force" -eq 0 ]; then
-            cat "$TMPDIR/conflicts.$$" >&2
-            rm -f "$TMPDIR/conflicts.$$"
-            err "Found $conflict_count file conflict(s). Use -f/--force to override."
-        else
-            warn "Overriding $conflict_count file conflict(s) due to --force"
-            cat "$TMPDIR/conflicts.$$" >&2
-        fi
-    else
-        info "  ✓ No file conflicts detected"
-    fi
-
-    rm -f "$TMPDIR/conflicts.$$"
-}
 
 # --- VERSION COMPARISON ---
 version_compare() {
@@ -773,7 +717,7 @@ build_from_recipe() {
         printf '%s\n' "$new_files" > "$pkgdir/files"
 
         if [ -f "$buildtmp/depends" ]; then
-            cp "$buildtmp/depends" "$pkgdir/depends"
+            cp "$buildtmp/depends" "/depends"
         fi
 
         if [ -f "$buildtmp/post_install" ]; then
@@ -788,6 +732,63 @@ build_from_recipe() {
 
     trap - EXIT
     rm -rf "$buildtmp"
+}
+check_file_conflicts() {
+    pkg="$1"
+    pkgdir="$2"
+    force="$3"
+
+    [ "$DRY_RUN" -eq 1 ] && info "[DRY-RUN] Checking for file conflicts..."
+    [ "$DRY_RUN" -eq 0 ] && info "Checking for file conflicts..."
+
+    [ ! -d "$pkgdir" ] && return 0
+
+    conflicts=""
+    conflict_count=0
+
+    ( cd "$pkgdir" && find . -type f -o -type l ) | sed 's|^\./||' | while IFS= read -r file; do
+        [ -z "$file" ] && continue
+        [ "$file" = ".astral-meta" ] && continue
+
+        target_path="$INSTALL_ROOT/$file"
+
+        # Skip if file doesn't exist yet
+        [ ! -e "$target_path" ] && [ ! -L "$target_path" ] && continue
+
+        # Check who owns this file
+        owner=$(get_file_owner "$file") || owner=""
+
+        if [ -n "$owner" ]; then
+            owner_name=$(basename "$owner")
+            if [ "$owner_name" != "$pkg" ]; then
+                conflict_count=$((conflict_count + 1))
+                warn "  ✗ CONFLICT: $file (owned by $owner)"
+                printf '%s|%s\n' "$file" "$owner"
+            fi
+        else
+            # File exists but not tracked
+            conflict_count=$((conflict_count + 1))
+            warn "  ✗ CONFLICT: $file (untracked file on system)"
+            printf '%s|%s\n' "$file" "UNTRACKED"
+        fi
+    done > "$TMPDIR/conflicts.$$"
+
+    conflict_count=$(wc -l < "$TMPDIR/conflicts.$$" 2>/dev/null || echo 0)
+
+    if [ "$conflict_count" -gt 0 ]; then
+        if [ "$force" -eq 0 ]; then
+            cat "$TMPDIR/conflicts.$$" >&2
+            rm -f "$TMPDIR/conflicts.$$"
+            err "Found $conflict_count file conflict(s). Use -f/--force to override."
+        else
+            warn "Overriding $conflict_count file conflict(s) due to --force"
+            cat "$TMPDIR/conflicts.$$" >&2
+        fi
+    else
+        info "  ✓ No file conflicts detected"
+    fi
+
+    rm -f "$TMPDIR/conflicts.$$"
 }
 
 update_repo() {
@@ -1016,7 +1017,7 @@ remove_pkg_only() {
                     [ "$dirp" != "." ] && echo "$dirp" >> "$TMPDIR/astral-dirs-$$" || true
                     ;;
             esac
-        done < "$pkgdir/files"
+        done < "/files"
     fi
 
     # Clean up directories (deepest first)
