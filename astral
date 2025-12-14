@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.7.2.1 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.7.2.2 Main - minimal POSIX package manager for Astaraxia
 # Modified: added Astral.conf for make!
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
@@ -50,7 +50,7 @@ err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 
-version="0.7.2.1 Main"
+version="0.7.2.2 Main"
 
 # --- CONFIG SYSTEM () ---
 CONFIG_FILE=${CONFIG_FILE:-/etc/astral/make.conf}
@@ -478,10 +478,10 @@ get_installed_ver() {
 create_meta() {
     pkg="$1"; ver="$2"; arch="$3"; dest="$4"
     cat > "$dest/.astral-meta" <<M
-    name=$pkg
-    version=$ver
-    arch=$arch
-    M
+name=$pkg
+version=$ver
+arch=$arch
+M
 }
 
 atomic_install() {
