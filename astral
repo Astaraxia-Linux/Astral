@@ -936,7 +936,7 @@ build_from_recipe() {
 
         check_file_conflicts "$pkg" "$PKGDIR" "$FORCE_CMD"
         atomic_install "$pkg" "$PKGDIR" "$recipe_ver" "$rpath" "$new_files"
-        info "Installing $pkg files to root filesystem ($INSTALL_ROOT)
+        info "Installing $pkg files to root filesystem ($INSTALL_ROOT)"
         if [ -f "$buildtmp/post_install" ]; then
             info "Running post_install hook for $pkg..."
             ( DESTDIR="$INSTALL_ROOT" PKGDIR="$PKGDIR" "$buildtmp/post_install" ) || info "Warning: post_install failed for $pkg"
