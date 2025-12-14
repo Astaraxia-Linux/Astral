@@ -80,7 +80,7 @@ It may work. It may also break things.
 * [Troubleshooting](#troubleshooting)
 * [FAQ](#faq)
 
-## CHANGES (v0.7.2.7)
+## CHANGES (v0.7.2.7 WYSI)
 
 ### New in v0.7.2.7
 - **Transactional installs**: Packages now install atomically to staging, preventing partial installs
@@ -101,7 +101,7 @@ It may work. It may also break things.
 
 Many planned features are now done!
 
-### ✅ Implemented (v0.7.1.1)
+### ✅ Implemented (v0.7.2.7)
 * ✅ File ownership database (`.files.index`)
 * ✅ Conflict detection before install
 * ✅ Safe uninstall (never removes shared directories)
@@ -394,6 +394,12 @@ Because if `/bin/sh` isn't working, you have bigger problems than package manage
 
 **Why not Python?**  
 Because Python isn't installed in LFS unless *you* install it, and Astral must work before that.
+
+**Why not C?**  
+Because C buys performance Astral does not need, while adding complexity Astral explicitly avoids. A C implementation would require careful memory management, a build system, and platform-specific assumptions. Astral’s goal is transparency and hackability during early bootstrap, not raw speed.
+
+**Why not Go?**  
+Because Go requires a full toolchain and runtime that does not exist during LFS bootstrap. Astral is designed to work *before* higher-level languages are available. Go is suitable for optional post-bootstrap tooling, but not for Astral’s core.
 
 **Will Astral break your system?**  
 Only if you intentionally ignore `$PKGDIR` rules, run untrusted recipes, or `rm -R glibc`.
