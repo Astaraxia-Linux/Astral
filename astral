@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.7.2.2 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.7.2.7 WYSI - minimal POSIX package manager for Astaraxia
 # Modified: added Astral.conf for make!
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
@@ -21,6 +21,8 @@ RECIPES_DIR=${RECIPES_DIR:-/usr/src/astral/recipes}
 CACHE_SRC=${CACHE_SRC:-/var/cache/astral/src}
 CACHE_BIN=${CACHE_BIN:-/var/cache/astral/bin}
 DB_DIR=${DB_DIR:-/var/lib/astral/db}
+WORLD_FILE="$DB_DIR/world"
+WORLD_SET_FILE="$DB_DIR/world_set"
 INDEX_FILE="$DB_DIR/index"
 LOG_DIR=${LOG_DIR:-/var/log/astral}
 
@@ -50,10 +52,13 @@ err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 
-version="0.7.2.2 Main"
+version="0.7.2.7 WYSI"
 
 # --- CONFIG SYSTEM () ---
 CONFIG_FILE=${CONFIG_FILE:-/etc/astral/make.conf}
+VIRTUALS_DIR=${VIRTUALS_DIR:-/etc/astral/virtuals}
+mkdir -p "$VIRTUALS_DIR"
+MASK_FILE=${MASK_FILE:-/etc/astral/package.mask}
 USE_FLAGS=""
 CFLAGS="-O2 -pipe"
 CXXFLAGS=""
@@ -116,6 +121,120 @@ BINPKG_ENABLED="no"
 HOST_PROVIDED="gcc make libc glibc linux-headers"
 EOF
     fi
+}
+
+ensure_default_virtuals() {
+    if [ ! -d "$VIRTUALS_DIR" ] || [ -z "$(ls -A "$VIRTUALS_DIR" 2>/dev/null)" ]; then
+        mkdir -p "$VIRTUALS_DIR"
+
+        # Virtual: C compiler
+        cat > "$VIRTUALS_DIR/compiler" <<EOF
+# Virtual: C compiler
+# Provided by: gcc, clang, tcc
+gcc
+clang
+tcc
+EOF
+
+        # Virtual: libc
+        cat > "$VIRTUALS_DIR/libc" <<EOF
+# Virtual: C library
+# Provided by: glibc, musl, uclibc
+glibc
+musl
+uclibc
+EOF
+
+        # Virtual: text editor
+        cat > "$VIRTUALS_DIR/editor" <<EOF
+# Virtual: Text editor
+nano
+vim
+emacs
+ed
+EOF
+    fi
+}
+
+check_virtual() {
+    dep="$1"
+    
+    # Check if this is a virtual package request
+    if [ -f "$VIRTUALS_DIR/$dep" ]; then
+        # Check if ANY provider is installed
+        while IFS= read -r provider; do
+            provider=$(printf '%s' "$provider" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            [ -z "$provider" ] && continue
+            case "$provider" in \#*) continue ;; esac
+            
+            if is_pkg_installed "$provider" || check_host_dependency "$provider"; then
+                info "Virtual '$dep' satisfied by: $provider"
+                return 0
+            fi
+        done < "$VIRTUALS_DIR/$dep"
+        
+        # No provider found
+        warn "Virtual '$dep' not satisfied by any provider"
+        return 1
+    fi
+    
+    return 1
+}
+
+ensure_default_mask() {
+    if [ ! -f "$MASK_FILE" ]; then
+        mkdir -p "$(dirname "$MASK_FILE")"
+        cat > "$MASK_FILE" <<EOF
+# Astral Package Mask File
+# 
+# Syntax:
+#   package-name              # Mask all versions
+#   package-name >= 2.0       # Mask versions >= 2.0
+#   package-name < 1.5        # Mask versions < 1.5
+#
+# Examples:
+#   broken-package
+#   experimental-tool >= 3.0
+#   old-library < 2.0
+
+# Add your masks below:
+EOF
+    fi
+}
+
+# Check if package version is masked
+is_masked() {
+    pkg="$1"
+    ver="${2:-}"
+    
+    [ ! -f "$MASK_FILE" ] && return 1
+    
+    while IFS= read -r line; do
+        line=$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        [ -z "$line" ] && continue
+        case "$line" in \#*) continue ;; esac
+        
+        mask_pkg=$(printf '%s' "$line" | awk '{print $1}')
+        mask_op=$(printf '%s' "$line" | awk '{print $2}')
+        mask_ver=$(printf '%s' "$line" | awk '{print $3}')
+        
+        # Check if package name matches
+        if [ "$mask_pkg" = "$pkg" ]; then
+            # No version constraint = mask all versions
+            if [ -z "$mask_op" ]; then
+                return 0
+            fi
+            
+            # Check version constraint
+            if [ -n "$ver" ] && [ -n "$mask_ver" ]; then
+                if version_compare "$ver" "$mask_op" "$mask_ver"; then
+                    return 0
+                fi
+            fi
+        fi
+    done < "$MASK_FILE"
+    
+    return 1
 }
 
 check_script_safety() {
@@ -389,35 +508,49 @@ usage() {
 ┌───────────────────────────────────┐
 │ Astral File is in $SCRIPT_PATH │
 └───────────────────────────────────┘
-┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ Usage: astral [global_opts] <command> [pkg...]                                                                         │
-│                                                                                                                        │
-│ Global Options:                                                                                                        │
-│   --dir <DIR>             Specify root directory for installing packages (defaults to /).                              │
-│   -f, --force             Force operation (override conflicts) - PER COMMAND, not global.                              │
-│   -n, --dry-run           Dry-run mode: show what would happen without doing it.                                       │
-│                                                                                                                        │
-│ Commands:                                                                                                              │
-│   -S, --Sync <pkg>        Download recipe from AOHARU (if missing), check deps, and install/upgrade.                   │
-│   -Sa, --Sync-Asura <pkg> Download recipe from ASURA (if missing), check deps, and install/upgrade.                    │
-│   -C, --Compile <pkg>     Build from recipe and install (force build).                                                 │
-│   -u, --Update [REPO]     Updates the remote package index (for search). Repo can only be 'aoharu' (default) or asura. │
-│   -s, --search <pkg>      Searches for package in local recipes and remote index.                                      │
-│   -R, --Remove <pkg>      Remove package (leave deps).                                                                 │
-│   -r, --RemoveDep <pkg>   Remove package and attempt to remove orphan deps (safe, hopefully).                          │
-│   -Cc, --Clean-Cache      Remove recipes for packages that are NOT currently installed.                                │
-│   -U, --self-update [BR]  Update the astral script itself from GitHub. BR can be 'main' (default) or 'bleeding-edge'.  │
-│   -Ins, --Inspect <pkg>   Show recipe files, including package info and build script head.                             │
-│   -I, --info <pkg>        Show detailed information about an installed or remote package.                              │
-│   -UA, --Upgrade-All      Perform system upgrade (syncs all installed packages).                                       │
-│   -D,   --Deps <pkg>      Show dependency tree for package.                                                            │
-│   -Dc,  --DepCheck        Check system for broken dependencies.                                                        │
-│   --config                Show current configuration.                                                                  │
-│   -SE, --show-env         Show current Build Environment                                                               │
-│   -ll, --List-Installed   List installed packages.                                                                     │
-│   -RI, --rebuild-index    Rebuilds the Index                                                                           │
-│   -V, --Version           Show Astral version.                                                                         │
-└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────┐
+│ Usage: astral [global_opts] <command> [pkg...] │
+└────────────────────────────────────────────────┘
+
+Global Options:
+  --dir <DIR>           Installation root (default: /)
+  -f, --force           Force operation (per-command)
+  -n, --dry-run         Preview without making changes
+
+Package Management:
+  -S, --Sync <pkg>      Install/upgrade from AOHARU
+  -Sa, --Sync-Asura <pkg> Install from ASURA (community)
+  -C, --Compile <pkg>   Build from local recipe
+  -R, --Remove <pkg>    Remove package
+  -r, --RemoveDep <pkg> Remove package + orphaned deps
+  --autoremove          Remove all orphaned packages
+
+Query & Information:
+  -s, --search <pkg>    Search for packages
+  -I, --info <pkg>      Show package details
+  -D, --Deps <pkg>      Show dependency tree
+  -Dc, --DepCheck       Check for broken dependencies
+  -p, --preview <pkg>   Preview install (Portage -p style)
+  -w, --why <pkg>       Show why package is installed
+  -W, --world           List explicitly installed packages
+  -ll, --List-Installed List all installed packages
+
+System Operations:
+  -UA, --Upgrade-All    Upgrade all packages
+  -u, --Update [repo]   Update repository index
+  -Cc, --Clean-Cache    Clean uninstalled recipes
+  -RI, --rebuild-index  Rebuild file ownership index
+
+Advanced:
+  --list-virtuals       Show virtual package providers
+  --mask <pkg [op ver]> Mask package version
+  --unmask <pkg>        Unmask package
+  --config              Show configuration
+  -SE, --show-env       Show build environment
+
+Maintenance:
+  -U, --self-update [br] Update Astral itself
+  -V, --Version         Show version
 USAGE
 }
 
@@ -554,19 +687,65 @@ atomic_install() {
 # Extracts dependency names from the depends file, filtering comments and empty lines.
 get_pkg_deps() {
     pkg="$1"
-    depfile=""
+    
+    # Legacy depends file (both build and runtime)
+    legacy_deps=$(get_legacy_deps "$pkg")
+    
+    # New split format
+    build_deps=$(get_build_deps "$pkg")
+    runtime_deps=$(get_runtime_deps "$pkg")
+    
+    # Combine and deduplicate
+    printf '%s\n%s\n%s\n' "$legacy_deps" "$build_deps" "$runtime_deps" | \
+        grep -v '^[[:space:]]*$' | sort -u
+}
 
+get_legacy_deps() {
+    pkg="$1"
+    depfile=""
+    
     pkg_path=$(resolve_installed_path "$pkg") 2>/dev/null || pkg_path="$pkg"
     depfile="$DB_DIR/$pkg_path/depends"
-
+    
     if [ ! -f "$depfile" ]; then
         rpath=$(recipe_path "$pkg") 2>/dev/null || rpath=""
-        [ -n "${rpath}" ] && depfile="$rpath/depends"
+        [ -n "$rpath" ] && depfile="$rpath/depends"
     fi
-
+    
     [ -f "$depfile" ] || return 0
+    grep -v '^[[:space:]]*#' "$depfile" | grep -E -v '^[[:space:]]*$' | awk '{print $1}' || true
+}
 
-    # Return only package names (first field) for dependency resolution
+get_build_deps() {
+    pkg="$1"
+    depfile=""
+    
+    pkg_path=$(resolve_installed_path "$pkg") 2>/dev/null || pkg_path="$pkg"
+    depfile="$DB_DIR/$pkg_path/bdepends"
+    
+    if [ ! -f "$depfile" ]; then
+        rpath=$(recipe_path "$pkg") 2>/dev/null || rpath=""
+        [ -n "$rpath" ] && depfile="$rpath/bdepends"
+    fi
+    
+    [ -f "$depfile" ] || return 0
+    grep -v '^[[:space:]]*#' "$depfile" | grep -E -v '^[[:space:]]*$' | awk '{print $1}' || true
+}
+
+# Get runtime dependencies (RDEPEND)
+get_runtime_deps() {
+    pkg="$1"
+    depfile=""
+    
+    pkg_path=$(resolve_installed_path "$pkg") 2>/dev/null || pkg_path="$pkg"
+    depfile="$DB_DIR/$pkg_path/rdepends"
+    
+    if [ ! -f "$depfile" ]; then
+        rpath=$(recipe_path "$pkg") 2>/dev/null || rpath=""
+        [ -n "$rpath" ] && depfile="$rpath/rdepends"
+    fi
+    
+    [ -f "$depfile" ] || return 0
     grep -v '^[[:space:]]*#' "$depfile" | grep -E -v '^[[:space:]]*$' | awk '{print $1}' || true
 }
 
@@ -769,27 +948,40 @@ verify_checksums_and_extract() {
 sync_pkg_recursive() {
     pkg="$1"
     FORCE_CMD=${2:-$FORCE_BUILD}
+    IS_EXPLICIT=${3:-0}  # Track if this is explicitly requested
 
     pkg=$(sanitize_pkg_name "$pkg")
 
-    # CRITICAL: Check VISITED at entry before ANY other logic
+    # Check visited (circular dependency)
     case " $VISITED_PACKAGES " in
         *" $pkg "*)
             err "[$pkg] CIRCULAR DEPENDENCY DETECTED! Chain: $VISITED_PACKAGES -> $pkg"
             ;;
     esac
     
-    # Mark as visited IMMEDIATELY
     VISITED_PACKAGES="$VISITED_PACKAGES $pkg"
 
+    # Check virtuals first
+    if check_virtual "$pkg"; then
+        return 0
+    fi
+
+    # Check host dependency
     if [ "$FORCE_CMD" -eq 0 ] && check_host_dependency "$pkg"; then
         info "Dependency '$pkg' satisfied by host. Skipping build/fetch."
         return 0
     fi
 
+    # Check if masked
     recipe_exists=0
     if recipe_path "$pkg" >/dev/null 2>&1; then 
         recipe_exists=1
+        rpath=$(recipe_path "$pkg")
+        recipe_ver=$(cat "$rpath/version" 2>/dev/null || echo "unknown")
+        
+        if is_masked "$pkg" "$recipe_ver"; then
+            err "[$pkg] Package version $recipe_ver is MASKED. Check $MASK_FILE"
+        fi
     fi
 
     if [ "$recipe_exists" -eq 0 ]; then
@@ -802,14 +994,13 @@ sync_pkg_recursive() {
 
     info "Checking dependencies for $pkg..."
     
-    deps_tmp=$(mktemp "$TMPDIR/astral-deps.XXXXXX") || err "mktemp failed"
+    deps_tmp=$(mktemp "$TMPDIR/astral-deps.XXXXXX") || err "mktemp failed for dependency resolution"
     get_pkg_deps "$pkg" > "$deps_tmp"
     
     while IFS= read -r dep_pkg; do
         dep_pkg=$(printf '%s' "$dep_pkg" | tr -d '[:space:]')
         [ -z "$dep_pkg" ] && continue
         
-        # Check if this would create a cycle BEFORE recursing
         case " $VISITED_PACKAGES " in
             *" $dep_pkg "*)
                 rm -f "$deps_tmp"
@@ -817,7 +1008,8 @@ sync_pkg_recursive() {
                 ;;
         esac
         
-        sync_pkg_recursive "$dep_pkg" "$FORCE_CMD" || {
+        # Recursively install dependencies (not explicit)
+        sync_pkg_recursive "$dep_pkg" "$FORCE_CMD" 0 || {
             rm -f "$deps_tmp"
             err "[$pkg] Failed to install dependency: $dep_pkg"
         }
@@ -825,6 +1017,11 @@ sync_pkg_recursive() {
     rm -f "$deps_tmp"
 
     build_from_recipe "$pkg" "$FORCE_CMD"
+    
+    # Add to world set if explicitly requested
+    if [ "$IS_EXPLICIT" -eq 1 ]; then
+        add_to_world "$pkg"
+    fi
 }
 
 # hoping that this fucking asura sync doesnt explode
@@ -949,6 +1146,57 @@ build_from_recipe() {
 
     trap - EXIT
     rm -rf "$buildtmp"
+}
+
+# Track explicitly installed packages
+add_to_world() {
+    pkg="$1"
+    
+    mkdir -p "$DB_DIR"
+    touch "$WORLD_SET_FILE"
+    
+    # Add if not already present
+    if ! grep -qxF "$pkg" "$WORLD_SET_FILE" 2>/dev/null; then
+        echo "$pkg" >> "$WORLD_SET_FILE"
+        info "Added '$pkg' to world set (explicitly installed)"
+    fi
+}
+
+# Check if package is in world set
+is_in_world() {
+    pkg="$1"
+    [ -f "$WORLD_SET_FILE" ] && grep -qxF "$pkg" "$WORLD_SET_FILE" 2>/dev/null
+}
+
+# Remove from world set
+remove_from_world() {
+    pkg="$1"
+    
+    if [ -f "$WORLD_SET_FILE" ]; then
+        temp=$(mktemp)
+        grep -vxF "$pkg" "$WORLD_SET_FILE" > "$temp" 2>/dev/null || true
+        mv "$temp" "$WORLD_SET_FILE"
+        info "Removed '$pkg' from world set"
+    fi
+}
+
+# List world set
+list_world() {
+    if [ ! -f "$WORLD_SET_FILE" ]; then
+        info "World set is empty (no explicitly installed packages)"
+        return 0
+    fi
+    
+    info "=== World Set (Explicitly Installed) ==="
+    while IFS= read -r pkg; do
+        [ -z "$pkg" ] && continue
+        if is_pkg_installed "$pkg"; then
+            ver=$(get_installed_ver "$pkg")
+            printf "  ✓ %-20s (v%s)\n" "$pkg" "$ver"
+        else
+            printf "  ✗ %-20s (removed but still in world)\n" "$pkg"
+        fi
+    done < "$WORLD_SET_FILE"
 }
 
 update_repo() {
@@ -1413,12 +1661,169 @@ check_deps_tree() {
     done
 }
 
+preview_install() {
+    pkg="$1"
+    
+    info "=== Install Preview for '$pkg' ==="
+    info "Computing dependency graph..."
+    
+    # Collect all dependencies recursively
+    all_deps=""
+    to_install=""
+    already_installed=""
+    
+    collect_deps_recursive() {
+        local p="$1"
+        local indent="${2:-}"
+        
+        # Check if already processed
+        case " $all_deps " in
+            *" $p "*) return 0 ;;
+        esac
+        
+        all_deps="$all_deps $p"
+        
+        # Check install status
+        if is_pkg_installed "$p"; then
+            ver=$(get_installed_ver "$p")
+            printf '%s[installed] %s-%s\n' "$indent" "$p" "$ver"
+            already_installed="$already_installed $p"
+        else
+            if check_host_dependency "$p"; then
+                printf '%s[host] %s\n' "$indent" "$p"
+            else
+                printf '%s[new] %s\n' "$indent" "$p"
+                to_install="$to_install $p"
+            fi
+        fi
+        
+        # Get dependencies
+        deps=$(get_pkg_deps "$p" 2>/dev/null || true)
+        if [ -n "$deps" ]; then
+            printf '%s\n' "$deps" | while IFS= read -r dep; do
+                dep=$(printf '%s' "$dep" | tr -d '[:space:]')
+                [ -z "$dep" ] && continue
+                collect_deps_recursive "$dep" "$indent  "
+            done
+        fi
+    }
+    
+    collect_deps_recursive "$pkg" ""
+    
+    # Summary
+    info ""
+    info "=== Summary ==="
+    
+    new_count=$(printf '%s' "$to_install" | wc -w)
+    installed_count=$(printf '%s' "$already_installed" | wc -w)
+    
+    info "Packages to install: $new_count"
+    info "Already installed:   $installed_count"
+    
+    if [ "$new_count" -gt 0 ]; then
+        info ""
+        info "New packages:"
+        for p in $to_install; do
+            info "  - $p"
+        done
+    fi
+}
+
 show_deps() {
     pkg="$1"
     pkg=$(sanitize_pkg_name "$pkg")
     info "=== Dependency Tree for '$pkg' ==="
     check_deps_tree "$pkg" "" ""
     info ""
+}
+
+show_why_installed() {
+    target_pkg="$1"
+    
+    if ! is_pkg_installed "$target_pkg"; then
+        info "Package '$target_pkg' is not installed."
+        return 1
+    fi
+    
+    info "=== Why is '$target_pkg' installed? ==="
+    
+    # Check if in world set
+    if is_in_world "$target_pkg"; then
+        info "✓ Explicitly installed (in world set)"
+    fi
+    
+    # Find packages that depend on it
+    dependents=""
+    for pkgdir in "$DB_DIR"/*/* "$DB_DIR"/*; do
+        [ -d "$pkgdir" ] || continue
+        pkg_path=$(printf '%s' "$pkgdir" | sed "s|^${DB_DIR}/||")
+        pkg_name=$(basename "$pkg_path")
+        
+        deps=$(get_pkg_deps "$pkg_name" 2>/dev/null || true)
+        if printf '%s\n' "$deps" | grep -qxF "$target_pkg"; then
+            dependents="$dependents $pkg_name"
+            info "  ← Required by: $pkg_name"
+        fi
+    done
+    
+    if [ -z "$dependents" ] && ! is_in_world "$target_pkg"; then
+        warn "Package is installed but not in world and nothing depends on it (orphan!)"
+    fi
+}
+
+autoremove_orphans() {
+    info "=== Finding Orphaned Packages ==="
+    
+    orphans=""
+    
+    for pkgdir in "$DB_DIR"/*/* "$DB_DIR"/*; do
+        [ -d "$pkgdir" ] || continue
+        pkg_path=$(printf '%s' "$pkgdir" | sed "s|^${DB_DIR}/||")
+        pkg_name=$(basename "$pkg_path")
+        
+        # Skip if in world
+        is_in_world "$pkg_name" && continue
+        
+        # Skip if required by another package
+        is_pkg_required "$pkg_path" && continue
+        
+        # Found orphan
+        orphans="$orphans $pkg_name"
+        info "  Found orphan: $pkg_name"
+    done
+    
+    if [ -z "$orphans" ]; then
+        info "✓ No orphaned packages found"
+        return 0
+    fi
+    
+    info ""
+    info "Orphaned packages to remove:"
+    for pkg in $orphans; do
+        info "  - $pkg"
+    done
+    
+    if [ "$DRY_RUN" -eq 1 ]; then
+        info "[DRY-RUN] Would remove orphaned packages"
+        return 0
+    fi
+    
+    info ""
+    info "Remove these packages? (y/N)"
+    read -r response
+    
+    case "$response" in
+        [Yy]*)
+            for pkg in $orphans; do
+                info "Removing orphan: $pkg"
+                remove_pkg "$pkg"
+            done
+            info "✓ Orphan removal complete"
+            ;;
+        *)
+            info "Cancelled"
+            ;;
+    esac
 }
 
 check_system_deps() {
@@ -1546,6 +1951,8 @@ fi
 acquire_lock
 trap release_lock EXIT
 ensure_default_config
+ensure_default_virtuals
+ensure_default_mask
 load_config
 
 case "$1" in
@@ -1662,6 +2069,55 @@ case "$1" in
     printf "CXXFLAGS: %s\n" "$CXXFLAGS"
     printf "LDFLAGS:  %s\n" "$LDFLAGS"
     printf "MAKEFLAGS: %s\n" "$MAKEFLAGS"
+    ;;
+    --preview|-p)
+    [ $# -gt 1 ] || err "package name required"
+    preview_install "$2"
+    ;;
+
+--why|-w)
+    [ $# -gt 1 ] || err "package name required"
+    show_why_installed "$2"
+    ;;
+
+--world|-W)
+    list_world
+    ;;
+
+--autoremove|--depclean)
+    autoremove_orphans
+    ;;
+
+--list-virtuals)
+    info "=== Virtual Packages ==="
+    for virt in "$VIRTUALS_DIR"/*; do
+        [ -f "$virt" ] || continue
+        virt_name=$(basename "$virt")
+        info "virtual/$virt_name:"
+        grep -v '^#' "$virt" | grep -v '^[[:space:]]*$' | while IFS= read -r provider; do
+            if is_pkg_installed "$provider" || check_host_dependency "$provider"; then
+                info "  ✓ $provider"
+            else
+                info "  ✗ $provider"
+            fi
+        done
+    done
+    ;;
+
+--mask)
+    [ $# -gt 1 ] || err "package spec required (pkg or pkg >= ver)"
+    shift
+    echo "$*" >> "$MASK_FILE"
+    info "Masked: $*"
+    ;;
+
+--unmask)
+    [ $# -gt 1 ] || err "package name required"
+    pkg="$2"
+    temp=$(mktemp)
+    grep -v "^$pkg" "$MASK_FILE" > "$temp" 2>/dev/null || true
+    mv "$temp" "$MASK_FILE"
+    info "Unmasked: $pkg"
     ;;
 
   *|-*|--*)
