@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.7.1.1 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.7.2.1 Main - minimal POSIX package manager for Astaraxia
 # Modified: added Astral.conf for make!
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
@@ -41,12 +41,16 @@ TMPDIR=${TMPDIR:-/tmp}
 INDEX_FILE_AOHARU="$DB_DIR/index_aoharu"
 INDEX_FILE_ASURA="$DB_DIR/index_asura"
 
+# --- Misc Var ---
+LOCK_FILE=${LOCK_FILE:-/var/lock/astral.lock}
+
 mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
+warn() { printf 'WARNING: %s\n' "$*" >&2; }
 
-version="0.7.1.1 Main"
+version="0.7.2.1 Main"
 
 # --- CONFIG SYSTEM () ---
 CONFIG_FILE=${CONFIG_FILE:-/etc/astral/make.conf}
@@ -58,6 +62,7 @@ MAKEFLAGS="-j1"
 CCACHE_ENABLED="no"
 FEATURES=""
 BINPKG_ENABLED="no"
+HOST_PROVIDED=${HOST_PROVIDED:-""}
 CACHE_BIN=${CACHE_BIN:-/var/cache/astral/bin}
 
 load_config() {
@@ -85,6 +90,13 @@ has_feature() {
         *) return 1 ;;
     esac
 }
+
+sanitize_pkg_name() {
+    pkg="$1"
+    # Remove path traversal and dangerous characters
+    echo "$pkg" | sed 's|/\.\./||g; s|^\.\./||g; s|/\./||g; s|^\./||g' | grep -v '\.\.' || err "Invalid package name: $pkg"
+}
+
 ensure_default_config() {
     if [ ! -f "$CONFIG_FILE" ]; then
         mkdir -p "$(dirname "$CONFIG_FILE")"
@@ -99,6 +111,9 @@ MAKEFLAGS="-j1"
 CCACHE_ENABLED="no"
 FEATURES=""
 BINPKG_ENABLED="no"
+
+# DEPENDENCY OVERRIDE
+HOST_PROVIDED="gcc make libc glibc linux-headers"
 EOF
     fi
 }
@@ -108,6 +123,20 @@ check_script_safety() {
     pkg_name="$2"
     
     [ ! -f "$script_file" ] && return 0
+    
+    cat >&2 <<SAFETY_WARNING
+═══════════════════════════════════════════════════════════════
+⚠️  SAFETY CHECK: $pkg_name
+═══════════════════════════════════════════════════════════════
+WARNING: These checks provide BASIC protection only.
+They can be bypassed by determined attackers.
+
+DO NOT run untrusted packages without review.
+Astral is NOT a security sandbox.
+
+YOU HAVE BEEN WARNED
+═══════════════════════════════════════════════════════════════
+SAFETY_WARNING
     
     info "Running safety checks on '$pkg_name'..."
     
@@ -150,33 +179,17 @@ check_script_safety() {
         warn "Script '$pkg_name' contains 'eval' - review carefully before running"
     fi
     
-    info "✓ Safety check passed for '$pkg_name'"
+    info "✓ Basic safety checks passed (review script manually for full safety)"
 }
 
 # --- FILE OWNERSHIP DATABASE ---
-get_file_owner() {
-    file="$1"
-    file_normalized=$(printf '%s' "$file" | sed 's|^/||')
-
-    # Search all package databases for file ownership
-    for pkgdir in "$DB_DIR"/*/* "$DB_DIR"/*; do
-        [ -d "$pkgdir" ] || continue
-        [ -f "$pkgdir/files" ] || continue
-
-        if grep -qxF "$file_normalized" "$pkgdir/files" 2>/dev/null; then
-            pkg_path=$(printf '%s' "$pkgdir" | sed "s|^${DB_DIR}/||")
-            printf '%s' "$pkg_path"
-            return 0
-        fi
-    done
-
-    return 1
-}
-
 check_file_conflicts() {
     pkg="$1"
     pkgdir="$2"
     force="$3"
+    
+    conflict_file="$TMPDIR/conflicts.$$"
+    trap "rm -f '$conflict_file'" RETURN
 
     [ "$DRY_RUN" -eq 1 ] && info "[DRY-RUN] Checking for file conflicts..."
     [ "$DRY_RUN" -eq 0 ] && info "Checking for file conflicts..."
@@ -214,7 +227,6 @@ check_file_conflicts() {
     done > "$TMPDIR/conflicts.$$"
 
     conflict_count=$(wc -l < "$TMPDIR/conflicts.$$" 2>/dev/null || echo 0)
-
     if [ "$conflict_count" -gt 0 ]; then
         if [ "$force" -eq 0 ]; then
             cat "$TMPDIR/conflicts.$$" >&2
@@ -237,7 +249,7 @@ version_compare() {
     op="$2"
     ver2="$3"
     
-    # Handle equal versions first
+    # Handle equal versions
     if [ "$ver1" = "$ver2" ]; then
         case "$op" in
             "="|">="|"<=") return 0 ;;
@@ -245,18 +257,65 @@ version_compare() {
         esac
     fi
     
-    # Convert versions to comparable integers
-    # Example: 2.38.1 -> 002038001
-    v1_num=$(printf '%s' "$ver1" | awk -F. '{printf "%03d%03d%03d\n", $1, $2, $3}')
-    v2_num=$(printf '%s' "$ver2" | awk -F. '{printf "%03d%03d%03d\n", $1, $2, $3}')
+    # Normalize versions: split by dots, handle arbitrary components
+    # Convert: 2.38.1 -> "2 38 1", 1.2.3.4.5 -> "1 2 3 4 5"
+    v1_parts=$(printf '%s' "$ver1" | tr '.' ' ' | tr '-' ' ')
+    v2_parts=$(printf '%s' "$ver2" | tr '.' ' ' | tr '-' ' ')
     
+    # Compare component by component
+    v1_remaining="$v1_parts"
+    v2_remaining="$v2_parts"
+    
+    while true; do
+        # Extract first component from each
+        v1_part=$(printf '%s' "$v1_remaining" | awk '{print $1}')
+        v2_part=$(printf '%s' "$v2_remaining" | awk '{print $1}')
+        
+        # If both exhausted, versions are equal
+        [ -z "$v1_part" ] && [ -z "$v2_part" ] && {
+            case "$op" in
+                "="|">="|"<=") return 0 ;;
+                *) return 1 ;;
+            esac
+        }
+        
+        # Treat missing parts as 0
+        [ -z "$v1_part" ] && v1_part=0
+        [ -z "$v2_part" ] && v2_part=0
+        
+        # Extract numeric prefix (handles "1rc2" -> "1")
+        v1_num=$(printf '%s' "$v1_part" | sed 's/[^0-9].*//')
+        v2_num=$(printf '%s' "$v2_part" | sed 's/[^0-9].*//')
+        
+        [ -z "$v1_num" ] && v1_num=0
+        [ -z "$v2_num" ] && v2_num=0
+        
+        # Compare this component
+        if [ "$v1_num" -gt "$v2_num" ]; then
+            case "$op" in
+                ">"|">=") return 0 ;;
+                *) return 1 ;;
+            esac
+        elif [ "$v1_num" -lt "$v2_num" ]; then
+            case "$op" in
+                "<"|"<=") return 0 ;;
+                *) return 1 ;;
+            esac
+        fi
+        
+        # This component equal, continue to next
+        v1_remaining=$(printf '%s' "$v1_remaining" | cut -d' ' -f2-)
+        v2_remaining=$(printf '%s' "$v2_remaining" | cut -d' ' -f2-)
+        
+        # Prevent infinite loop
+        [ "$v1_remaining" = "$v1_parts" ] && break
+        [ "$v2_remaining" = "$v2_parts" ] && break
+    done
+    
+    # Fallback: equal
     case "$op" in
-        ">")  [ "$v1_num" -gt "$v2_num" ] && return 0 || return 1 ;;
-        ">=") [ "$v1_num" -ge "$v2_num" ] && return 0 || return 1 ;;
-        "<")  [ "$v1_num" -lt "$v2_num" ] && return 0 || return 1 ;;
-        "<=") [ "$v1_num" -le "$v2_num" ] && return 0 || return 1 ;;
-        "=")  [ "$v1_num" -eq "$v2_num" ] && return 0 || return 1 ;;
-        *)    return 1 ;;
+        "="|">="|"<=") return 0 ;;
+        *) return 1 ;;
     esac
 }
 
@@ -343,7 +402,7 @@ usage() {
 │   -Sa, --Sync-Asura <pkg> Download recipe from ASURA (if missing), check deps, and install/upgrade.                    │
 │   -C, --Compile <pkg>     Build from recipe and install (force build).                                                 │
 │   -u, --Update [REPO]     Updates the remote package index (for search). Repo can only be 'aoharu' (default) or asura. │
-│   -S, --search <pkg>      Searches for package in local recipes and remote index.                                      │
+│   -s, --search <pkg>      Searches for package in local recipes and remote index.                                      │
 │   -R, --Remove <pkg>      Remove package (leave deps).                                                                 │
 │   -r, --RemoveDep <pkg>   Remove package and attempt to remove orphan deps (safe, hopefully).                          │
 │   -Cc, --Clean-Cache      Remove recipes for packages that are NOT currently installed.                                │
@@ -354,7 +413,9 @@ usage() {
 │   -D,   --Deps <pkg>      Show dependency tree for package.                                                            │
 │   -Dc,  --DepCheck        Check system for broken dependencies.                                                        │
 │   --config                Show current configuration.                                                                  │
+│   -SE, --show-env         Show current Build Environment                                                               │
 │   -ll, --List-Installed   List installed packages.                                                                     │
+│   -RI, --rebuild-index    Rebuilds the Index                                                                           │
 │   -V, --Version           Show Astral version.                                                                         │
 └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 USAGE
@@ -417,10 +478,77 @@ get_installed_ver() {
 create_meta() {
     pkg="$1"; ver="$2"; arch="$3"; dest="$4"
     cat > "$dest/.astral-meta" <<M
-name=$pkg
-version=$ver
-arch=$arch
-M
+    name=$pkg
+    version=$ver
+    arch=$arch
+    M
+}
+
+atomic_install() {
+    pkg="$1"
+    pkgdir_src="$2"
+    recipe_ver="$3"
+    rpath="$4"
+    new_files="$5"
+    
+    # Create staging directory
+    staging_root="$TMPDIR/astral-staging-$$"
+    mkdir -p "$staging_root" || err "[$pkg] Failed to create staging directory"
+    
+    info "[$pkg] Installing to staging area..."
+    
+    # Install to staging first
+    tar -C "$pkgdir_src" -cf - . | tar -C "$staging_root" -xf - || {
+        rm -rf "$staging_root"
+        err "[$pkg] Failed to extract to staging area"
+    }
+    
+    # Prepare DB entry (but don't commit yet)
+    db_path=$(printf '%s' "$rpath" | sed "s|^${RECIPES_DIR}/||")
+    db_target="$DB_DIR/$db_path"
+    db_staging="$TMPDIR/astral-db-staging-$$"
+    mkdir -p "$db_staging"
+    
+    printf '%s\n' "$recipe_ver" > "$db_staging/version"
+    printf '%s\n' "$new_files" > "$db_staging/files"
+    buildtmp_parent="$(dirname "$pkgdir_src")"
+    [ -f "$buildtmp_parent/depends" ] && cp "$buildtmp_parent/depends" "$db_staging/depends"
+    
+    # ATOMIC COMMIT: Move files and DB together
+    info "[$pkg] Committing installation atomically..."
+    
+    # Move files from staging to real root
+    ( cd "$staging_root" && find . -mindepth 1 -print ) | while IFS= read -r file; do
+        file=$(printf '%s' "$file" | sed 's|^\./||')
+        src="$staging_root/$file"
+        dst="$INSTALL_ROOT/$file"
+        
+        if [ -d "$src" ]; then
+            mkdir -p "$dst" 2>/dev/null || true
+        elif [ -f "$src" ] || [ -L "$src" ]; then
+            mkdir -p "$(dirname "$dst")"
+            # Atomic move (rename is atomic on same filesystem)
+            mv -f "$src" "$dst" || {
+                rm -rf "$staging_root" "$db_staging"
+                err "[$pkg] Failed to install $file atomically"
+            }
+        fi
+    done
+    
+    # Finally, commit DB (last step - if this fails files are there but untracked)
+    mkdir -p "$db_target"
+    mv "$db_staging/version" "$db_target/version" || {
+        warn "[$pkg] DB commit failed - package installed but not tracked!"
+        rm -rf "$staging_root" "$db_staging"
+        err "[$pkg] Database commit failed"
+    }
+    mv "$db_staging/files" "$db_target/files"
+    [ -f "$db_staging/depends" ] && mv "$db_staging/depends" "$db_target/depends"
+    update_files_index_for_pkg "$db_path"
+    # Cleanup
+    rm -rf "$staging_root" "$db_staging"
+    
+    info "[$pkg] ✓ Atomic installation complete"
 }
 
 # Extracts dependency names from the depends file, filtering comments and empty lines.
@@ -465,6 +593,14 @@ is_pkg_required() {
 # Returns 0 if dependency is satisfied by host (binary in PATH or shared lib)
 check_host_dependency() {
     dep="$1"
+    
+    # Check if explicitly marked as host-provided in config
+    case " $HOST_PROVIDED " in
+        *" $dep "*)
+            info "[$dep] Explicitly marked as host-provided in config"
+            return 0
+            ;;
+    esac
 
     # If looks like a common binary name, check PATH
     if command -v "$dep" >/dev/null 2>&1; then
@@ -632,23 +768,61 @@ verify_checksums_and_extract() {
 
 sync_pkg_recursive() {
     pkg="$1"
-    FORCE_CMD=${2:-0}  # Default 0 if not passed
+    FORCE_CMD=${2:-$FORCE_BUILD}
 
-    # If host provides it, skip unless forced
+    pkg=$(sanitize_pkg_name "$pkg")
+
+    # CRITICAL: Check VISITED at entry before ANY other logic
+    case " $VISITED_PACKAGES " in
+        *" $pkg "*)
+            err "[$pkg] CIRCULAR DEPENDENCY DETECTED! Chain: $VISITED_PACKAGES -> $pkg"
+            ;;
+    esac
+    
+    # Mark as visited IMMEDIATELY
+    VISITED_PACKAGES="$VISITED_PACKAGES $pkg"
+
     if [ "$FORCE_CMD" -eq 0 ] && check_host_dependency "$pkg"; then
         info "Dependency '$pkg' satisfied by host. Skipping build/fetch."
         return 0
     fi
 
-    fetch_remote_recipe "$pkg"
-    recipe_dir=$(recipe_path "$pkg") || err "Recipe for '$pkg' not found."
+    recipe_exists=0
+    if recipe_path "$pkg" >/dev/null 2>&1; then 
+        recipe_exists=1
+    fi
+
+    if [ "$recipe_exists" -eq 0 ]; then
+        if ! fetch_remote_recipe "$pkg"; then
+            err "[$pkg] Recipe not found in repository and not provided by host."
+        fi
+    fi
+    
+    recipe_dir=$(recipe_path "$pkg") || err "[$pkg] Recipe not found after fetch."
 
     info "Checking dependencies for $pkg..."
-    get_pkg_deps "$pkg" | while IFS= read -r dep_pkg; do
+    
+    deps_tmp=$(mktemp "$TMPDIR/astral-deps.XXXXXX") || err "mktemp failed"
+    get_pkg_deps "$pkg" > "$deps_tmp"
+    
+    while IFS= read -r dep_pkg; do
         dep_pkg=$(printf '%s' "$dep_pkg" | tr -d '[:space:]')
         [ -z "$dep_pkg" ] && continue
-        sync_pkg_recursive "$dep_pkg" "$FORCE_CMD"
-    done
+        
+        # Check if this would create a cycle BEFORE recursing
+        case " $VISITED_PACKAGES " in
+            *" $dep_pkg "*)
+                rm -f "$deps_tmp"
+                err "[$pkg] Would create circular dependency with: $dep_pkg"
+                ;;
+        esac
+        
+        sync_pkg_recursive "$dep_pkg" "$FORCE_CMD" || {
+            rm -f "$deps_tmp"
+            err "[$pkg] Failed to install dependency: $dep_pkg"
+        }
+    done < "$deps_tmp"
+    rm -f "$deps_tmp"
 
     build_from_recipe "$pkg" "$FORCE_CMD"
 }
@@ -743,8 +917,6 @@ build_from_recipe() {
         chmod +x ./build || true
         PKGDIR="$buildtmp/pkg"
         mkdir -p "$PKGDIR"
-        check_file_conflicts "$pkg" "$PKGDIR" "$FORCE_CMD"
-        info "Installing $pkg files to root filesystem ($INSTALL_ROOT)..."
         info "Starting isolated build for $pkg..."
         ( DESTDIR="$PKGDIR" ./build ) || err "build failed for $pkg"
 
@@ -762,19 +934,9 @@ build_from_recipe() {
             || true
         )
 
-        info "Installing $pkg files to root filesystem ($INSTALL_ROOT)..."
-        tar -C "$PKGDIR" -cf - . | tar -C "$INSTALL_ROOT" -xf - || err "failed to extract package files"
-
-        db_path=$(printf '%s' "$rpath" | sed "s|^${RECIPES_DIR}/||")
-        pkgdir="$DB_DIR/$db_path"
-        mkdir -p "$pkgdir"
-        printf '%s\n' "$recipe_ver" > "$pkgdir/version"
-        printf '%s\n' "$new_files" > "$pkgdir/files"
-
-        if [ -f "$buildtmp/depends" ]; then
-            cp "$buildtmp/depends" "$pkgdir/depends"
-        fi
-
+        check_file_conflicts "$pkg" "$PKGDIR" "$FORCE_CMD"
+        atomic_install "$pkg" "$PKGDIR" "$recipe_ver" "$rpath" "$new_files"
+        info "Installing $pkg files to root filesystem ($INSTALL_ROOT)
         if [ -f "$buildtmp/post_install" ]; then
             info "Running post_install hook for $pkg..."
             ( DESTDIR="$INSTALL_ROOT" PKGDIR="$PKGDIR" "$buildtmp/post_install" ) || info "Warning: post_install failed for $pkg"
@@ -914,6 +1076,96 @@ show_pkg_info() {
     fi
 }
 
+FILES_INDEX="$DB_DIR/.files.index"
+
+rebuild_files_index() {
+    info "Rebuilding file ownership index..."
+    rm -f "$FILES_INDEX"
+    touch "$FILES_INDEX"
+    
+    for pkgdir in "$DB_DIR"/*/* "$DB_DIR"/*; do
+        [ -d "$pkgdir" ] || continue
+        [ -f "$pkgdir/files" ] || continue
+        
+        pkg_path=$(printf '%s' "$pkgdir" | sed "s|^${DB_DIR}/||")
+        
+        while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            # Format: filename|package_path
+            printf '%s|%s\n' "$file" "$pkg_path" >> "$FILES_INDEX"
+        done < "$pkgdir/files"
+    done
+    
+    # Sort for faster lookups
+    sort -u "$FILES_INDEX" -o "$FILES_INDEX"
+    info "File index rebuilt ($(wc -l < "$FILES_INDEX") entries)"
+}
+
+get_file_owner() {
+    file="$1"
+    file_normalized=$(printf '%s' "$file" | sed 's|^/||')
+    
+    # Fast path: use index if it exists
+    if [ -f "$FILES_INDEX" ]; then
+        result=$(grep -F "^${file_normalized}|" "$FILES_INDEX" 2>/dev/null | head -n1 | cut -d'|' -f2)
+        if [ -n "$result" ]; then
+            printf '%s' "$result"
+            return 0
+        fi
+        return 1
+    fi
+    
+    # Fallback: slow path (warns to rebuild index)
+    warn "File index missing - using slow lookup. Run: astral --rebuild-index"
+    
+    for pkgdir in "$DB_DIR"/*/* "$DB_DIR"/*; do
+        [ -d "$pkgdir" ] || continue
+        [ -f "$pkgdir/files" ] || continue
+        
+        if grep -qxF "$file_normalized" "$pkgdir/files" 2>/dev/null; then
+            pkg_path=$(printf '%s' "$pkgdir" | sed "s|^${DB_DIR}/||")
+            printf '%s' "$pkg_path"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
+update_files_index_for_pkg() {
+    pkg_path="$1"
+    
+    [ ! -f "$FILES_INDEX" ] && return 0
+    
+    # Simple lock using directory (atomic)
+    lock_dir="$FILES_INDEX.lock"
+    max_wait=10
+    wait_count=0
+    
+    while ! mkdir "$lock_dir" 2>/dev/null; do
+        [ $wait_count -ge $max_wait ] && return 1
+        sleep 0.1
+        wait_count=$((wait_count + 1))
+    done
+    
+    # Remove old entries for this package
+    temp=$(mktemp)
+    grep -v "|${pkg_path}$" "$FILES_INDEX" > "$temp" 2>/dev/null || true
+    mv "$temp" "$FILES_INDEX"
+    
+    # Add new entries
+    pkgdir="$DB_DIR/$pkg_path"
+    if [ -f "$pkgdir/files" ]; then
+        while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            printf '%s|%s\n' "$file" "$pkg_path" >> "$FILES_INDEX"
+        done < "$pkgdir/files"
+    fi
+    
+    # Release lock
+    rmdir "$lock_dir"
+}
+
 upgrade_all() {
     FORCE_CMD=${1:-0}  # 0 if not passed
     info "Starting full system upgrade (syncing all installed packages)..."
@@ -985,14 +1237,12 @@ self_update() {
 # --- SAFE REMOVAL HELPERS ---
 
 remove_pkg_only() {
-    # Accepts canonical pkg path (relative to DB_DIR)
     pkg_path="$1"
     pkgdir="$DB_DIR/$pkg_path"
     [ -d "$pkgdir" ] || return 0
 
     info "Removing package database entry: $pkg_path"
 
-    # Pre-remove hook (try recipe's post_remove if present)
     rpath=$(recipe_path "$(basename "$pkg_path")") 2>/dev/null || rpath=""
     if [ -n "$rpath" ] && [ -f "$rpath/post_remove" ]; then
         info "Running post_remove hook for $(basename "$pkg_path")..."
@@ -1003,33 +1253,20 @@ remove_pkg_only() {
         while IFS= read -r f; do
             [ -z "$f" ] && continue
             fullpath="$INSTALL_ROOT/$f"
+            
+            # Only remove files and symlinks, NEVER directories
             if [ -f "$fullpath" ] || [ -L "$fullpath" ]; then
-                rm -f "$fullpath" 2>/dev/null || true
+                rm -f "$fullpath" 2>/dev/null || warn "Failed to remove: $fullpath"
             fi
-            # collect directories for later cleanup: append only directories (will be rmdir attempted)
-            case "$f" in
-                */)
-                    echo "$f" >> "$TMPDIR/astral-dirs-$$" ;;
-                *)
-                    dirp=$(dirname "$f")
-                    [ "$dirp" != "." ] && echo "$dirp" >> "$TMPDIR/astral-dirs-$$" || true
-                    ;;
-            esac
+            # Explicitly skip directories
         done < "$pkgdir/files"
     fi
 
-    # Clean up directories (deepest first)
-    if [ -f "$TMPDIR/astral-dirs-$$" ]; then
-        sort -r "$TMPDIR/astral-dirs-$$" | while IFS= read -r d; do
-            [ -z "$d" ] && continue
-            rmdir "$INSTALL_ROOT/$d" 2>/dev/null || true
-        done
-        rm -f "$TMPDIR/astral-dirs-$$"
-    fi
-
-    # Remove DB entry
+    # Do NOT attempt to remove directories at all
+    # This prevents deleting shared directories like /usr/bin, /usr/lib, etc. - *flashback of astral v0.1.0.0 removing my LFS /usr*
+    
     rm -rf "$pkgdir"
-    info "Removed $pkg_path from database."
+    info "Removed $pkg_path from database (directories preserved for safety)."
 }
 
 removedep_pkg() {
@@ -1178,6 +1415,7 @@ check_deps_tree() {
 
 show_deps() {
     pkg="$1"
+    pkg=$(sanitize_pkg_name "$pkg")
     info "=== Dependency Tree for '$pkg' ==="
     check_deps_tree "$pkg" "" ""
     info ""
@@ -1219,6 +1457,40 @@ check_system_deps() {
     else
         info "✗ Found packages with broken dependencies."
     fi
+}
+
+acquire_lock() {
+    lockdir=$(dirname "$LOCK_FILE")
+    mkdir -p "$lockdir" 2>/dev/null || true
+    
+    max_wait=30
+    wait_count=0
+    
+    while ! mkdir "$LOCK_FILE.d" 2>/dev/null; do
+        if [ $wait_count -ge $max_wait ]; then
+            # Check if lock is stale (process dead)
+            if [ -f "$LOCK_FILE.d/pid" ]; then
+                lock_pid=$(cat "$LOCK_FILE.d/pid")
+                if ! kill -0 "$lock_pid" 2>/dev/null; then
+                    warn "Removing stale lock (PID $lock_pid is dead)"
+                    rm -rf "$LOCK_FILE.d"
+                    continue
+                fi
+            fi
+            err "Another instance of astral is running. Please wait or remove $LOCK_FILE.d if stale."
+        fi
+        info "Waiting for lock... ($wait_count/$max_wait)"
+        sleep 1
+        wait_count=$((wait_count + 1))
+    done
+    
+    echo $$ > "$LOCK_FILE.d/pid"
+    
+    # Setup signal handlers to release lock
+    trap 'release_lock; exit 130' INT TERM
+}
+release_lock() {
+    rm -rf "$LOCK_FILE.d" 2>/dev/null || true
 }
 
 # --- ENTRY / CLI PARSING ---
@@ -1270,6 +1542,9 @@ if [ "$INSTALL_ROOT" != "/" ]; then
     INSTALL_ROOT="${INSTALL_ROOT%/}"
     info "Global: Installation root set to: $INSTALL_ROOT"
 fi
+
+acquire_lock
+trap release_lock EXIT
 ensure_default_config
 load_config
 
@@ -1290,7 +1565,7 @@ case "$1" in
 
 -SA|--Sync-Asura)
     [ $# -gt 1 ] || err "package name required"
-    VISTED_PACKAGES=""
+    VISITED_PACKAGES=""
     sync_pkg_asura "$2"
     FORCE_BUILD=0
     ;;
@@ -1352,7 +1627,7 @@ case "$1" in
     ;;
 -D|--Deps)
     [ $# -gt 1 ] || err "package name required"
-    show_deps "$2"
+     "$2"
     ;;
 
 -Dc|--DepCheck)
@@ -1376,6 +1651,17 @@ case "$1" in
 
   -https://www.youtube.com/watch?v=2EDcoWKH25o)
     echo "Flash Me Back - Camemellia. Peak btw"
+    ;;
+
+--rebuild-index|-RI)
+    rebuild_files_index
+    ;;
+--show-env|-SE)
+    info "=== Build Environment ==="
+    printf "CFLAGS:   %s\n" "$CFLAGS"
+    printf "CXXFLAGS: %s\n" "$CXXFLAGS"
+    printf "LDFLAGS:  %s\n" "$LDFLAGS"
+    printf "MAKEFLAGS: %s\n" "$MAKEFLAGS"
     ;;
 
   *|-*|--*)
