@@ -1027,13 +1027,14 @@ sync_pkg_recursive() {
 # hoping that this fucking asura sync doesnt explode
 sync_pkg_asura() {
     pkg="$1"
-    FORCE_CMD=${2:-0}  # default 0 if not provided
+    FORCE_CMD=${2:-0}
+    IS_EXPLICIT=${3:-0}
     info "Syncing package '$pkg' from Asura (user repository)..."
 
     old_url="$RECIPE_RAW_URL"
     RECIPE_RAW_URL="$USER_RECIPE_RAW_URL"
 
-    sync_pkg_recursive "$pkg" "$FORCE_CMD"
+    sync_pkg_recursive "$pkg" "$FORCE_CMD" "$IS_EXPLICIT"
 
     RECIPE_RAW_URL="$old_url"
 }
@@ -1133,7 +1134,6 @@ build_from_recipe() {
 
         check_file_conflicts "$pkg" "$PKGDIR" "$FORCE_CMD"
         atomic_install "$pkg" "$PKGDIR" "$recipe_ver" "$rpath" "$new_files"
-        info "Installing $pkg files to root filesystem ($INSTALL_ROOT)"
         if [ -f "$buildtmp/post_install" ]; then
             info "Running post_install hook for $pkg..."
             ( DESTDIR="$INSTALL_ROOT" PKGDIR="$PKGDIR" "$buildtmp/post_install" ) || info "Warning: post_install failed for $pkg"
@@ -1673,8 +1673,8 @@ preview_install() {
     already_installed=""
     
     collect_deps_recursive() {
-        local p="$1"
-        local indent="${2:-}"
+    p="$1"
+    indent="${2:-}"
         
         # Check if already processed
         case " $all_deps " in
@@ -1959,7 +1959,7 @@ case "$1" in
 -S|--Sync)
     [ $# -gt 1 ] || err "package name required"
     VISITED_PACKAGES=""
-    sync_pkg_recursive "$2" "$FORCE_BUILD"
+    sync_pkg_recursive "$2" "$FORCE_BUILD" 1
     FORCE_BUILD=0
     ;;
 
@@ -1973,7 +1973,7 @@ case "$1" in
 -SA|--Sync-Asura)
     [ $# -gt 1 ] || err "package name required"
     VISITED_PACKAGES=""
-    sync_pkg_asura "$2"
+    sync_pkg_asura "$2" "$FORCE_BUILD" 1 
     FORCE_BUILD=0
     ;;
 
@@ -2034,7 +2034,7 @@ case "$1" in
     ;;
 -D|--Deps)
     [ $# -gt 1 ] || err "package name required"
-     "$2"
+    show_deps "$2"
     ;;
 
 -Dc|--DepCheck)
@@ -2056,8 +2056,12 @@ case "$1" in
     astral_version
     ;;
 
-  -https://www.youtube.com/watch?v=2EDcoWKH25o)
+  --https://www.youtube.com/watch?v=2EDcoWKH25o)
     echo "Flash Me Back - Camemellia. Peak btw"
+    ;;
+
+  --727|--whenyouseeit|--whenyoufuckingseeit|-WYSI|-WYFSI|--Arieu|--arieu|)
+    echo "727 WYSI WYFSI 727 WYFSI WYFSI"
     ;;
 
 --rebuild-index|-RI)
@@ -2070,14 +2074,17 @@ case "$1" in
     printf "LDFLAGS:  %s\n" "$LDFLAGS"
     printf "MAKEFLAGS: %s\n" "$MAKEFLAGS"
     ;;
-    --preview|-p)
+
+--preview|-p)
     [ $# -gt 1 ] || err "package name required"
-    preview_install "$2"
+    pkg=$(sanitize_pkg_name "$2")
+    preview_install "$pkg"
     ;;
 
 --why|-w)
     [ $# -gt 1 ] || err "package name required"
-    show_why_installed "$2"
+    pkg=$(sanitize_pkg_name "$2")
+    show_why_installed "$pkg"
     ;;
 
 --world|-W)
