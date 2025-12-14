@@ -80,9 +80,9 @@ It may work. It may also break things.
 * [Troubleshooting](#troubleshooting)
 * [FAQ](#faq)
 
-## CHANGES (v0.7.2.1)
+## CHANGES (v0.7.2.7)
 
-### New in v0.7.2.1
+### New in v0.7.2.7
 - **Transactional installs**: Packages now install atomically to staging, preventing partial installs
 - **File ownership database**: Fast O(1) file conflict detection via `.files.index`
 - **Security hardening**: Malicious script detection (blocks `rm -rf /`, fork bombs, disk destruction)
