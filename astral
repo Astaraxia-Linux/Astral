@@ -2060,13 +2060,14 @@ case "$1" in
     echo "Flash Me Back - Camemellia. Peak btw"
     ;;
 
-  --727|--whenyouseeit|--whenyoufuckingseeit|-WYSI|-WYFSI|--Arieu|--arieu|)
+  --727|--whenyouseeit|--whenyoufuckingseeit|-WYSI|-WYFSI|--Arieu|--arieu)
     echo "727 WYSI WYFSI 727 WYFSI WYFSI"
     ;;
 
 --rebuild-index|-RI)
     rebuild_files_index
     ;;
+
 --show-env|-SE)
     info "=== Build Environment ==="
     printf "CFLAGS:   %s\n" "$CFLAGS"
