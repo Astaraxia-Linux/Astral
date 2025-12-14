@@ -77,37 +77,46 @@ It may work. It may also break things.
 * [Using Astral](#using-astral)
 * [Behavior Notes (Important)](#behavior-notes-important)
 * [TODO](#todo)
+* [Troubleshooting](#troubleshooting)
 * [FAQ](#faq)
 
-## CHANGES (v0.7.0.0)
-Added 2 Global Funtions:
-```
--f, --force              Force operation (override conflicts) - PER COMMAND, not global.  
--n, --dry-run            Dry-run mode: show what would happen without doing it.
-```
+## CHANGES (v0.7.2.1)
+
+### New in v0.7.2.1
+- **Transactional installs**: Packages now install atomically to staging, preventing partial installs
+- **File ownership database**: Fast O(1) file conflict detection via `.files.index`
+- **Security hardening**: Malicious script detection (blocks `rm -rf /`, fork bombs, disk destruction)
+- **Versioned dependencies**: Support for `pkg >= 1.2.3` syntax in depends files
+- **Dry-run mode** (`-n`): Preview changes without modifying system
+- **Per-command force** (`-f`): Override conflicts on a per-command basis
+- **Circular dependency detection**: Prevents infinite loops in dependency chains
+- **Safe directory handling**: No longer auto-deletes shared directories during removal
+
+### Breaking Changes
+- `depends` file now supports version constraints: `package >= version`
+- Old format (`package` only) still works for backward compatibility
+- dry-run            Dry-run mode: show what would happen without doing it.
 
 ---
 
-## Features (Current State)
+Many planned features are now done!
 
-* Build from source using plain POSIX sh
-* Staged installs using `$PKGDIR`
-* Dependency listing via `depends` file
-* Repo sync support
-* Optional `sources` and `info` metadata
-* Automatic build environment: `CFLAGS`, `MAKEFLAGS`, etc.
-* Error-safe execution via `set -eu`
+### ✅ Implemented (v0.7.1.1)
+* ✅ File ownership database (`.files.index`)
+* ✅ Conflict detection before install
+* ✅ Safe uninstall (never removes shared directories)
+* ✅ Versioned dependencies
+* ✅ Security checks on build scripts
+* ✅ Atomic transactions
+* ✅ Dry-run mode
 
-### Not implemented yet (but planned)
-
-* File ownership database
-* Full conflict detection
-* Safe uninstall of unused dependency files
-* Proper upgrade file removal
-* Signature checking
-* Multiple repositories
-
----
+### 🚧 Not implemented yet (but planned)
+* Signature checking / GPG verification
+* Multiple repository priorities
+* Parallel builds
+* Download resume for interrupted transfers
+* Binary package caching (started, incomplete)
+* Delta upgrades
 
 ## Architecture Overview
 
@@ -331,22 +340,85 @@ Current behavior:
 
 ---
 
+## Troubleshooting
+
+### Common Issues
+
+**"PKGDIR: parameter not set"**
+- Your `build` or `package` script is using `$PKGDIR` before it's set
+- Solution: Only use `$PKGDIR` in the `package()` function
+
+**"Circular dependency detected"**
+- Package A depends on B, B depends on A
+- Solution: Review your `depends` files, break the cycle
+
+**"File conflict detected"**
+- Another package owns this file
+- Solution: Use `-f` to force override (dangerous!) or review the conflict
+
+**"Lock file exists"**
+- Another Astral instance is running
+- Solution: Wait, or remove stale lock: `rm -rf /var/lock/astral.lock.d`
+
+**"File index missing"**
+- First-time install or corrupted index
+- Solution: `astral -RI` to rebuild index
+
+### Performance Issues
+
+**Slow conflict detection**
+- File index might be missing
+- Solution: `astral -RI`
+
+**Slow builds**
+- Check `MAKEFLAGS` in `/etc/astral/make.conf`
+- Enable ccache: `CCACHE_ENABLED="yes"`
+
+### Getting Help
+
+```
+1. Check logs: `/var/log/astral/`
+2. Run with dry-run: `astral -n -S package`
+3. Inspect recipe: `astral -Ins package`
+4. File an issue: https://github.com/Astaraxia-Linux/Astral/issues
+```
+
+---
+
 ## FAQ
+**Why not Rust?**  
+Because Astral is supposed to boot on systems that don't even have `bash` yet, let alone a 200-MB Rust toolchain.
 
-* **Why not Rust?**  
-   Because Astral is supposed to boot on systems that don’t even have `bash` yet, let alone a 200-MB Rust toolchain.
+**Why POSIX sh?**  
+Because if `/bin/sh` isn't working, you have bigger problems than package management.
 
-* **Why POSIX sh?**  
-   Because if `/bin/sh` isn’t working, you have bigger problems than package management.
+**Why not Python?**  
+Because Python isn't installed in LFS unless *you* install it, and Astral must work before that.
 
-* **Why not Python?**  
-   Because Python isn’t installed in LFS unless *you* install it, and Astral must work before that.
+**Will Astral break your system?**  
+Only if you intentionally ignore `$PKGDIR` rules, run untrusted recipes, or `rm -R glibc`.
 
-* **Will Astral break your system?**  
-   Only if you intentionally ignore `$PKGDIR` rules or remove `/bin/sh`.
+**Is Astral fast?**  
+Depends how fast you can type `make` and `curl`. It's POSIX shell - don't expect Rust-level performance.
 
-* **Is Astral fast?**  
-  Depends how fast you can type `make` and `curl`. Don’t expect Rust-level performance.
+**Can I use Astral on Arch/Gentoo/Debian?**
+Technically yes, but **don't**. Astral is designed for minimal systems where you control everything. On established distros, use the native package manager.
+
+**What's the difference between AOHARU and ASURA?**
+- **AOHARU**: Official, manually reviewed, trusted
+- **ASURA**: Community-contributed, use at your own risk
+
+**Do I need to review recipes?**
+For AOHARU: No, we review them. For ASURA: **YES, ALWAYS.** Never run untrusted code as root.
+
+**Can Astral coexist with other package managers?**
+Not recommended. File conflicts will occur. Choose one package manager per system.
+
+**Where's the binary package support?**
+Experimental/incomplete. Source-first design means binaries are an optimization, not core.
+
+**Why "Astral"?**
+Because the original dev wanted something that sounded cool and had no taken GitHub repos. Also it fits the space/star theme of Astaraxia.
 
 ---
 
