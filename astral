@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.7.4.0 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.7.4.1 Main - minimal POSIX package manager for Astaraxia
 # Modified: added Astral.conf for make!
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
@@ -52,7 +52,7 @@ err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 
-version="0.7.4.0 Main"
+version="0.7.4.1 Main"
 
 # --- CONFIG SYSTEM () ---
 CONFIG_FILE=${CONFIG_FILE:-/etc/astral/make.conf}
@@ -874,44 +874,73 @@ check_host_dependency() {
 }
 
 # --- NETWORKING / RECIPE FUNCTIONS ---
-
 fetch_remote_recipe() {
     pkg="$1"
-    local_dir="$RECIPES_DIR/$pkg"
-
+    
     info "Attempting to fetch or refresh recipe for '$pkg' from remote..."
 
+    # Check if recipe already exists locally
     existing_rpath=$(recipe_path "$pkg") 2>/dev/null || existing_rpath=""
 
     if [ -n "$existing_rpath" ]; then
+        # Recipe exists - use its path
         category_pkg=$(printf '%s' "$existing_rpath" | sed "s|^${RECIPES_DIR}/||")
         local_dir="$RECIPES_DIR/$category_pkg"
-        mkdir -p "$local_dir"
     else
-        local_dir="$RECIPES_DIR/$pkg"
-        mkdir -p "$local_dir"
+        # Recipe doesn't exist - check if pkg has category already
+        case "$pkg" in
+            */*)
+                # Already has category (e.g., "sys-libs/zlib")
+                category_pkg="$pkg"
+                ;;
+            *)
+                # No category - search in index for category
+                category=""
+                if [ -f "$INDEX_FILE_AOHARU" ]; then
+                    category=$(grep "^${pkg}[[:space:]]" "$INDEX_FILE_AOHARU" | awk '{print $3}' | head -n1)
+                fi
+                
+                # Try ASURA index if not found
+                if [ -z "$category" ] && [ -f "$INDEX_FILE_ASURA" ]; then
+                    category=$(grep "^${pkg}[[:space:]]" "$INDEX_FILE_ASURA" | awk '{print $3}' | head -n1)
+                fi
+                
+                if [ -n "$category" ]; then
+                    category_pkg="${category}/${pkg}"
+                else
+                    # Not in index, assume no category
+                    category_pkg="$pkg"
+                fi
+                ;;
+        esac
+        
+        local_dir="$RECIPES_DIR/$category_pkg"
     fi
+    
+    mkdir -p "$local_dir"
 
-    remote_base="${RECIPE_RAW_URL%/}/recipes/$(printf '%s' "$(printf '%s' "$local_dir" | sed "s|^${RECIPES_DIR}/||")")"
+    # Build remote URL
+    remote_base="${RECIPE_RAW_URL%/}/recipes/${category_pkg}"
 
     required_files="version build"
-    optional_files="depends package post_install post_remove checksums conflicts info sources"
+    optional_files="depends bdepends rdepends package post_install post_remove checksums conflicts info sources"
 
+    # Download files
     for file in $required_files $optional_files; do
         url="$remote_base/$file"
         dest="$local_dir/$file"
+        
         if curl -fsSL "$url" -o "$dest" 2>/dev/null; then
             :
         else
-            if printf '%s' "$required_files" | grep -q "$file"; then
+            if printf '%s' "$required_files" | grep -qw "$file"; then
                 err "Failed to fetch mandatory file '$file' for package '$pkg' from $url"
-                rm -rf "$local_dir"
-                return 1
             fi
             rm -f "$dest"
         fi
     done
 
+    # Make scripts executable
     chmod +x "$local_dir/build" 2>/dev/null || true
     chmod +x "$local_dir/package" 2>/dev/null || true
     chmod +x "$local_dir/post_install" 2>/dev/null || true
