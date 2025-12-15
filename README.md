@@ -80,24 +80,10 @@ It may work. It may also break things.
 * [Troubleshooting](#troubleshooting)
 * [FAQ](#faq)
 
-## CHANGES (v0.7.3,0 Main)
+## CHANGES (v0.7.4.0 Main)
 
-### New in v0.7.3.0
-- **Transactional installs**: Packages now install atomically to staging, preventing partial installs
-- **File ownership database**: Fast O(1) file conflict detection via `.files.index`
-- **Security hardening**: Malicious script detection (blocks `rm -rf /`, fork bombs, disk destruction)
-- **Versioned dependencies**: Support for `pkg >= 1.2.3` syntax in depends files
-- **Dry-run mode** (`-n`): Preview changes without modifying system
-- **Per-command force** (`-f`): Override conflicts on a per-command basis
-- **Circular dependency detection**: Prevents infinite loops in dependency chains
-- **Safe directory handling**: No longer auto-deletes shared directories during removal
-- **Instant lock detection**: No more 30-second timeout when another instance is running
-- **Improved host dependency detection**: More accurate library detection with pkg-config support
-
-### Breaking Changes
-- `depends` file now supports version constraints: `package >= version`
-- Old format (`package` only) still works for backward compatibility
-
+### New in v0.7.4.0
+- Added ccache.. yeah thats it
 ---
 
 ### ✅ Implemented (v0.7.3.0)
@@ -295,6 +281,75 @@ make DESTDIR="$PKGDIR" install
 # Clean up unwanted files
 rm -rf "$PKGDIR/usr/share/doc/$PKG_NAME/examples" || true
 ```
+
+---
+
+## ccache Integration
+
+Astral supports ccache for faster rebuilds of C/C++ packages.
+
+### Installation
+
+```bash
+astral -S dev-util/ccache
+```
+
+### Configuration
+
+Add to `/etc/astral/make.conf`:
+
+```
+CCACHE_ENABLED="yes"
+CCACHE_DIR="/var/cache/ccache"
+CCACHE_MAXSIZE="5G"
+```
+
+### Usage
+
+Once enabled, ccache is automatically used for all package builds.
+
+**Check ccache statistics:**
+```
+astral --ccache-stats
+```
+
+**Clear ccache:**
+```
+astral --ccache-clear
+```
+
+**Manual ccache commands:**
+```
+ccache -s          # Show stats
+ccache -C          # Clear cache
+ccache -z          # Zero stats
+ccache -M 10G      # Set max size to 10GB
+```
+
+### Expected Speedup
+
+- First build: No speedup (cache miss)
+- Rebuild: 5-10x faster (cache hit)
+- Partial rebuild: 2-5x faster (partial cache hit)
+
+### Cache Location
+
+- System: `/var/cache/ccache`
+- User: `~/.ccache`
+
+### Troubleshooting
+
+**ccache not working:**
+- Check: `which gcc` should show `/usr/lib/ccache/bin/gcc`
+- Check: `ccache -s` should show statistics
+
+**Cache too large:**
+- Adjust: `CCACHE_MAXSIZE="10G"` in make.conf
+- Or: `ccache -M 10G`
+
+**Poor hit rate:**
+- Check: `ccache -s` for cache statistics
+- Ensure CFLAGS are consistent across builds
 
 ---
 
