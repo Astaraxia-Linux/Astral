@@ -27,7 +27,8 @@ Astral is intentionally designed to work **outside of Astaraxia**. This is not a
   * basic coreutils
   * a working toolchain
 
-  If those are missing, your system has larger problems.
+  If those are missing, you do not need a package manager.
+You need a rescue disk and life choices.
 
 ### What Astral is **not**
 
