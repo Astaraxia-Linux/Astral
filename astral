@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.7.3.0 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.7.4.0 Main - minimal POSIX package manager for Astaraxia
 # Modified: added Astral.conf for make!
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
@@ -52,7 +52,7 @@ err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 
-version="0.7.3.0 Main"
+version="0.7.4.0 Main"
 
 # --- CONFIG SYSTEM () ---
 CONFIG_FILE=${CONFIG_FILE:-/etc/astral/make.conf}
@@ -77,11 +77,30 @@ load_config() {
     
     [ -z "$CXXFLAGS" ] && CXXFLAGS="$CFLAGS"
     
+    # Enhanced ccache support
     if [ "$CCACHE_ENABLED" = "yes" ]; then
         if command -v ccache >/dev/null 2>&1; then
-            export CC="ccache gcc"
-            export CXX="ccache g++"
-            info "ccache enabled"
+            # Set ccache directory
+            export CCACHE_DIR="${CCACHE_DIR:-/var/cache/ccache}"
+            mkdir -p "$CCACHE_DIR" 2>/dev/null || true
+            
+            # Configure ccache
+            export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-5G}"
+            export CCACHE_COMPRESS="${CCACHE_COMPRESS:-true}"
+            export CCACHE_COMPRESSLEVEL="${CCACHE_COMPRESSLEVEL:-6}"
+            
+            # Wrapper approach (more reliable)
+            if [ -d "/usr/lib/ccache/bin" ]; then
+                export PATH="/usr/lib/ccache/bin:$PATH"
+                info "ccache enabled (wrapper mode, cache: $CCACHE_DIR)"
+            else
+                # Fallback to direct wrapping
+                export CC="ccache gcc"
+                export CXX="ccache g++"
+                info "ccache enabled (direct mode, cache: $CCACHE_DIR)"
+            fi
+        else
+            warn "CCACHE_ENABLED=yes but ccache not found. Install: astral -S dev-util/ccache"
         fi
     fi
     
@@ -106,18 +125,27 @@ ensure_default_config() {
     if [ ! -f "$CONFIG_FILE" ]; then
         mkdir -p "$(dirname "$CONFIG_FILE")"
         cat > "$CONFIG_FILE" <<EOF
-# astral configuration
+# Astral/make.conf configuration
 
+# Build flags
 USE_FLAGS=""
-CFLAGS="-O2 -pipe"
+CFLAGS="-O2 -pipe -march=native"
 CXXFLAGS=""
-LDFLAGS=""
-MAKEFLAGS="-j1"
-CCACHE_ENABLED="no"
-FEATURES=""
+LDFLAGS="-Wl,--as-needed"
+MAKEFLAGS="-j$(nproc)"
+
+# ccache configuration
+CCACHE_ENABLED="yes"
+CCACHE_DIR="/var/cache/ccache"
+CCACHE_MAXSIZE="5G"
+CCACHE_COMPRESS="true"
+CCACHE_COMPRESSLEVEL="6"
+
+# Features
+FEATURES="ccache parallel-make"
 BINPKG_ENABLED="no"
 
-# DEPENDENCY OVERRIDE
+# Dependency overrides
 HOST_PROVIDED="gcc make libc glibc linux-headers"
 EOF
     fi
@@ -547,6 +575,8 @@ System Operations:
   -RI, --rebuild-index  Rebuild file ownership index
 
 Advanced:
+  --ccache-stats        Show ccache statistics
+  --ccache-clear        Clear ccache
   --list-virtuals       Show virtual package providers
   --mask <pkg [op ver]> Mask package version
   --unmask <pkg>        Unmask package
@@ -1996,6 +2026,25 @@ release_lock() {
     rm -rf "$LOCK_FILE.d" 2>/dev/null || true
 }
 
+show_ccache_stats() {
+    if ! command -v ccache >/dev/null 2>&1; then
+        err "ccache is not installed"
+    fi
+    
+    info "=== ccache Statistics ==="
+    ccache -s
+}
+
+clear_ccache() {
+    if ! command -v ccache >/dev/null 2>&1; then
+        err "ccache is not installed"
+    fi
+    
+    info "Clearing ccache..."
+    ccache -C
+    info "ccache cleared"
+}
+
 # --- ENTRY / CLI PARSING ---
 
 # Require root for all operations (astral must be invoked by root, sudo, or doas)
@@ -2225,6 +2274,12 @@ case "$1" in
     mv "$temp" "$MASK_FILE"
     info "Unmasked: $pkg"
     ;;
+ --ccache-stats)
+     show_ccache_stats
+     ;;
+ --ccache-clear)
+     clear_ccache
+     ;;
 
   *|-*|--*)
     echo "Error: Unknown command or option '$1'" >&2
