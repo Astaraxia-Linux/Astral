@@ -4,7 +4,7 @@ Astaraxia Package Manager, written entirely in POSIX shell, because writing it i
 
 Astral is a **source-based** package manager designed for extremely small, hand-rolled Linux systems like [Astaraxia](https://github.com/Astaraxia-Linux/Astaraxia/) (LFS, custom distros, experimental systems). The goal is a simple, transparent, hackable package manager with minimal assumptions.
 
-## Why Astral Exists (And Why It’s Standalone)
+## Why Astral Exists (And Why It's Standalone)
 
 Astral is intentionally designed to work **outside of Astaraxia**. This is not an accident.
 
@@ -77,13 +77,12 @@ It may work. It may also break things.
 * [Package Script Example](#package-script-example-package)
 * [Using Astral](#using-astral)
 * [Behavior Notes (Important)](#behavior-notes-important)
-* [TODO](#todo)
 * [Troubleshooting](#troubleshooting)
 * [FAQ](#faq)
 
-## CHANGES (v0.7.2.7 WYSI)
+## CHANGES (v0.7.3,0 Main)
 
-### New in v0.7.2.7
+### New in v0.7.3.0
 - **Transactional installs**: Packages now install atomically to staging, preventing partial installs
 - **File ownership database**: Fast O(1) file conflict detection via `.files.index`
 - **Security hardening**: Malicious script detection (blocks `rm -rf /`, fork bombs, disk destruction)
@@ -92,17 +91,16 @@ It may work. It may also break things.
 - **Per-command force** (`-f`): Override conflicts on a per-command basis
 - **Circular dependency detection**: Prevents infinite loops in dependency chains
 - **Safe directory handling**: No longer auto-deletes shared directories during removal
+- **Instant lock detection**: No more 30-second timeout when another instance is running
+- **Improved host dependency detection**: More accurate library detection with pkg-config support
 
 ### Breaking Changes
 - `depends` file now supports version constraints: `package >= version`
 - Old format (`package` only) still works for backward compatibility
-- dry-run            Dry-run mode: show what would happen without doing it.
 
 ---
 
-Many planned features are now done!
-
-### ✅ Implemented (v0.7.2.7)
+### ✅ Implemented (v0.7.3.0)
 * ✅ File ownership database (`.files.index`)
 * ✅ Conflict detection before install
 * ✅ Safe uninstall (never removes shared directories)
@@ -110,6 +108,9 @@ Many planned features are now done!
 * ✅ Security checks on build scripts
 * ✅ Atomic transactions
 * ✅ Dry-run mode
+* ✅ Instant lock detection with process info
+* ✅ Force install flag (`-f`)
+* ✅ Reverse-dependency tracking
 
 ### 🚧 Not implemented yet (but planned)
 * Signature checking / GPG verification
@@ -121,7 +122,7 @@ Many planned features are now done!
 
 ## Architecture Overview
 
-Astral’s pipeline:
+Astral's pipeline:
 
 ```
 recipe → build stage ($buildtmp) → package stage ($PKGDIR) → root install → DB register
@@ -136,13 +137,14 @@ recipe → build stage ($buildtmp) → package stage ($PKGDIR) → root install 
 /etc/astral/                  # Astral configs
 ```
 
-Planned DB structure:
+Current DB structure:
 
 ```
 /var/lib/astral/db/<pkg>/
-    version
-    files
-/var/lib/astral/db/index      # file → owner map (future)
+    version                   # Package version
+    files                     # List of installed files
+    depends                   # Runtime dependencies
+/var/lib/astral/db/.files.index   # file → owner map (implemented)
 ```
 
 ---
@@ -153,7 +155,7 @@ Planned DB structure:
 
 Place the script into `/usr/bin/astral`:
 
-```
+```bash
 curl -o /usr/bin/astral https://raw.githubusercontent.com/Astaraxia-Linux/Astral/main/astral
 chmod +x /usr/bin/astral
 ```
@@ -175,15 +177,21 @@ A valid recipe **requires** at least:
 ```
 version   # REQUIRED – version string
 build     # REQUIRED – build script
-package   # REQUIRED – packaging script
 ```
 
 Optional files:
 
 ```
-depends   # OPTIONAL – one package per line
-sources   # OPTIONAL – URLs for source tarballs
-info      # OPTIONAL – human-readable description
+package       # OPTIONAL – packaging script (recommended)
+depends       # OPTIONAL – runtime dependencies
+bdepends      # OPTIONAL – build-time dependencies
+rdepends      # OPTIONAL – runtime-only dependencies
+sources       # OPTIONAL – URLs for source tarballs
+checksums     # OPTIONAL – SHA256 checksums for sources
+info          # OPTIONAL – human-readable description
+post_install  # OPTIONAL – post-installation script
+post_remove   # OPTIONAL – post-removal script
+conflicts     # OPTIONAL – conflicting packages
 ```
 
 ### File Rules (Strict)
@@ -192,7 +200,7 @@ info      # OPTIONAL – human-readable description
 version — must contain ONLY the version string
 build   — MUST NOT write outside $buildtmp
 package — MUST NOT write outside $PKGDIR
-depends — plain list, no commas
+depends — plain list, no commas, supports version constraints
 sources — URLs only
 info    — free text
 ```
@@ -205,9 +213,11 @@ info    — free text
 example-app/
 ├── version
 ├── sources
+├── checksums
 ├── depends
 ├── build
 ├── package
+├── post_install
 └── info
 ```
 
@@ -223,14 +233,21 @@ example-app/
 https://example.com/example-app-1.0.0.tar.gz
 ```
 
-### Example: `depends`
-### Old Version (Still eh idk Supported i guess?)
+### Example: `checksums`
 
+```
+a1b2c3d4e5f6... example-app-1.0.0.tar.gz
+```
+
+### Example: `depends`
+
+**Old Format (Still Supported):**
 ```
 libc
 ncurses
 ```
-### New Version
+
+**New Format (Versioned Dependencies):**
 ```
 libc >= 2.38
 gcc >= 12.0.0
@@ -238,6 +255,7 @@ python <= 3.11
 zlib = 1.2.13
 ```
 
+Supported operators: `>=`, `<=`, `>`, `<`, `=`
 
 ---
 
@@ -250,8 +268,9 @@ set -e
 PKG_NAME="example-app"
 PKG_VERSION=$(cat version)
 
-wget -q "$(cat sources)" -O "${PKG_NAME}-${PKG_VERSION}.tar.gz"
-tar xf "${PKG_NAME}-${PKG_VERSION}.tar.gz"
+# Sources are automatically downloaded and extracted (Only if you have `sources` file in repo)
+# Can use Wget
+
 cd "${PKG_NAME}-${PKG_VERSION}"
 
 ./configure --prefix=/usr --sysconfdir=/etc
@@ -273,6 +292,7 @@ cd "$SOURCE_DIR"
 echo "Installing to $PKGDIR"
 make DESTDIR="$PKGDIR" install
 
+# Clean up unwanted files
 rm -rf "$PKGDIR/usr/share/doc/$PKG_NAME/examples" || true
 ```
 
@@ -280,28 +300,118 @@ rm -rf "$PKGDIR/usr/share/doc/$PKG_NAME/examples" || true
 
 ## Using Astral
 
-Compile from recipes:
+### Basic Operations
 
+**Install from AOHARU (Official Repo):**
 ```
-astral --Compile category/example-app
-```
-
-Remove (Leaves Depends):
-
-```
-astral --Remove example-app
+astral -S category/example-app
 ```
 
-RemoveDeps:
-
+**Install from ASURA (Community Repo):**
 ```
-astral --RemoveDep example-app
+astral -Sa category/example-app
 ```
 
-Sync repos (FROM [AOHARU](https://github.com/Izumi-Sonoka/AOHARU/tree/main)):
-
+**Compile from Local Recipe:**
 ```
-astral --Sync category/example-app
+astral -C category/example-app
+```
+
+**Remove Package (Keep Dependencies):**
+```
+astral -R example-app
+```
+
+**Remove Package + Orphaned Dependencies:**
+```
+astral -r example-app
+```
+
+**Remove All Orphaned Packages:**
+```
+astral --autoremove
+```
+
+### Query Operations
+
+**Search for Packages:**
+```
+astral -s keyword
+```
+
+**Show Package Info:**
+```
+astral -I example-app
+```
+
+**Show Dependency Tree:**
+```
+astral -D example-app
+```
+
+**Check System Dependencies:**
+```
+astral -Dc
+```
+
+**Preview Install (Dry Run):**
+```
+astral -p example-app
+```
+
+**Show Why Package is Installed:**
+```
+astral -w example-app
+```
+
+**List Explicitly Installed Packages:**
+```
+astral -W
+```
+
+**List All Installed Packages:**
+```
+astral -ll
+```
+
+### System Operations
+
+**Update Repository Index:**
+```
+astral -u              # Update AOHARU
+astral -u asura        # Update ASURA
+```
+
+**Upgrade All Packages:**
+```
+astral -UA
+```
+
+**Clean Uninstalled Recipe Cache:**
+```
+astral -Cc
+```
+
+**Rebuild File Index:**
+```
+astral -RI
+```
+
+### Advanced Options
+
+**Dry-Run Mode (Preview Only):**
+```
+astral -n -S package
+```
+
+**Force Override Conflicts:**
+```
+astral -f -S package
+```
+
+**Custom Install Root:**
+```
+astral --dir /mnt/sysroot -S package
 ```
 
 ---
@@ -313,13 +423,15 @@ astral --Sync category/example-app
 Current behavior:
 
 * Installs new version over the old one
-* Does **not** remove old files yet
-* No conflict resolution yet
+* Atomically replaces files to prevent partial upgrades
+* Conflict detection ensures file ownership tracking
 
 ### Dependencies
 
-* `depends` is respected during build
-* Removal of dependency packages is not fully safe until file ownership DB is implemented
+* `depends` is respected during build and runtime
+* Versioned dependencies are checked before installation
+* `bdepends` are build-time only, `rdepends` are runtime-only
+* Host-provided dependencies (system libraries) are automatically detected
 
 ### Safety Guarantees
 
@@ -327,17 +439,8 @@ Current behavior:
 * Package scripts cannot write to `/` directly
 * Only final install phase touches the root filesystem
 * All build work is isolated in `$buildtmp`
-
----
-
-## TODO
-
-* Repo update detection
-* Force install flag (`-f`)
-* Proper uninstall with reverse-dependency tracking
-* File ownership DB
-* Conflict detection
-* ~~- Rewrite in Rust for “speed”~~ (never happening)
+* Transactional installs prevent partial package states
+* Security checks block malicious patterns in build scripts
 
 ---
 
@@ -357,13 +460,23 @@ Current behavior:
 - Another package owns this file
 - Solution: Use `-f` to force override (dangerous!) or review the conflict
 
-**"Lock file exists"**
-- Another Astral instance is running
-- Solution: Wait, or remove stale lock: `rm -rf /var/lock/astral.lock.d`
+**"Another instance of astral is already running"**
+- Another Astral instance is running (shows PID and process name)
+- Solution: The error message shows which process is holding the lock
+- If it's a stale lock from a crashed process, Astral will auto-remove it
+- Manual removal (if needed): `rm -rf /var/lock/astral.lock.d`
 
 **"File index missing"**
 - First-time install or corrupted index
 - Solution: `astral -RI` to rebuild index
+
+**"Checksum mismatch"**
+- Downloaded source doesn't match expected checksum
+- Solution: Check if source was modified upstream, update `checksums` file if legitimate
+
+**"Version mismatch" for dependencies**
+- Installed dependency doesn't meet version requirement
+- Solution: Upgrade the dependency first: `astral -S dependency-name`
 
 ### Performance Issues
 
@@ -387,6 +500,7 @@ Current behavior:
 ---
 
 ## FAQ
+
 **Why not Rust?**  
 Because Astral is supposed to boot on systems that don't even have `bash` yet, let alone a 200-MB Rust toolchain.
 
@@ -397,10 +511,10 @@ Because if `/bin/sh` isn't working, you have bigger problems than package manage
 Because Python isn't installed in LFS unless *you* install it, and Astral must work before that.
 
 **Why not C?**  
-Because C buys performance Astral does not need, while adding complexity Astral explicitly avoids. A C implementation would require careful memory management, a build system, and platform-specific assumptions. Astral’s goal is transparency and hackability during early bootstrap, not raw speed.
+Because C buys performance Astral does not need, while adding complexity Astral explicitly avoids. A C implementation would require careful memory management, a build system, and platform-specific assumptions. Astral's goal is transparency and hackability during early bootstrap, not raw speed.
 
 **Why not Go?**  
-Because Go requires a full toolchain and runtime that does not exist during LFS bootstrap. Astral is designed to work *before* higher-level languages are available. Go is suitable for optional post-bootstrap tooling, but not for Astral’s core.
+Because Go requires a full toolchain and runtime that does not exist during LFS bootstrap. Astral is designed to work *before* higher-level languages are available. Go is suitable for optional post-bootstrap tooling, but not for Astral's core.
 
 **Will Astral break your system?**  
 Only if you intentionally ignore `$PKGDIR` rules, run untrusted recipes, or `rm -R glibc`.
@@ -408,24 +522,33 @@ Only if you intentionally ignore `$PKGDIR` rules, run untrusted recipes, or `rm 
 **Is Astral fast?**  
 Depends how fast you can type `make` and `curl`. It's POSIX shell - don't expect Rust-level performance.
 
-**Can I use Astral on Arch/Gentoo/Debian?**
+**Can I use Astral on Arch/Gentoo/Debian?**  
 Technically yes, but **don't**. Astral is designed for minimal systems where you control everything. On established distros, use the native package manager.
 
 **What's the difference between AOHARU and ASURA?**
 - **AOHARU**: Official, manually reviewed, trusted
 - **ASURA**: Community-contributed, use at your own risk
 
-**Do I need to review recipes?**
+**Do I need to review recipes?**  
 For AOHARU: No, we review them. For ASURA: **YES, ALWAYS.** Never run untrusted code as root.
 
-**Can Astral coexist with other package managers?**
+**Can Astral coexist with other package managers?**  
 Not recommended. File conflicts will occur. Choose one package manager per system.
 
-**Where's the binary package support?**
+**Where's the binary package support?**  
 Experimental/incomplete. Source-first design means binaries are an optimization, not core.
 
-**Why "Astral"?**
+**Why "Astral"?**  
 Because the original dev wanted something that sounded cool and had no taken GitHub repos. Also it fits the space/star theme of Astaraxia.
+
+**How does Astral handle virtual packages?**  
+Astral supports virtual packages through `/etc/astral/virtuals/`. A virtual like "compiler" can be satisfied by gcc, clang, or tcc. If any provider is installed or host-provided, the virtual is satisfied.
+
+**What about host-provided dependencies?**  
+Astral automatically detects system libraries via `ldconfig`, `pkg-config`, and binaries in `$PATH`. Mark additional host dependencies in `/etc/astral/make.conf` with `HOST_PROVIDED="gcc make libc"`.
+
+**Can I mask packages?**  
+Yes! Use `astral --mask package >= 2.0` to prevent installation of specific versions. Manage masks in `/etc/astral/package.mask`.
 
 ---
 
