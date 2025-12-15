@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.7.2.7 WYSI - minimal POSIX package manager for Astaraxia
+# Astral v0.7.3.0 Main - minimal POSIX package manager for Astaraxia
 # Modified: added Astral.conf for make!
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
@@ -52,7 +52,7 @@ err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 
-version="0.7.2.7 WYSI"
+version="0.7.3.0 Main"
 
 # --- CONFIG SYSTEM () ---
 CONFIG_FILE=${CONFIG_FILE:-/etc/astral/make.conf}
@@ -965,7 +965,6 @@ verify_checksums_and_extract() {
 }
 
 # --- BUILD / SYNC ---
-
 sync_pkg_recursive() {
     pkg="$1"
     FORCE_CMD=${2:-$FORCE_BUILD}
@@ -998,7 +997,7 @@ sync_pkg_recursive() {
     if recipe_path "$pkg" >/dev/null 2>&1; then 
         recipe_exists=1
         rpath=$(recipe_path "$pkg")
-        recipe_ver=$(cat "$rpath/version" 2>/dev/null || echo "unknown")
+        recipe_ver=$(cat "$rpath/version" 2>/dev/null || printf 'unknown')
         
         if is_masked "$pkg" "$recipe_ver"; then
             err "[$pkg] Package version $recipe_ver is MASKED. Check $MASK_FILE"
@@ -1037,6 +1036,27 @@ sync_pkg_recursive() {
     done < "$deps_tmp"
     rm -f "$deps_tmp"
 
+    # Check if already installed BEFORE building
+    installed_ver=$(get_installed_ver "$pkg")
+    rpath=$(recipe_path "$pkg")
+    recipe_ver=$(cat "$rpath/version" 2>/dev/null || printf 'unknown')
+    
+    if [ "$installed_ver" = "$recipe_ver" ] && [ "$FORCE_CMD" -eq 0 ]; then
+        info "Package '$pkg' already installed at version $installed_ver."
+        
+        # Add to world set if explicitly requested, with clear message
+        if [ "$IS_EXPLICIT" -eq 1 ]; then
+            if is_in_world "$pkg"; then
+                info "Package already in world set."
+            else
+                add_to_world "$pkg"
+                info "Added to world set (marked as explicitly installed)."
+            fi
+        fi
+        return 0
+    fi
+
+    # Actually build the package
     build_from_recipe "$pkg" "$FORCE_CMD"
     
     # Add to world set if explicitly requested
@@ -1050,14 +1070,30 @@ sync_pkg_asura() {
     pkg="$1"
     FORCE_CMD=${2:-0}
     IS_EXPLICIT=${3:-0}
+    
+    # Validate USER_RECIPE_RAW_URL is configured
+    if [ -z "$USER_RECIPE_RAW_URL" ]; then
+        err "USER_REPO_URL not configured in /etc/astral/make.conf. Cannot sync from ASURA."
+    fi
+    
     info "Syncing package '$pkg' from Asura (user repository)..."
 
+    # Save original URL and ensure restoration on exit
     old_url="$RECIPE_RAW_URL"
+    restore_url() {
+        RECIPE_RAW_URL="$old_url"
+    }
+    trap restore_url EXIT INT TERM
+    
+    # Switch to ASURA repo
     RECIPE_RAW_URL="$USER_RECIPE_RAW_URL"
-
+    
+    # Sync the package (errors will propagate)
     sync_pkg_recursive "$pkg" "$FORCE_CMD" "$IS_EXPLICIT"
-
-    RECIPE_RAW_URL="$old_url"
+    
+    # Cleanup trap and restore URL
+    trap - EXIT INT TERM
+    restore_url
 }
 
 build_from_recipe() {
@@ -1093,7 +1129,7 @@ build_from_recipe() {
             info "[DRY-RUN]   (none)"
         fi
         
-        # Run safety checks
+        # Only run safety checks in dry-run (no actual build)
         check_script_safety "$rpath/build" "$pkg"
         [ -f "$rpath/package" ] && check_script_safety "$rpath/package" "$pkg"
         
@@ -1101,11 +1137,7 @@ build_from_recipe() {
         return 0
     fi
     
-    # Run safety checks on build scripts
-    check_script_safety "$rpath/build" "$pkg"
-    [ -f "$rpath/package" ] && check_script_safety "$rpath/package" "$pkg"
-    [ -f "$rpath/post_install" ] && check_script_safety "$rpath/post_install" "$pkg"
-
+    # Check if already installed at same version (BEFORE safety checks)
     if [ "$installed_ver" != "none" ]; then
         if [ "$installed_ver" = "$recipe_ver" ] && [ "$FORCE_CMD" -eq 0 ]; then
             info "Package '$pkg' is already installed at version $installed_ver. Skipping."
@@ -1118,6 +1150,12 @@ build_from_recipe() {
     else
         info "Installing '$pkg' version $recipe_ver..."
     fi
+    
+    # Run safety checks on build scripts (only if we're actually building)
+    check_script_safety "$rpath/build" "$pkg"
+    [ -f "$rpath/package" ] && check_script_safety "$rpath/package" "$pkg"
+    [ -f "$rpath/post_install" ] && check_script_safety "$rpath/post_install" "$pkg"
+
     buildtmp="$TMPDIR/astral-build-$pkg-$$"
     mkdir -p "$buildtmp"
     if [ -d "$rpath" ]; then
@@ -1129,7 +1167,6 @@ build_from_recipe() {
 
     trap "rm -rf '$buildtmp'" EXIT
 
-    # download_sources "$rpath" "$buildtmp"
     verify_checksums_and_extract "$pkg" "$rpath" "$buildtmp"
 
     if [ -f "./build" ]; then
@@ -1178,9 +1215,10 @@ add_to_world() {
     
     # Add if not already present
     if ! grep -qxF "$pkg" "$WORLD_SET_FILE" 2>/dev/null; then
-        echo "$pkg" >> "$WORLD_SET_FILE"
-        info "Added '$pkg' to world set (explicitly installed)"
+        printf '%s\n' "$pkg" >> "$WORLD_SET_FILE"
+        return 0
     fi
+    return 1
 }
 
 # Check if package is in world set
