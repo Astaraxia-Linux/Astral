@@ -167,14 +167,19 @@ check_virtual() {
             [ -z "$provider" ] && continue
             case "$provider" in \#*) continue ;; esac
             
-            if is_pkg_installed "$provider" || check_host_dependency "$provider"; then
-                info "Virtual '$dep' satisfied by: $provider"
+            # Use optimized checks
+            if is_pkg_installed "$provider"; then
+                info "Virtual '$dep' satisfied by installed package: $provider"
+                return 0
+            fi
+            
+            if check_host_dependency "$provider"; then
+                info "Virtual '$dep' satisfied by host: $provider"
                 return 0
             fi
         done < "$VIRTUALS_DIR/$dep"
         
         # No provider found
-        warn "Virtual '$dep' not satisfied by any provider"
         return 1
     fi
     
@@ -776,48 +781,64 @@ check_host_dependency() {
     # Check if explicitly marked as host-provided in config
     case " $HOST_PROVIDED " in
         *" $dep "*)
-            info "[$dep] Explicitly marked as host-provided in config"
             return 0
             ;;
     esac
 
-    # If looks like a common binary name, check PATH
+    # Check if it's a binary in PATH
     if command -v "$dep" >/dev/null 2>&1; then
         return 0
     fi
 
-    # If dep looks like a library (lib*.so or ending with .so), check ldconfig and common lib dirs
-    # Normalize: if dep contains .so or lib prefix
+    # Library checking
     case "$dep" in
         lib*.so*|*.so*)
-            # try ldconfig -p if available
+            # Direct library name checking
+            lib_basename=$(basename "$dep")
+            
+            # Try ldconfig first (fastest)
             if command -v ldconfig >/dev/null 2>&1; then
-                if ldconfig -p 2>/dev/null | grep -q "$(printf '%s' "$dep" | sed 's/[]\/$*.^[]/\\&/g')"; then
+                if ldconfig -p 2>/dev/null | grep -qF "$lib_basename"; then
                     return 0
                 fi
             fi
-            # fallback to scanning /lib /usr/lib /usr/local/lib (and multiarch)
-            for p in /lib /usr/lib /usr/local/lib /lib64 /usr/local/lib64 /usr/lib64; do
-                if ls "$p" 2>/dev/null | grep -q "$(printf '%s' "$dep" | sed 's/[]\/$*.^[]/\\&/g')"; then
+            
+            # Search common library directories
+            for libdir in /lib /usr/lib /lib64 /usr/lib64 /usr/local/lib /usr/local/lib64; do
+                [ -d "$libdir" ] || continue
+                
+                # Use find for more accurate matching
+                if find "$libdir" -maxdepth 1 -name "$lib_basename*" 2>/dev/null | grep -q .; then
                     return 0
                 fi
             done
             ;;
         *)
-            # Not obviously a .so file; additionally check for lib<name>.so patterns
-            libname="lib${dep}.so"
-            if command -v ldconfig >/dev/null 2>&1; then
-                if ldconfig -p 2>/dev/null | grep -q "$libname"; then
-                    return 0
-                fi
-            fi
-            for p in /lib /usr/lib /usr/local/lib /lib64 /usr/lib64 /usr/local/lib64; do
-                if ls "$p" 2>/dev/null | grep -q "^${libname}" ; then
+            # Try as library with lib prefix
+            for libdir in /lib /usr/lib /lib64 /usr/lib64 /usr/local/lib /usr/local/lib64; do
+                [ -d "$libdir" ] || continue
+                
+                # Check for lib<name>.so*
+                if find "$libdir" -maxdepth 1 -name "lib${dep}.so*" 2>/dev/null | grep -q .; then
                     return 0
                 fi
             done
+            
+            # Try ldconfig with lib prefix
+            if command -v ldconfig >/dev/null 2>&1; then
+                if ldconfig -p 2>/dev/null | grep -qF "lib${dep}.so"; then
+                    return 0
+                fi
+            fi
             ;;
     esac
+    
+    # Check for pkg-config availability
+    if command -v pkg-config >/dev/null 2>&1; then
+        if pkg-config --exists "$dep" 2>/dev/null; then
+            return 0
+        fi
+    fi
 
     return 1
 }
@@ -1868,32 +1889,71 @@ acquire_lock() {
     lockdir=$(dirname "$LOCK_FILE")
     mkdir -p "$lockdir" 2>/dev/null || true
     
-    max_wait=30
-    wait_count=0
+    # Try to acquire lock immediately
+    if mkdir "$LOCK_FILE.d" 2>/dev/null; then
+        printf '%s\n' $ > "$LOCK_FILE.d/pid"
+        trap 'release_lock; exit 130' INT TERM
+        return 0
+    fi
     
-    while ! mkdir "$LOCK_FILE.d" 2>/dev/null; do
-        if [ $wait_count -ge $max_wait ]; then
-            # Check if lock is stale (process dead)
-            if [ -f "$LOCK_FILE.d/pid" ]; then
-                lock_pid=$(cat "$LOCK_FILE.d/pid")
-                if ! kill -0 "$lock_pid" 2>/dev/null; then
-                    warn "Removing stale lock (PID $lock_pid is dead)"
-                    rm -rf "$LOCK_FILE.d"
-                    continue
+    # Lock exists - check if process is alive
+    if [ -f "$LOCK_FILE.d/pid" ]; then
+        lock_pid=$(cat "$LOCK_FILE.d/pid" 2>/dev/null || printf '')
+        
+        if [ -n "$lock_pid" ]; then
+            # Check if process exists
+            if kill -0 "$lock_pid" 2>/dev/null; then
+                # Process is alive - get process info
+                if command -v ps >/dev/null 2>&1; then
+                    process_info=$(ps -p "$lock_pid" -o comm= 2>/dev/null || printf 'unknown')
+                    err "Another instance of astral is already running (PID: $lock_pid, Process: $process_info)"
+                else
+                    err "Another instance of astral is already running (PID: $lock_pid)"
+                fi
+            else
+                # Process is dead - remove stale lock
+                warn "Removing stale lock from dead process (PID: $lock_pid)"
+                rm -rf "$LOCK_FILE.d"
+                
+                # Try again
+                if mkdir "$LOCK_FILE.d" 2>/dev/null; then
+                    printf '%s\n' $ > "$LOCK_FILE.d/pid"
+                    trap 'release_lock; exit 130' INT TERM
+                    return 0
+                else
+                    err "Failed to acquire lock after removing stale lock"
                 fi
             fi
-            err "Another instance of astral is running. Please wait or remove $LOCK_FILE.d if stale."
+        else
+            # PID file is empty or unreadable - remove corrupt lock
+            warn "Removing corrupt lock (no PID found)"
+            rm -rf "$LOCK_FILE.d"
+            
+            # Try again
+            if mkdir "$LOCK_FILE.d" 2>/dev/null; then
+                printf '%s\n' $ > "$LOCK_FILE.d/pid"
+                trap 'release_lock; exit 130' INT TERM
+                return 0
+            else
+                err "Failed to acquire lock after removing corrupt lock"
+            fi
         fi
-        info "Waiting for lock... ($wait_count/$max_wait)"
-        sleep 1
-        wait_count=$((wait_count + 1))
-    done
-    
-    echo $$ > "$LOCK_FILE.d/pid"
-    
-    # Setup signal handlers to release lock
-    trap 'release_lock; exit 130' INT TERM
+    else
+        # Lock directory exists but no PID file
+        warn "Removing incomplete lock (no PID file)"
+        rm -rf "$LOCK_FILE.d"
+        
+        # Try again
+        if mkdir "$LOCK_FILE.d" 2>/dev/null; then
+            printf '%s\n' $ > "$LOCK_FILE.d/pid"
+            trap 'release_lock; exit 130' INT TERM
+            return 0
+        else
+            err "Failed to acquire lock after removing incomplete lock"
+        fi
+    fi
 }
+
 release_lock() {
     rm -rf "$LOCK_FILE.d" 2>/dev/null || true
 }
