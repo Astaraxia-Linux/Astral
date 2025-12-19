@@ -1,1 +1,1 @@
-# THIS IS JUST THE ***UNUSED*** REPO, THE REAL REPO IS ***[AOHARU](https://github.com/Izumi-Sonoka/AOHARU)***
+# THIS IS A MOCK REPO, THE OFFICIAL ASTRAL REPOSITORY IS *[AOHARU](https://github.com/Izumi-Sonoka/AOHARU)*
