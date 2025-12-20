@@ -80,7 +80,7 @@ It may work. It may also break things.
 * [Troubleshooting](#troubleshooting)
 * [FAQ](#faq)
 
-## CHANGES (v0.7.4.0 Main)
+## Changes (v0.7.4.0 Main)
 
 ### New in v0.7.4.0
 - Added ccache.. yeah thats it
