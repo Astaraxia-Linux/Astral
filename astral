@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.7.5.2 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.7.6.0 Main - minimal POSIX package manager for Astaraxia
 # Modified: added Astral.conf for make!
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
@@ -52,7 +52,7 @@ err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 
-version="0.7.5.2 Main"
+version="0.7.6.0 Main"
 
 # --- CONFIG SYSTEM () ---
 CONFIG_FILE=${CONFIG_FILE:-/etc/astral/make.conf}
@@ -207,7 +207,7 @@ check_virtual() {
             fi
             
             # Then check host-provided (with improved detection)
-            if check_ "$provider"; then
+            if check_host_dependency "$provider"; then
                 info "  ✓ Virtual '$dep' satisfied by host: $provider"
                 return 0
             fi
@@ -1332,6 +1332,7 @@ build_from_recipe() {
 
     trap "rm -rf '$buildtmp'" EXIT
 
+    download_sources "$rpath" "$buildtmp"
     verify_checksums_and_extract "$pkg" "$rpath" "$buildtmp"
 
     if [ -f "./build" ]; then
@@ -2094,7 +2095,7 @@ acquire_lock() {
     
     # Try to acquire lock immediately
     if mkdir "$LOCK_FILE.d" 2>/dev/null; then
-        printf '%s\n' $ > "$LOCK_FILE.d/pid"
+        printf '%s\n' $$ > "$LOCK_FILE.d/pid"
         trap 'release_lock; exit 130' INT TERM
         return 0
     fi
@@ -2120,7 +2121,7 @@ acquire_lock() {
                 
                 # Try again
                 if mkdir "$LOCK_FILE.d" 2>/dev/null; then
-                    printf '%s\n' $ > "$LOCK_FILE.d/pid"
+                    printf '%s\n' $$ > "$LOCK_FILE.d/pid"
                     trap 'release_lock; exit 130' INT TERM
                     return 0
                 else
@@ -2134,7 +2135,7 @@ acquire_lock() {
             
             # Try again
             if mkdir "$LOCK_FILE.d" 2>/dev/null; then
-                printf '%s\n' $ > "$LOCK_FILE.d/pid"
+                printf '%s\n' $$ > "$LOCK_FILE.d/pid"
                 trap 'release_lock; exit 130' INT TERM
                 return 0
             else
@@ -2148,7 +2149,7 @@ acquire_lock() {
         
         # Try again
         if mkdir "$LOCK_FILE.d" 2>/dev/null; then
-            printf '%s\n' $ > "$LOCK_FILE.d/pid"
+            printf '%s\n' $$ > "$LOCK_FILE.d/pid"
             trap 'release_lock; exit 130' INT TERM
             return 0
         else
