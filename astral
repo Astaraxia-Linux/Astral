@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.7.7.0 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.7.6.0 Main - minimal POSIX package manager for Astaraxia
 # Modified: added Astral.conf for make!
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
@@ -52,7 +52,7 @@ err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 
-version="0.7.7.0 Main"
+version="0.7.6.0 Main"
 
 # --- CONFIG SYSTEM () ---
 CONFIG_FILE=${CONFIG_FILE:-/etc/astral/make.conf}
@@ -1185,25 +1185,19 @@ sync_pkg_recursive() {
     while IFS= read -r dep_pkg; do
         dep_pkg=$(printf '%s' "$dep_pkg" | tr -d '[:space:]')
         [ -z "$dep_pkg" ] && continue
-
+        
         case " $VISITED_PACKAGES " in
             *" $dep_pkg "*)
                 rm -f "$deps_tmp"
                 err "[$pkg] Would create circular dependency with: $dep_pkg"
                 ;;
         esac
-    
-        # FIX: Strip category from dep name for host check
-        dep_basename=$(basename "$dep_pkg")
-    
-        # Check if dep needs to be built
-        if ! is_pkg_installed "$dep_basename" && ! check_host_dependency "$dep_basename"; then
-            # Recursively install dependencies (not explicit)
-            sync_pkg_recursive "$dep_pkg" "$FORCE_CMD" 0 || {
-                rm -f "$deps_tmp"
-                err "[$pkg] Failed to install dependency: $dep_pkg"
-            }
-        fi
+        
+        # Recursively install dependencies (not explicit)
+        sync_pkg_recursive "$dep_pkg" "$FORCE_CMD" 0 || {
+            rm -f "$deps_tmp"
+            err "[$pkg] Failed to install dependency: $dep_pkg"
+        }
     done < "$deps_tmp"
     rm -f "$deps_tmp"
 
