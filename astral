@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.7.5.1 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.7.5.2 Main - minimal POSIX package manager for Astaraxia
 # Modified: added Astral.conf for make!
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
@@ -52,7 +52,7 @@ err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 
-version="0.7.5.1 Main"
+version="0.7.5.2 Main"
 
 # --- CONFIG SYSTEM () ---
 CONFIG_FILE=${CONFIG_FILE:-/etc/astral/make.conf}
@@ -880,33 +880,18 @@ check_shared_library() {
     
     # Method 1: ldconfig cache (fastest, but might be stale)
     if command -v ldconfig >/dev/null 2>&1; then
-        # Try exact match first
-        if ldconfig -p 2>/dev/null | grep -qF "$lib_pattern"; then
-            return 0
-        fi
-        
-        # Try with .so suffix variations
-        if ldconfig -p 2>/dev/null | grep -qE "${lib_pattern}\.so(\.[0-9]+)*"; then
+        # ONLY match actual .so files, not .a or other junk
+        if ldconfig -p 2>/dev/null | grep -qE "${lib_pattern}\.so(\.[0-9]+)*[[:space:]]"; then
             return 0
         fi
     fi
     
-    # Method 2: Direct filesystem search (slower but accurate)
+    # Method 2: Direct filesystem search - ONLY .so files
     for libdir in /lib /usr/lib /lib64 /usr/lib64 /usr/local/lib /usr/local/lib64; do
         [ -d "$libdir" ] || continue
         
-        # Check for exact match
-        if [ -e "$libdir/$lib_pattern" ] || [ -L "$libdir/$lib_pattern" ]; then
-            return 0
-        fi
-        
-        # Check for .so suffix variations
-        if find "$libdir" -maxdepth 1 -name "${lib_pattern}.so*" 2>/dev/null | grep -q .; then
-            return 0
-        fi
-        
-        # Check for versioned variants (e.g., libfoo.so.1.2.3)
-        if find "$libdir" -maxdepth 1 -name "${lib_pattern}*" -type f -o -type l 2>/dev/null | grep -q .; then
+        # STRICT: Only match .so or .so.X.Y.Z files
+        if find "$libdir" -maxdepth 1 \( -name "${lib_pattern}.so" -o -name "${lib_pattern}.so.*" \) 2>/dev/null | grep -q .; then
             return 0
         fi
     done
