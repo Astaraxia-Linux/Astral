@@ -2422,6 +2422,7 @@ case "$1" in
  --host-deps)
      show_host_deps
      exit 0
+     ;;
 
 --unmask)
     [ $# -gt 1 ] || err "package name required"
