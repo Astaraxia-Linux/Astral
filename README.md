@@ -70,6 +70,7 @@ It may work. It may also break things.
 
 * [CHANGES](#changes)
 * [Features](#features-current-state)
+* [Versions](#version)
 * [Architecture Overview](#architecture-overview)
 * [Installation](#installation)
 * [Recipe Format](#recipe-format)
@@ -105,6 +106,22 @@ It may work. It may also break things.
 * Download resume for interrupted transfers
 * Binary package caching (started, incomplete)
 * Delta upgrades
+
+## Versioning
+
+Astral uses `0.MINOR.PATCH.HOTFIX` versioning:
+- **0.x**: Pre-release (until stable 1.0.0)
+- **MINOR**: Game-changing features (file ownership DB, atomic installs, etc.)
+- **PATCH**: Improvements and additions
+- **HOTFIX**: Bug fixes and quick patches
+
+Example: `0.7.4.1`
+- 0 = Pre-release
+- 7 = 7th generation of features
+- 4 = 4th patch release
+- 1 = 1st hotfix
+
+Once Astral reaches production stability, versioning will switch to SemVer.
 
 ## Architecture Overview
 
