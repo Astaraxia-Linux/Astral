@@ -69,7 +69,7 @@ It may work. It may also break things.
 # Table Of Content
 
 * [CHANGES](#changes)
-* [Versioning](#versioninh)
+* [Versioning](#versioning)
 * [Architecture Overview](#architecture-overview)
 * [Installation](#installation)
 * [Recipe Format](#recipe-format)
