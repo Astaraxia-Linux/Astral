@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.7.6.1 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.7.6.2 BDGE - minimal POSIX package manager for Astaraxia
 # Modified: added Astral.conf for make!
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
@@ -52,7 +52,7 @@ err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 
-version="0.7.6.1 Main"
+version="0.7.6.2 BDGE"
 
 # --- CONFIG SYSTEM () ---
 CONFIG_FILE=${CONFIG_FILE:-/etc/astral/make.conf}
@@ -1169,7 +1169,6 @@ sync_pkg_recursive() {
     info "Checking dependencies for $pkg..."
     
     deps_tmp=$(mktemp "$TMPDIR/astral-deps.XXXXXX") || err "mktemp failed for dependency resolution"
-    trap "rm -f '$deps_tmp'" RETURN
     get_pkg_deps "$pkg" > "$deps_tmp"
     
     while IFS= read -r dep_pkg; do
@@ -1592,7 +1591,7 @@ update_files_index_for_pkg() {
     
     # Simple lock with timeout
     lock_dir="$FILES_INDEX.lock"
-    max_wait=30  # Increased from 10
+    max_wait=30
     wait_count=0
     
     while ! mkdir "$lock_dir" 2>/dev/null; do
@@ -1600,12 +1599,9 @@ update_files_index_for_pkg() {
             warn "Timeout waiting for file index lock, skipping update"
             return 1
         fi
-        sleep 0.2  # Increased from 0.1
+        sleep 0.2
         wait_count=$((wait_count + 1))
     done
-    
-    # Ensure lock is released on any exit
-    trap "rmdir '$lock_dir' 2>/dev/null || true" RETURN
     
     # Remove old entries for this package
     temp=$(mktemp)
@@ -1621,8 +1617,8 @@ update_files_index_for_pkg() {
         done < "$pkgdir/files"
     fi
     
-    # Release lock
-    rmdir "$lock_dir"
+    # Release lock (always runs)
+    rmdir "$lock_dir" 2>/dev/null || true
 }
 
 upgrade_all() {
