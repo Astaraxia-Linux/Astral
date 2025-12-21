@@ -1161,6 +1161,8 @@ sync_pkg_recursive() {
         fi
     fi
 
+    info "DEBUG: Still processing $pkg, IS_EXPLICIT=$IS_EXPLICIT" # ADD THIS
+    
     # === FETCH RECIPE IF NEEDED ===
     recipe_exists=0
     if recipe_path "$pkg" >/dev/null 2>&1; then 
