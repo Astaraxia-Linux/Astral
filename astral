@@ -1127,7 +1127,7 @@ verify_checksums_and_extract() {
 sync_pkg_recursive() {
     pkg="$1"
     FORCE_CMD=${2:-$FORCE_BUILD}
-    IS_EXPLICIT=${3:-0}  # Track if this is explicitly requested
+    IS_EXPLICIT=${3:-0}
 
     pkg=$(sanitize_pkg_name "$pkg")
 
@@ -1140,23 +1140,33 @@ sync_pkg_recursive() {
     
     VISITED_PACKAGES="$VISITED_PACKAGES $pkg"
 
-    # Check virtuals first
-    if check_virtual "$pkg"; then
-        return 0
-    fi
-
-    # Check if masked
-    recipe_exists=0
-    if recipe_path "$pkg" >/dev/null 2>&1; then 
-        recipe_exists=1
-        rpath=$(recipe_path "$pkg")
-        recipe_ver=$(cat "$rpath/version" 2>/dev/null || printf 'unknown')
+    # === EARLY EXIT CONDITIONS (for dependencies only) ===
+    if [ "$IS_EXPLICIT" -eq 0 ]; then
+        # Check if already installed
+        if is_pkg_installed "$pkg"; then
+            installed_ver=$(get_installed_ver "$pkg")
+            info "Dependency '$pkg' already installed ($installed_ver). Skipping."
+            return 0
+        fi
         
-        if is_masked "$pkg" "$recipe_ver"; then
-            err "[$pkg] Package version $recipe_ver is MASKED. Check $MASK_FILE"
+        # Check virtuals
+        if check_virtual "$pkg"; then
+            return 0
+        fi
+        
+        # Check host dependency
+        if [ "$FORCE_CMD" -eq 0 ] && check_host_dependency "$pkg"; then
+            info "Dependency '$pkg' satisfied by host. Skipping build/fetch."
+            return 0
         fi
     fi
 
+    # === FETCH RECIPE IF NEEDED ===
+    recipe_exists=0
+    if recipe_path "$pkg" >/dev/null 2>&1; then 
+        recipe_exists=1
+    fi
+    
     if [ "$recipe_exists" -eq 0 ]; then
         if ! fetch_remote_recipe "$pkg"; then
             err "[$pkg] Recipe not found in repository and not provided by host."
@@ -1165,18 +1175,20 @@ sync_pkg_recursive() {
     
     recipe_dir=$(recipe_path "$pkg") || err "[$pkg] Recipe not found after fetch."
 
+    # Check if masked
+    rpath=$(recipe_path "$pkg")
+    recipe_ver=$(cat "$rpath/version" 2>/dev/null || printf 'unknown')
+    
+    if is_masked "$pkg" "$recipe_ver"; then
+        err "[$pkg] Package version $recipe_ver is MASKED. Check $MASK_FILE"
+    fi
+
+    # === RESOLVE DEPENDENCIES RECURSIVELY ===
     info "Checking dependencies for $pkg..."
     
     deps_tmp=$(mktemp "$TMPDIR/astral-deps.XXXXXX") || err "mktemp failed for dependency resolution"
     get_pkg_deps "$pkg" > "$deps_tmp"
-
-    echo "DEBUG: ===== SYNC_PKG_RECURSIVE DEBUG =====" >&2
-    echo "DEBUG: Package: $pkg" >&2
-    echo "DEBUG: FORCE_CMD: $FORCE_CMD" >&2
-    echo "DEBUG: IS_EXPLICIT: $IS_EXPLICIT" >&2
-    echo "DEBUG: VISITED_PACKAGES: $VISITED_PACKAGES" >&2
-
-
+    
     while IFS= read -r dep_pkg; do
         dep_pkg=$(printf '%s' "$dep_pkg" | tr -d '[:space:]')
         [ -z "$dep_pkg" ] && continue
@@ -1188,26 +1200,8 @@ sync_pkg_recursive() {
                 ;;
         esac
         
-        # === CHECK ALL SKIP CONDITIONS BEFORE RECURSING ===
-        
-        # 1. Already installed?
-        if is_pkg_installed "$dep_pkg"; then
-            info "Dependency '$dep_pkg' already installed. Skipping."
-            continue  # SKIP recursion
-        fi
-        
-        # 2. Virtual package satisfied?
-        if check_virtual "$dep_pkg"; then
-            continue  # SKIP recursion (check_virtual logs itself)
-        fi
-        
-        # 3. Host-provided?
-        if check_host_dependency "$dep_pkg"; then
-            info "Dependency '$dep_pkg' satisfied by host. Skipping build/fetch."
-            continue  # SKIP recursion - THIS IS THE KEY FIX!
-        fi
-        
-        # === ONLY RECURSE IF NONE OF THE ABOVE ===
+        # Recursively install dependency (NOT explicit)
+        # The dependency will check its own host/virtual/installed status
         sync_pkg_recursive "$dep_pkg" "$FORCE_CMD" 0 || {
             rm -f "$deps_tmp"
             err "[$pkg] Failed to install dependency: $dep_pkg"
@@ -1215,27 +1209,8 @@ sync_pkg_recursive() {
     done < "$deps_tmp"
     rm -f "$deps_tmp"
 
-    # === FETCH RECIPE IF NOT EXISTS ===
-    recipe_exists=0
-    if recipe_path "$pkg" >/dev/null 2>&1; then 
-        recipe_exists=1
-    fi
-    
-    if [ "$recipe_exists" -eq 0 ]; then
-        info "Recipe for '$pkg' not found locally, fetching..."
-        if ! fetch_remote_recipe "$pkg"; then
-            err "[$pkg] Recipe not found in repository and not provided by host."
-        fi
-    fi
-    
-    recipe_dir=$(recipe_path "$pkg") || err "[$pkg] Recipe not found after fetch."
-    
-    # === CHECK IF ALREADY INSTALLED ===
+    # === CHECK IF MAIN PACKAGE ALREADY INSTALLED ===
     installed_ver=$(get_installed_ver "$pkg")
-    rpath=$(recipe_path "$pkg")
-    recipe_ver=$(cat "$rpath/version" 2>/dev/null || printf 'unknown')
-    
-    info "[$pkg] Installed: $installed_ver, Available: $recipe_ver"
     
     if [ "$installed_ver" = "$recipe_ver" ] && [ "$FORCE_CMD" -eq 0 ]; then
         info "Package '$pkg' already installed at version $installed_ver."
@@ -1252,8 +1227,8 @@ sync_pkg_recursive() {
         return 0
     fi
 
-    # === ACTUALLY BUILD ===
-    info "[$pkg] Building package..."
+    # === BUILD THE PACKAGE ===
+    info "[$pkg] Building version $recipe_ver..."
     
     # Mark if installing ccache to suppress warnings
     if [ "$pkg" = "ccache" ] || [ "$pkg" = "dev-util/ccache" ]; then
