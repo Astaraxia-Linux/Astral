@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v0.7.7.1 BDGE - minimal POSIX package manager for Astaraxia
+# Astral v0.7.7.2 BDGE - minimal POSIX package manager for Astaraxia
 # Modified: added Astral.conf for make!
-# V: 0 - Major . 7 - Minor . 7 - Patches . 1 - hotfixes
+# V: 0 - Major . 7 - Minor . 7 - Patches . 2 - hotfixes
 
-version="0.7.7.1 BDGE"
+version="0.7.7.2 BDGE"
 
 # Set strict execution environment, meow~
 set -eu
@@ -1145,11 +1145,11 @@ sync_pkg_recursive() {
         return 0
     fi
 
-    # Check host dependency
-    if [ "$FORCE_CMD" -eq 0 ] && check_host_dependency "$pkg"; then
-        info "Dependency '$pkg' satisfied by host. Skipping build/fetch."
-        return 0
-    fi
+    /*# Check host dependency - Disabled
+    *if [ "$FORCE_CMD" -eq 0 ] && check_host_dependency "$pkg"; then
+    *    info "Dependency '$pkg' satisfied by host. Skipping build/fetch."
+    *    return 0
+    */fi
 
     # Check if masked
     recipe_exists=0
@@ -1194,7 +1194,22 @@ sync_pkg_recursive() {
                 ;;
         esac
         
-        # Recursively install dependencies (not explicit)
+        # Check if dependency is satisfied (installed, virtual, or host-provided)
+        if is_pkg_installed "$dep_pkg"; then
+            info "Dependency '$dep_pkg' already installed. Skipping."
+            continue
+        fi
+        
+        if check_virtual "$dep_pkg"; then
+            continue  # Already logged by check_virtual
+        fi
+        
+        if check_host_dependency "$dep_pkg"; then
+            info "Dependency '$dep_pkg' satisfied by host. Skipping build/fetch."
+            continue  # THIS WAS MISSING - it was falling through!
+        fi
+        
+        # Only recurse if NOT satisfied above
         sync_pkg_recursive "$dep_pkg" "$FORCE_CMD" 0 || {
             rm -f "$deps_tmp"
             err "[$pkg] Failed to install dependency: $dep_pkg"
