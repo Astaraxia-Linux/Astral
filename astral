@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v1.0.0.1 Main - minimal POSIX package manager for Astaraxia
+# Astral v1.0.0.2 Main - minimal POSIX package manager for Astaraxia
 # Now supports 2 Recipes format :3
-# V: 1 - Major . 0 - Minor . 0 - Patches . 1 - hotfixes
+# V: 1 - Major . 0 - Minor . 0 - Patches . 2 - hotfixes
 
-version="1.0.0.1 Main"
+version="1.0.0.2 Main"
 
 # Set strict execution environment, meow~
 set -eu
@@ -32,7 +32,7 @@ LOG_DIR=${LOG_DIR:-/var/log/astral}
 REPO_URL=${REPO_URL:-https://izumi-sonoka.github.io/AOHARU/}
 RECIPE_RAW_URL=${RECIPE_RAW_URL:-https://raw.githubusercontent.com/Izumi-Sonoka/AOHARU/main}
 USER_REPO_URL=${USER_REPO_URL:-https://codeberg.org/Izumi/ASURA/raw/branch/main}
-USER_RECIPE_RAW_URL=${USER_RECIPE_RAW_URL:-$USER_REPO_URL/recipes}
+USER_RECIPE_RAW_URL=${USER_RECIPE_RAW_URL:-$USER_REPO_URL}
 
 # --- SELF-UPDATE URLs ---
 SELF_UPDATE_URL_MAIN=${SELF_UPDATE_URL_MAIN:-https://raw.githubusercontent.com/Astaraxia-Linux/Astral/refs/heads/main/astral}
