@@ -1145,11 +1145,11 @@ sync_pkg_recursive() {
         return 0
     fi
 
-    /*# Check host dependency - Disabled
-    *if [ "$FORCE_CMD" -eq 0 ] && check_host_dependency "$pkg"; then
-    *    info "Dependency '$pkg' satisfied by host. Skipping build/fetch."
-    *    return 0
-    */fi
+    # Check host dependency - Disabled
+    #if [ "$FORCE_CMD" -eq 0 ] && check_host_dependency "$pkg"; then
+    #    info "Dependency '$pkg' satisfied by host. Skipping build/fetch."
+    #    return 0
+    #/fi
 
     # Check if masked
     recipe_exists=0
