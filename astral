@@ -1,5 +1,5 @@
 #!/bin/sh
-# Astral v0.7.6.0 Main - minimal POSIX package manager for Astaraxia
+# Astral v0.7.6.1 Main - minimal POSIX package manager for Astaraxia
 # Modified: added Astral.conf for make!
 # V: X- Major . X - Minor . X - Patches . X - hotfixes
 
@@ -52,7 +52,7 @@ err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 
-version="0.7.6.0 Main"
+version="0.7.6.1 Main"
 
 # --- CONFIG SYSTEM () ---
 CONFIG_FILE=${CONFIG_FILE:-/etc/astral/make.conf}
@@ -467,8 +467,9 @@ version_compare() {
         v2_remaining=$(printf '%s' "$v2_remaining" | cut -d' ' -f2-)
         
         # Prevent infinite loop
-        [ "$v1_remaining" = "$v1_parts" ] && break
-        [ "$v2_remaining" = "$v2_parts" ] && break
+        [ "$v1_remaining" = "$v1_parts" ] && [ "$v2_remaining" = "$v2_parts" ] && break
+        v1_parts="$v1_remaining"
+        v2_parts="$v2_remaining"
     done
     
     # Fallback: equal
@@ -694,23 +695,11 @@ atomic_install() {
     # ATOMIC COMMIT: Move files and DB together
     info "[$pkg] Committing installation atomically..."
     
-    # Move files from staging to real root
-    ( cd "$staging_root" && find . -mindepth 1 -print ) | while IFS= read -r file; do
-        file=$(printf '%s' "$file" | sed 's|^\./||')
-        src="$staging_root/$file"
-        dst="$INSTALL_ROOT/$file"
-        
-        if [ -d "$src" ]; then
-            mkdir -p "$dst" 2>/dev/null || true
-        elif [ -f "$src" ] || [ -L "$src" ]; then
-            mkdir -p "$(dirname "$dst")"
-            # Atomic move (rename is atomic on same filesystem)
-            mv -f "$src" "$dst" || {
-                rm -rf "$staging_root" "$db_staging"
-                err "[$pkg] Failed to install $file atomically"
-            }
-        fi
-    done
+    # Move files from staging to real root (atomically)
+    if ! ( cd "$staging_root" && tar cf - . ) | ( cd "$INSTALL_ROOT" && tar xf - ); then
+        rm -rf "$staging_root" "$db_staging"
+        err "[$pkg] Failed to install files atomically"
+    fi
     
     # Finally, commit DB (last step - if this fails files are there but untracked)
     mkdir -p "$db_target"
@@ -1180,6 +1169,7 @@ sync_pkg_recursive() {
     info "Checking dependencies for $pkg..."
     
     deps_tmp=$(mktemp "$TMPDIR/astral-deps.XXXXXX") || err "mktemp failed for dependency resolution"
+    trap "rm -f '$deps_tmp'" RETURN
     get_pkg_deps "$pkg" > "$deps_tmp"
     
     while IFS= read -r dep_pkg; do
@@ -1236,29 +1226,19 @@ sync_pkg_asura() {
     FORCE_CMD=${2:-0}
     IS_EXPLICIT=${3:-0}
     
-    # Validate USER_RECIPE_RAW_URL is configured
+    # Validate USER_RECIPE_RAW_URL
     if [ -z "$USER_RECIPE_RAW_URL" ]; then
-        err "USER_REPO_URL not configured in /etc/astral/make.conf. Cannot sync from ASURA."
+        err "USER_REPO_URL not configured. Cannot sync from ASURA."
     fi
     
-    info "Syncing package '$pkg' from Asura (user repository)..."
+    info "Syncing '$pkg' from ASURA..."
 
-    # Save original URL and ensure restoration on exit
-    old_url="$RECIPE_RAW_URL"
-    restore_url() {
-        RECIPE_RAW_URL="$old_url"
-    }
-    trap restore_url EXIT INT TERM
-    
-    # Switch to ASURA repo
-    RECIPE_RAW_URL="$USER_RECIPE_RAW_URL"
-    
-    # Sync the package (errors will propagate)
-    sync_pkg_recursive "$pkg" "$FORCE_CMD" "$IS_EXPLICIT"
-    
-    # Cleanup trap and restore URL
-    trap - EXIT INT TERM
-    restore_url
+    # Use subshell to isolate URL change
+    (
+        RECIPE_RAW_URL="$USER_RECIPE_RAW_URL"
+        export RECIPE_RAW_URL
+        sync_pkg_recursive "$pkg" "$FORCE_CMD" "$IS_EXPLICIT"
+    ) || err "Failed to sync from ASURA"
 }
 
 build_from_recipe() {
@@ -1580,8 +1560,8 @@ get_file_owner() {
     
     # Fast path: use index if it exists
     if [ -f "$FILES_INDEX" ]; then
-        result=$(grep -F "^${file_normalized}|" "$FILES_INDEX" 2>/dev/null | head -n1 | cut -d'|' -f2)
-        if [ -n "$result" ]; then
+        result=$(awk -F'|' -v f="$file_normalized" '$1 == f {print $2; exit}' "$FILES_INDEX" 2>/dev/null)
+        if [ -n "$result" ] && [ "$result" != "" ]; then
             printf '%s' "$result"
             return 0
         fi
@@ -1610,16 +1590,22 @@ update_files_index_for_pkg() {
     
     [ ! -f "$FILES_INDEX" ] && return 0
     
-    # Simple lock using directory (atomic)
+    # Simple lock with timeout
     lock_dir="$FILES_INDEX.lock"
-    max_wait=10
+    max_wait=30  # Increased from 10
     wait_count=0
     
     while ! mkdir "$lock_dir" 2>/dev/null; do
-        [ $wait_count -ge $max_wait ] && return 1
-        sleep 0.1
+        if [ $wait_count -ge $max_wait ]; then
+            warn "Timeout waiting for file index lock, skipping update"
+            return 1
+        fi
+        sleep 0.2  # Increased from 0.1
         wait_count=$((wait_count + 1))
     done
+    
+    # Ensure lock is released on any exit
+    trap "rmdir '$lock_dir' 2>/dev/null || true" RETURN
     
     # Remove old entries for this package
     temp=$(mktemp)
@@ -1746,41 +1732,51 @@ removedep_pkg() {
     pkg="$1"
     initial_pkg_path=$(resolve_installed_path "$pkg") || err "package $pkg not installed"
 
-    # Capture the initial package's declared dependencies (from DB or recipe)
+    # Capture declared dependencies
     declared_deps=$(get_pkg_deps "$initial_pkg_path" || true)
 
-    # Remove only the initial package
+    # Remove initial package
     remove_pkg_only "$initial_pkg_path"
 
-    # For safety: only consider deps that were declared by the removed package.
-    # Remove only those deps that are now orphans (no other package requires them).
+    # Process dependencies with queue to avoid nested loops
     if [ -n "$declared_deps" ]; then
-        printf '%s\n' "$declared_deps" | while IFS= read -r dep; do
-            dep=$(printf '%s' "$dep" | tr -d '[:space:]')
-            [ -z "$dep" ] && continue
-            # If host provides it, skip removal
-            if check_host_dependency "$dep"; then
-                info "Dependency '$dep' provided by host; not removing."
+        dep_queue="$declared_deps"
+        processed=""
+        
+        while [ -n "$dep_queue" ]; do
+            # Get first dep from queue
+            current_dep=$(printf '%s\n' "$dep_queue" | head -n1)
+            dep_queue=$(printf '%s\n' "$dep_queue" | tail -n +2)
+            
+            current_dep=$(printf '%s' "$current_dep" | tr -d '[:space:]')
+            [ -z "$current_dep" ] && continue
+            
+            # Skip if already processed
+            case " $processed " in
+                *" $current_dep "*) continue ;;
+            esac
+            processed="$processed $current_dep"
+            
+            # Check if host provides it
+            if check_host_dependency "$current_dep"; then
+                info "Dependency '$current_dep' provided by host; not removing."
                 continue
             fi
-            dep_path=$(resolve_installed_path "$dep") 2>/dev/null || true
-            [ -z "$dep_path" ] && continue
+            
+            dep_path=$(resolve_installed_path "$current_dep") 2>/dev/null || continue
+            
             if ! is_pkg_required "$dep_path"; then
                 info "Removing orphan dependency: $dep_path"
+                
+                # Get subdeps before removal
+                subdeps=$(get_pkg_deps "$dep_path" 2>/dev/null || true)
+                
+                # Remove the package
                 remove_pkg_only "$dep_path"
-                # after removing this dep, we should also consider its declared deps recursively (safe recursion)
-                # collect its declared deps and process them similarly
-                subdeps=$(get_pkg_deps "$dep_path" || true)
+                
+                # Add subdeps to queue
                 if [ -n "$subdeps" ]; then
-                    printf '%s\n' "$subdeps" | while IFS= read -r sdep; do
-                        sdep=$(printf '%s' "$sdep" | tr -d '[:space:]')
-                        [ -z "$sdep" ] && continue
-                        sdep_path=$(resolve_installed_path "$sdep") 2>/dev/null || true
-                        if [ -n "$sdep_path" ] && ! is_pkg_required "$sdep_path"; then
-                            info "Removing transitive orphan dependency: $sdep_path"
-                            remove_pkg_only "$sdep_path"
-                        fi
-                    done
+                    dep_queue="$dep_queue $subdeps"
                 fi
             else
                 info "Keeping dependency $dep_path (still required)."
@@ -1897,9 +1893,10 @@ preview_install() {
     to_install=""
     already_installed=""
     
+    # Make this a proper recursive function
     collect_deps_recursive() {
-    p="$1"
-    indent="${2:-}"
+        local p="$1"
+        local indent="${2:-}"
         
         # Check if already processed
         case " $all_deps " in
@@ -1913,13 +1910,11 @@ preview_install() {
             ver=$(get_installed_ver "$p")
             printf '%s[installed] %s-%s\n' "$indent" "$p" "$ver"
             already_installed="$already_installed $p"
+        elif check_host_dependency "$p"; then
+            printf '%s[host] %s\n' "$indent" "$p"
         else
-            if check_host_dependency "$p"; then
-                printf '%s[host] %s\n' "$indent" "$p"
-            else
-                printf '%s[new] %s\n' "$indent" "$p"
-                to_install="$to_install $p"
-            fi
+            printf '%s[new] %s\n' "$indent" "$p"
+            to_install="$to_install $p"
         fi
         
         # Get dependencies
