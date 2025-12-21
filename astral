@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v1.0.0.0 Main - minimal POSIX package manager for Astaraxia
+# Astral v1.0.0.1 Main - minimal POSIX package manager for Astaraxia
 # Now supports 2 Recipes format :3
-# V: 1 - Major . 0 - Minor . 0 - Patches . 0 - hotfixes
+# V: 1 - Major . 0 - Minor . 0 - Patches . 1 - hotfixes
 
-version="1.0.0.0 Main"
+version="1.0.0.1 Main"
 
 # Set strict execution environment, meow~
 set -eu
@@ -599,7 +599,7 @@ Global Options:
 
 Package Management:
   -S, --Sync <pkg>      Install/upgrade from AOHARU
-  -Sa, --Sync-Asura <pkg> Install from ASURA (community)
+  -SA, --Sync-Asura <pkg> Install from ASURA (community)
   -C, --Compile <pkg>   Build from local recipe
   -R, --Remove <pkg>    Remove package
   -r, --RemoveDep <pkg> Remove package + orphaned deps
