@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v0.7.7.3 BDGE - minimal POSIX package manager for Astaraxia
-# Modified: added Astral.conf for make!
-# V: 0 - Major . 7 - Minor . 7 - Patches . 3 - hotfixes
+# Astral v1.0.0.0 BDGE - minimal POSIX package manager for Astaraxia
+# Now supports 2 Recipes format :3
+# V: 1 - Major . 0 - Minor . 0 - Patches . 0 - hotfixes
 
-version="0.7.7.3 BDGE"
+version="1.0.0.0 BDGE"
 
 # Set strict execution environment, meow~
 set -eu
@@ -353,7 +353,6 @@ check_file_conflicts() {
     force="$3"
     
     conflict_file="$TMPDIR/conflicts.$$"
-    trap "rm -f '$conflict_file'" RETURN
 
     [ "$DRY_RUN" -eq 1 ] && info "[DRY-RUN] Checking for file conflicts..."
     [ "$DRY_RUN" -eq 0 ] && info "Checking for file conflicts..."
@@ -537,6 +536,41 @@ check_versioned_deps() {
     return 0
 }
 
+# === DETECTION FUNCTION ===
+# Returns 0 if .stars file, 1 if directory recipe, 2 if not found
+detect_recipe_format() {
+    pkg="$1"
+    
+    # Check for .stars file first (faster)
+    if [ -f "$RECIPES_DIR/$pkg.stars" ]; then
+        printf 'stars\n'
+        return 0
+    fi
+    
+    # Check for category/pkg.stars
+    stars_path=$(find "$RECIPES_DIR" -type f -name "$pkg.stars" -maxdepth 2 2>/dev/null | head -n1)
+    if [ -n "$stars_path" ]; then
+        printf 'stars\n'
+        return 0
+    fi
+    
+    # Check for directory-based recipe
+    if [ -d "$RECIPES_DIR/$pkg" ]; then
+        printf 'directory\n'
+        return 0
+    fi
+    
+    # Check in subdirectories
+    dir_path=$(find "$RECIPES_DIR" -type d -name "$pkg" -maxdepth 2 2>/dev/null | head -n1)
+    if [ -n "$dir_path" ]; then
+        printf 'directory\n'
+        return 0
+    fi
+    
+    # Not found
+    return 1
+}
+
 astral_version() {
 cat <<EOF
 ┌──────────────────────┐
@@ -630,20 +664,102 @@ resolve_installed_path() {
 
 # helper: find recipe path - search subdirectories
 recipe_path() {
-    pkg="$1"
+    _pkg="$1"
 
-    if [ -d "$RECIPES_DIR/$pkg" ]; then
-        printf '%s\n' "$RECIPES_DIR/$pkg"
+    # Check for .stars file first
+    if [ -f "$RECIPES_DIR/$_pkg.stars" ]; then
+        printf '%s\n' "$RECIPES_DIR/$_pkg.stars"
+        return 0
+    fi
+    
+    # Check in subdirectories for .stars
+    stars_found=$(find "$RECIPES_DIR" -type f -name "$_pkg.stars" -maxdepth 2 2>/dev/null | head -n1)
+    if [ -n "$stars_found" ]; then
+        printf '%s\n' "$stars_found"
         return 0
     fi
 
-    found_path=$(find "$RECIPES_DIR" -type d -name "$pkg" -maxdepth 2 2>/dev/null | head -n 1 || true)
+    # Fallback to directory-based recipes
+    if [ -d "$RECIPES_DIR/$_pkg" ]; then
+        printf '%s\n' "$RECIPES_DIR/$_pkg"
+        return 0
+    fi
+
+    found_path=$(find "$RECIPES_DIR" -type d -name "$_pkg" -maxdepth 2 2>/dev/null | head -n 1 || true)
     if [ -n "$found_path" ] && [ -d "$found_path" ]; then
         printf '%s\n' "$found_path"
         return 0
     fi
 
     return 1
+}
+
+# === STARS FILE PARSER ===
+# Extract sections from .stars file
+parse_stars_section() {
+    stars_file="$1"
+    section_name="$2"  # e.g., "BUILD", "PACKAGE", "SOURCES"
+    
+    awk -v section="$section_name" '
+        /^@[A-Z_]+$/ { 
+            in_section = 0
+            if ($0 == "@" section) in_section = 1
+            next
+        }
+        in_section { print }
+    ' "$stars_file"
+}
+
+# Extract metadata (KEY=VALUE lines before first @SECTION)
+parse_stars_metadata() {
+    stars_file="$1"
+    awk '/^@[A-Z_]+$/ { exit } /^[A-Z_]+=/ { print }' "$stars_file"
+}
+
+# === STARS RECIPE EXPANSION ===
+# Convert .stars file to temporary directory structure
+expand_stars_recipe() {
+    stars_file="$1"
+    temp_dir="$2"
+    
+    mkdir -p "$temp_dir"
+    
+    # Extract metadata into individual files
+    parse_stars_metadata "$stars_file" | while IFS='=' read -r key value; do
+        case "$key" in
+            VERSION) printf '%s\n' "$value" > "$temp_dir/version" ;;
+            DESCRIPTION) printf '%s\n' "$value" > "$temp_dir/info" ;;
+        esac
+    done
+    
+    # Extract sections
+    for section in BUILD PACKAGE POST_INSTALL POST_REMOVE DEPENDS BDEPENDS RDEPENDS SOURCES CHECKSUMS; do
+        content=$(parse_stars_section "$stars_file" "$section")
+        
+        if [ -n "$content" ]; then
+            case "$section" in
+                BUILD)
+                    printf '%s\n' "$content" > "$temp_dir/build"
+                    chmod +x "$temp_dir/build"
+                    ;;
+                PACKAGE)
+                    printf '%s\n' "$content" > "$temp_dir/package"
+                    chmod +x "$temp_dir/package"
+                    ;;
+                POST_INSTALL)
+                    printf '%s\n' "$content" > "$temp_dir/post_install"
+                    chmod +x "$temp_dir/post_install"
+                    ;;
+                POST_REMOVE)
+                    printf '%s\n' "$content" > "$temp_dir/post_remove"
+                    chmod +x "$temp_dir/post_remove"
+                    ;;
+                DEPENDS|BDEPENDS|RDEPENDS|SOURCES|CHECKSUMS)
+                    printf '%s\n' "$content" > "$temp_dir/$(printf '%s' "$section" | tr 'A-Z' 'a-z')"
+                    ;;
+            esac
+        fi
+    done
 }
 
 # Get installed version (returns "none" if not installed)
@@ -1048,6 +1164,31 @@ fetch_remote_recipe() {
 
     info "Recipe for '$pkg' refreshed successfully at $local_dir."
 }
+fetch_remote_recipe_stars() {
+    _pkg="$1"
+    
+    info "Attempting to fetch .stars recipe for '$_pkg' from remote..."
+    
+    # Determine category
+    category=""
+    if [ -f "$INDEX_FILE_AOHARU" ]; then
+        category=$(grep "^${_pkg}[[:space:]]" "$INDEX_FILE_AOHARU" | awk '{print $3}' | head -n1)
+    fi
+    
+    # Try to fetch .stars file first
+    remote_url="${RECIPE_RAW_URL%/}/recipes/${category:+$category/}${_pkg}.stars"
+    local_path="$RECIPES_DIR/${category:+$category/}${_pkg}.stars"
+    
+    mkdir -p "$(dirname "$local_path")"
+    
+    if curl -fsSL "$remote_url" -o "$local_path" 2>/dev/null; then
+        info "Downloaded .stars recipe: $local_path"
+        return 0
+    fi
+    
+    # Fallback to directory-based fetch (existing logic)
+    return 1
+}
 
 download_sources() {
     rpath="$1"; buildtmp="$2"
@@ -1160,9 +1301,7 @@ sync_pkg_recursive() {
             return 0
         fi
     fi
-
-    info "DEBUG: Still processing $pkg, IS_EXPLICIT=$IS_EXPLICIT" # ADD THIS
-    
+info "DEBUG: Still processing $pkg, IS_EXPLICIT=$IS_EXPLICIT"
     # === FETCH RECIPE IF NEEDED ===
     recipe_exists=0
     if recipe_path "$pkg" >/dev/null 2>&1; then 
@@ -1185,11 +1324,14 @@ sync_pkg_recursive() {
         err "[$pkg] Package version $recipe_ver is MASKED. Check $MASK_FILE"
     fi
 
-    # === RESOLVE DEPENDENCIES RECURSIVELY ===
+   # === RESOLVE DEPENDENCIES RECURSIVELY ===
     info "Checking dependencies for $pkg..."
     
+    # CRITICAL: Save $pkg because get_pkg_deps will overwrite it!
+    _main_pkg="$pkg"
+    
     deps_tmp=$(mktemp "$TMPDIR/astral-deps.XXXXXX") || err "mktemp failed for dependency resolution"
-    get_pkg_deps "$pkg" > "$deps_tmp"
+    get_pkg_deps "$_main_pkg" > "$deps_tmp"
     
     while IFS= read -r dep_pkg; do
         dep_pkg=$(printf '%s' "$dep_pkg" | tr -d '[:space:]')
@@ -1198,7 +1340,7 @@ sync_pkg_recursive() {
         case " $VISITED_PACKAGES " in
             *" $dep_pkg "*)
                 rm -f "$deps_tmp"
-                err "[$pkg] Would create circular dependency with: $dep_pkg"
+                err "[$_main_pkg] Would create circular dependency with: $dep_pkg"
                 ;;
         esac
         
@@ -1206,14 +1348,16 @@ sync_pkg_recursive() {
         # The dependency will check its own host/virtual/installed status
         sync_pkg_recursive "$dep_pkg" "$FORCE_CMD" 0 || {
             rm -f "$deps_tmp"
-            err "[$pkg] Failed to install dependency: $dep_pkg"
+            err "[$_main_pkg] Failed to install dependency: $dep_pkg"
         }
     done < "$deps_tmp"
     rm -f "$deps_tmp"
+    
+    # Restore the main package name
+    pkg="$_main_pkg"
 
     # === CHECK IF MAIN PACKAGE ALREADY INSTALLED ===
-    installed_ver=$(get_installed_ver "$pkg")
-    
+    installed_ver=$(get_installed_ver "$pkg") 
     if [ "$installed_ver" = "$recipe_ver" ] && [ "$FORCE_CMD" -eq 0 ]; then
         info "Package '$pkg' already installed at version $installed_ver."
         
@@ -1270,15 +1414,31 @@ sync_pkg_asura() {
 }
 
 build_from_recipe() {
-    pkg="$1"
+    _pkg="$1"  # Changed from pkg to _pkg
     FORCE_CMD=${2:-$FORCE_BUILD}
     BUILD_BINPKG=${3:-0}
 
-    rpath=$(recipe_path "$pkg") || err "recipe $pkg not found"
+    rpath=$(recipe_path "$_pkg") || err "recipe $_pkg not found"
+    
+    # Check if it's a .stars file
+    is_stars_recipe=0
+    if [ -f "$rpath" ] && printf '%s' "$rpath" | grep -q '\.stars$'; then
+        is_stars_recipe=1
+        info "[$_pkg] Using .stars recipe format"
+        
+        # Expand .stars to temporary directory
+        stars_temp="$TMPDIR/astral-stars-$_pkg-$$"
+        expand_stars_recipe "$rpath" "$stars_temp"
+        rpath="$stars_temp"
+        
+        # Ensure cleanup
+        trap "rm -rf '$stars_temp'" EXIT
+    fi
+    
     recipe_ver="unknown"
     [ -f "$rpath/version" ] && recipe_ver=$(cat "$rpath/version")
-    installed_ver=$(get_installed_ver "$pkg")
-    
+    installed_ver=$(get_installed_ver "$_pkg") 
+
     # DRY-RUN MODE
     if [ "$DRY_RUN" -eq 1 ]; then
         info "[DRY-RUN] Would build package: $pkg"
@@ -1552,6 +1712,12 @@ show_pkg_info() {
         printf "Build Script:      %s\n" "$( [ -f "$rpath/build" ] && echo "Yes" || echo "No" )"
         printf "Package Script:    %s\n" "$( [ -f "$rpath/package" ] && echo "Yes" || echo "No" )"
         printf "Checksums:         %s\n" "$( [ -f "$rpath/checksums" ] && echo "Yes" || echo "No" )"
+    
+         # Display info file if it exists
+         if [ -f "$rpath/info" ]; then
+                 printf "\n--- Package Description ---\n"
+                 cat "$rpath/info"
+         fi
     else
         printf "\nRecipe Found:      No (Run 'astral -s %s' to fetch)\n" "$requested_pkg"
     fi
