@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v0.7.7.2 BDGE - minimal POSIX package manager for Astaraxia
+# Astral v0.7.7.3 BDGE - minimal POSIX package manager for Astaraxia
 # Modified: added Astral.conf for make!
-# V: 0 - Major . 7 - Minor . 7 - Patches . 2 - hotfixes
+# V: 0 - Major . 7 - Minor . 7 - Patches . 3 - hotfixes
 
-version="0.7.7.2 BDGE"
+version="0.7.7.3 BDGE"
 
 # Set strict execution environment, meow~
 set -eu
@@ -1145,12 +1145,6 @@ sync_pkg_recursive() {
         return 0
     fi
 
-    # Check host dependency - Disabled
-    #if [ "$FORCE_CMD" -eq 0 ] && check_host_dependency "$pkg"; then
-    #    info "Dependency '$pkg' satisfied by host. Skipping build/fetch."
-    #    return 0
-    #/fi
-
     # Check if masked
     recipe_exists=0
     if recipe_path "$pkg" >/dev/null 2>&1; then 
@@ -1194,22 +1188,26 @@ sync_pkg_recursive() {
                 ;;
         esac
         
-        # Check if dependency is satisfied (installed, virtual, or host-provided)
+        # === CHECK ALL SKIP CONDITIONS BEFORE RECURSING ===
+        
+        # 1. Already installed?
         if is_pkg_installed "$dep_pkg"; then
             info "Dependency '$dep_pkg' already installed. Skipping."
-            continue
+            continue  # SKIP recursion
         fi
         
+        # 2. Virtual package satisfied?
         if check_virtual "$dep_pkg"; then
-            continue  # Already logged by check_virtual
+            continue  # SKIP recursion (check_virtual logs itself)
         fi
         
+        # 3. Host-provided?
         if check_host_dependency "$dep_pkg"; then
             info "Dependency '$dep_pkg' satisfied by host. Skipping build/fetch."
-            continue  # THIS WAS MISSING - it was falling through!
+            continue  # SKIP recursion - THIS IS THE KEY FIX!
         fi
         
-        # Only recurse if NOT satisfied above
+        # === ONLY RECURSE IF NONE OF THE ABOVE ===
         sync_pkg_recursive "$dep_pkg" "$FORCE_CMD" 0 || {
             rm -f "$deps_tmp"
             err "[$pkg] Failed to install dependency: $dep_pkg"
