@@ -1,7 +1,9 @@
 #!/bin/sh
-# Astral v0.7.7.0 BDGE - minimal POSIX package manager for Astaraxia
+# Astral v0.7.7.1 BDGE - minimal POSIX package manager for Astaraxia
 # Modified: added Astral.conf for make!
-# V: X- Major . X - Minor . X - Patches . X - hotfixes
+# V: 0 - Major . 7 - Minor . 7 - Patches . 1 - hotfixes
+
+version="0.7.7.1 BDGE"
 
 # Set strict execution environment, meow~
 set -eu
@@ -52,7 +54,7 @@ err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 
-version="0.7.7.0 BDGE"
+# version was here:
 
 # --- CONFIG SYSTEM () ---
 CONFIG_FILE=${CONFIG_FILE:-/etc/astral/make.conf}
@@ -1173,7 +1175,14 @@ sync_pkg_recursive() {
     
     deps_tmp=$(mktemp "$TMPDIR/astral-deps.XXXXXX") || err "mktemp failed for dependency resolution"
     get_pkg_deps "$pkg" > "$deps_tmp"
-    
+
+    echo "DEBUG: ===== SYNC_PKG_RECURSIVE DEBUG =====" >&2
+    echo "DEBUG: Package: $pkg" >&2
+    echo "DEBUG: FORCE_CMD: $FORCE_CMD" >&2
+    echo "DEBUG: IS_EXPLICIT: $IS_EXPLICIT" >&2
+    echo "DEBUG: VISITED_PACKAGES: $VISITED_PACKAGES" >&2
+
+
     while IFS= read -r dep_pkg; do
         dep_pkg=$(printf '%s' "$dep_pkg" | tr -d '[:space:]')
         [ -z "$dep_pkg" ] && continue
@@ -1193,16 +1202,32 @@ sync_pkg_recursive() {
     done < "$deps_tmp"
     rm -f "$deps_tmp"
 
-    # Check if already installed BEFORE building
+    # === FETCH RECIPE IF NOT EXISTS ===
+    recipe_exists=0
+    if recipe_path "$pkg" >/dev/null 2>&1; then 
+        recipe_exists=1
+    fi
+    
+    if [ "$recipe_exists" -eq 0 ]; then
+        info "Recipe for '$pkg' not found locally, fetching..."
+        if ! fetch_remote_recipe "$pkg"; then
+            err "[$pkg] Recipe not found in repository and not provided by host."
+        fi
+    fi
+    
+    recipe_dir=$(recipe_path "$pkg") || err "[$pkg] Recipe not found after fetch."
+    
+    # === CHECK IF ALREADY INSTALLED ===
     installed_ver=$(get_installed_ver "$pkg")
     rpath=$(recipe_path "$pkg")
     recipe_ver=$(cat "$rpath/version" 2>/dev/null || printf 'unknown')
     
-    info "DEBUG: installed_ver='$installed_ver', recipe_ver='$recipe_ver', FORCE_CMD='$FORCE_CMD'"  # ADD THIS
+    info "[$pkg] Installed: $installed_ver, Available: $recipe_ver"
     
     if [ "$installed_ver" = "$recipe_ver" ] && [ "$FORCE_CMD" -eq 0 ]; then
+        info "Package '$pkg' already installed at version $installed_ver."
         
-        # Add to world set if explicitly requested, with clear message
+        # Add to world set if explicitly requested
         if [ "$IS_EXPLICIT" -eq 1 ]; then
             if is_in_world "$pkg"; then
                 info "Package already in world set."
@@ -1214,8 +1239,10 @@ sync_pkg_recursive() {
         return 0
     fi
 
-    # Actually build the package
-    # Mark if we're installing ccache to suppress warnings
+    # === ACTUALLY BUILD ===
+    info "[$pkg] Building package..."
+    
+    # Mark if installing ccache to suppress warnings
     if [ "$pkg" = "ccache" ] || [ "$pkg" = "dev-util/ccache" ]; then
         INSTALLING_CCACHE=1
         export INSTALLING_CCACHE
