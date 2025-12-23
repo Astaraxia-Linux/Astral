@@ -1209,7 +1209,7 @@ fetch_remote_recipe() {
     stars_url="${remote_base}.stars"
     stars_dest="${local_dir}.stars"
     
-    if curl -fsSL "$stars_url" -o "$stars_dest" 2>/dev/null; then
+    if curl -f#SL "$stars_url" -o "$stars_dest" 2>/dev/null; then
         info "Downloaded .stars recipe: $stars_dest"
         # Make the directory for consistency
         mkdir -p "$local_dir"
@@ -1226,7 +1226,7 @@ fetch_remote_recipe() {
         url="$remote_base/$file"
         dest="$local_dir/$file"
         
-        if curl -fsSL "$url" -o "$dest" 2>/dev/null; then
+        if curl -f#SL "$url" -o "$dest" 2>/dev/null; then
             :
         else
             if printf '%s' "$required_files" | grep -qw "$file"; then
@@ -1262,7 +1262,7 @@ fetch_remote_recipe_stars() {
     
     mkdir -p "$(dirname "$local_path")"
     
-    if curl -fsSL "$remote_url" -o "$local_path" 2>/dev/null; then
+    if curl -f#SL "$remote_url" -o "$local_path" 2>/dev/null; then
         info "Downloaded .stars recipe: $local_path"
         return 0
     fi
@@ -1287,7 +1287,7 @@ download_sources() {
         dest_file="$buildtmp/$filename"
 
         info "  -> Downloading $filename"
-        if ! curl -fsSL "$url" -o "$dest_file"; then
+        if ! curl -f#SL "$url" -o "$dest_file"; then
             err "Failed to download source file from $url"
         fi
     done
@@ -1728,7 +1728,7 @@ update_repo() {
             ;;
     esac
 
-    if curl -fsSL "$INDEX_URL" -o "$INDEX_FILE"; then
+    if curl -f#SL "$INDEX_URL" -o "$INDEX_FILE"; then
         info "Database updated successfully."
     else
         err "Failed to download index from $INDEX_URL"
@@ -1983,7 +1983,7 @@ self_update() {
 
     command -v curl >/dev/null 2>&1 || { err "curl not found"; return 1; }
 
-    if ! curl -fsSL "$update_url" -o "$tmp_file"; then
+    if ! curl -f#SL "$update_url" -o "$tmp_file"; then
         err "Failed to download new astral script from $update_url"; return 1
     fi
 
@@ -2486,7 +2486,7 @@ clear_ccache() {
 
 # --- ENTRY / CLI PARSING ---
 
-# Require root for all operations (astral must be invoked by root, sudo, or doas)
+# Require root for all operations
 if [ "$(id -u)" -ne 0 ]; then
     err "Astral must be run as root (via sudo or doas)."
 fi
