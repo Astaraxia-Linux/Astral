@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v1.0.0.0 BDGE - minimal POSIX package manager for Astaraxia
-# Now supports 2 Recipes format :3
+# Astral v2.0.0.0 BDGE - minimal POSIX package manager for Astaraxia
+# My brain hurts :3, added 2 Version for .stars
 # V: 1 - Major . 0 - Minor . 0 - Patches . 0 - hotfixes
 
-version="1.0.0.0 BDGE"
+version="2.0.0.0 BDGE"
 
 # Set strict execution environment, meow~
 set -eu
@@ -32,7 +32,7 @@ LOG_DIR=${LOG_DIR:-/var/log/astral}
 REPO_URL=${REPO_URL:-https://izumi-sonoka.github.io/AOHARU/}
 RECIPE_RAW_URL=${RECIPE_RAW_URL:-https://raw.githubusercontent.com/Izumi-Sonoka/AOHARU/main}
 USER_REPO_URL=${USER_REPO_URL:-https://codeberg.org/Izumi/ASURA/raw/branch/main}
-USER_RECIPE_RAW_URL=${USER_RECIPE_RAW_URL:-$USER_REPO_URL/recipes}
+USER_RECIPE_RAW_URL=${USER_RECIPE_RAW_URL:-$USER_REPO_URL}
 
 # --- SELF-UPDATE URLs ---
 SELF_UPDATE_URL_MAIN=${SELF_UPDATE_URL_MAIN:-https://raw.githubusercontent.com/Astaraxia-Linux/Astral/refs/heads/main/astral}
@@ -53,6 +53,10 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
+
+# --- REPOSITORY CONTEXT ---
+REPO_CONTEXT="aoharu"  # Current repository context (aoharu or asura)
+EXPLICIT_PKG_REPO=""   # Track which repo the main package came from
 
 # version was here:
 
@@ -599,7 +603,7 @@ Global Options:
 
 Package Management:
   -S, --Sync <pkg>      Install/upgrade from AOHARU
-  -Sa, --Sync-Asura <pkg> Install from ASURA (community)
+  -SA, --Sync-Asura <pkg> Install from ASURA (community)
   -C, --Compile <pkg>   Build from local recipe
   -R, --Remove <pkg>    Remove package
   -r, --RemoveDep <pkg> Remove package + orphaned deps
@@ -666,20 +670,20 @@ resolve_installed_path() {
 recipe_path() {
     _pkg="$1"
 
-    # Check for .stars file first
+    # Priority 1: Check for .stars file in root
     if [ -f "$RECIPES_DIR/$_pkg.stars" ]; then
         printf '%s\n' "$RECIPES_DIR/$_pkg.stars"
         return 0
     fi
     
-    # Check in subdirectories for .stars
+    # Priority 2: Check for .stars in subdirectories (category/pkg.stars)
     stars_found=$(find "$RECIPES_DIR" -type f -name "$_pkg.stars" -maxdepth 2 2>/dev/null | head -n1)
     if [ -n "$stars_found" ]; then
         printf '%s\n' "$stars_found"
         return 0
     fi
 
-    # Fallback to directory-based recipes
+    # Priority 3: Directory-based recipes (existing behavior)
     if [ -d "$RECIPES_DIR/$_pkg" ]; then
         printf '%s\n' "$RECIPES_DIR/$_pkg"
         return 0
@@ -716,51 +720,6 @@ parse_stars_metadata() {
     awk '/^@[A-Z_]+$/ { exit } /^[A-Z_]+=/ { print }' "$stars_file"
 }
 
-# === STARS RECIPE EXPANSION ===
-# Convert .stars file to temporary directory structure
-expand_stars_recipe() {
-    stars_file="$1"
-    temp_dir="$2"
-    
-    mkdir -p "$temp_dir"
-    
-    # Extract metadata into individual files
-    parse_stars_metadata "$stars_file" | while IFS='=' read -r key value; do
-        case "$key" in
-            VERSION) printf '%s\n' "$value" > "$temp_dir/version" ;;
-            DESCRIPTION) printf '%s\n' "$value" > "$temp_dir/info" ;;
-        esac
-    done
-    
-    # Extract sections
-    for section in BUILD PACKAGE POST_INSTALL POST_REMOVE DEPENDS BDEPENDS RDEPENDS SOURCES CHECKSUMS; do
-        content=$(parse_stars_section "$stars_file" "$section")
-        
-        if [ -n "$content" ]; then
-            case "$section" in
-                BUILD)
-                    printf '%s\n' "$content" > "$temp_dir/build"
-                    chmod +x "$temp_dir/build"
-                    ;;
-                PACKAGE)
-                    printf '%s\n' "$content" > "$temp_dir/package"
-                    chmod +x "$temp_dir/package"
-                    ;;
-                POST_INSTALL)
-                    printf '%s\n' "$content" > "$temp_dir/post_install"
-                    chmod +x "$temp_dir/post_install"
-                    ;;
-                POST_REMOVE)
-                    printf '%s\n' "$content" > "$temp_dir/post_remove"
-                    chmod +x "$temp_dir/post_remove"
-                    ;;
-                DEPENDS|BDEPENDS|RDEPENDS|SOURCES|CHECKSUMS)
-                    printf '%s\n' "$content" > "$temp_dir/$(printf '%s' "$section" | tr 'A-Z' 'a-z')"
-                    ;;
-            esac
-        fi
-    done
-}
 
 # Get installed version (returns "none" if not installed)
 get_installed_ver() {
@@ -787,7 +746,7 @@ atomic_install() {
     pkg="$1"
     pkgdir_src="$2"
     recipe_ver="$3"
-    rpath="$4"
+    rpath="$4"              # This could be a temp expanded path!
     new_files="$5"
     
     # Create staging directory
@@ -802,8 +761,18 @@ atomic_install() {
         err "[$pkg] Failed to extract to staging area"
     }
     
+    # FIX: Calculate db_path correctly (handle both directory and .stars expansion)
+    db_path=""
+    if [ -f "$rpath/.astral_original_recipe" ]; then
+        # This was expanded from .stars, read the original path
+        original_rpath=$(cat "$rpath/.astral_original_recipe")
+        db_path=$(printf '%s' "$original_rpath" | sed "s|^${RECIPES_DIR}/||; s|\.stars$||")
+    else
+        # Regular directory recipe
+        db_path=$(printf '%s' "$rpath" | sed "s|^${RECIPES_DIR}/||")
+    fi
+    
     # Prepare DB entry (but don't commit yet)
-    db_path=$(printf '%s' "$rpath" | sed "s|^${RECIPES_DIR}/||")
     db_target="$DB_DIR/$db_path"
     db_staging="$TMPDIR/astral-db-staging-$$"
     mkdir -p "$db_staging"
@@ -812,6 +781,8 @@ atomic_install() {
     printf '%s\n' "$new_files" > "$db_staging/files"
     buildtmp_parent="$(dirname "$pkgdir_src")"
     [ -f "$buildtmp_parent/depends" ] && cp "$buildtmp_parent/depends" "$db_staging/depends"
+    [ -f "$buildtmp_parent/bdepends" ] && cp "$buildtmp_parent/bdepends" "$db_staging/bdepends"
+    [ -f "$buildtmp_parent/rdepends" ] && cp "$buildtmp_parent/rdepends" "$db_staging/rdepends"
     
     # ATOMIC COMMIT: Move files and DB together
     info "[$pkg] Committing installation atomically..."
@@ -831,7 +802,10 @@ atomic_install() {
     }
     mv "$db_staging/files" "$db_target/files"
     [ -f "$db_staging/depends" ] && mv "$db_staging/depends" "$db_target/depends"
+    [ -f "$db_staging/bdepends" ] && mv "$db_staging/bdepends" "$db_target/bdepends"
+    [ -f "$db_staging/rdepends" ] && mv "$db_staging/rdepends" "$db_target/rdepends"
     update_files_index_for_pkg "$db_path"
+    
     # Cleanup
     rm -rf "$staging_root" "$db_staging"
     
@@ -1089,43 +1063,398 @@ test_host_dependency() {
     fi
 }
 
+# === STARS RECIPE EXPANSION ===
+# Expand .stars file to temporary directory structure
+expand_stars_recipe() {
+    stars_file="$1"
+    temp_dir="$2"
+    
+    mkdir -p "$temp_dir"
+    
+    info "  → Expanding .stars recipe..."
+    
+    # Store original recipe path for later reference
+    printf '%s\n' "$stars_file" > "$temp_dir/.astral_original_recipe"
+    
+    # Detect format version by checking first 20 lines
+    if head -n 20 "$stars_file" | grep -qE '^\$PKG\.'; then
+        info "  → Detected v2 format ($PKG.* syntax)"
+        parse_stars_v2 "$stars_file" "$temp_dir"
+    else
+        info "  → Detected v1 format (@SECTION syntax)"
+        parse_stars_v1 "$stars_file" "$temp_dir"
+    fi
+}
+
+# === V2 yeah
+
+parse_stars_v2() {
+    stars_file="$1"
+    temp_dir="$2"
+    
+    # State machine variables
+    current_section=""
+    current_subsection=""
+    in_block=0
+    block_content=""
+    condition=""
+    arch=$(uname -m)
+    skip_section=0
+    
+    while IFS= read -r line || [ -n "$line" ]; do
+        # Remove leading/trailing whitespace
+        line=$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        
+        # Skip empty lines outside blocks
+        if [ $in_block -eq 0 ]; then
+            [ -z "$line" ] && continue
+            case "$line" in \#*) continue ;; esac
+        fi
+        
+        # === SECTION DETECTION ===
+        case "$line" in
+            \$PKG.Metadata:*|\$PKG.Metadate:*)
+                current_section="metadata"
+                in_block=1
+                block_content=""
+                skip_section=0
+                info "    → Metadata"
+                continue
+                ;;
+            
+            \$PKG.Build*)
+                current_section="build"
+                skip_section=0
+                
+                # Extract and evaluate condition
+                if printf '%s' "$line" | grep -qE '\[IF '; then
+                    condition=$(printf '%s' "$line" | sed -n 's/.*\[IF \([^]]*\)\].*/\1/p')
+                    
+                    cond_var=$(printf '%s' "$condition" | cut -d'=' -f1 | tr -d ' ')
+                    cond_val=$(printf '%s' "$condition" | cut -d'=' -f2 | tr -d ' ')
+                    
+                    case "$cond_var" in
+                        arch)
+                            if [ "$arch" != "$cond_val" ]; then
+                                skip_section=1
+                                info "    ⊘ Build (skipped: arch != $cond_val)"
+                            else
+                                info "    → Build (arch=$cond_val)"
+                            fi
+                            ;;
+                    esac
+                else
+                    info "    → Build"
+                fi
+                
+                in_block=1
+                block_content=""
+                continue
+                ;;
+            
+            \$PKG.Package*)
+                current_section="package"
+                skip_section=0
+                in_block=1
+                block_content=""
+                info "    → Package"
+                continue
+                ;;
+            
+            \$PKG.Depend*)
+                # Check if it's a subsection
+                if printf '%s' "$line" | grep -q '\$PKG.Depend.BDepends'; then
+                    current_section="depend"
+                    current_subsection="bdepends"
+                    skip_section=0
+                    in_block=1
+                    block_content=""
+                    info "      → BDepends"
+                elif printf '%s' "$line" | grep -q '\$PKG.Depend.RDepends'; then
+                    current_section="depend"
+                    current_subsection="rdepends"
+                    skip_section=0
+                    in_block=1
+                    block_content=""
+                    info "      → RDepends"
+                else
+                    current_section="depend"
+                    current_subsection=""
+                    skip_section=0
+                    in_block=1
+                    block_content=""
+                    info "    → Depend"
+                fi
+                continue
+                ;;
+            
+            \$PKG.Sources*)
+                current_section="sources"
+                skip_section=0
+                in_block=1
+                block_content=""
+                info "    → Sources"
+                continue
+                ;;
+            
+            \$PKG.Checksums*)
+                current_section="checksums"
+                skip_section=0
+                in_block=1
+                block_content=""
+                info "    → Checksums"
+                continue
+                ;;
+            
+            \$PKG.PostInstall*)
+                current_section="post_install"
+                skip_section=0
+                in_block=1
+                block_content=""
+                info "    → PostInstall"
+                continue
+                ;;
+            
+            \$PKG.PostRemove*)
+                current_section="post_remove"
+                skip_section=0
+                in_block=1
+                block_content=""
+                info "    → PostRemove"
+                continue
+                ;;
+        esac
+        
+        # === BLOCK CLOSING ===
+        if [ "$line" = "};" ] || [ "$line" = "}" ]; then
+            in_block=0
+            
+            # Process block if not skipped
+            if [ $skip_section -eq 0 ] && [ -n "$current_section" ]; then
+                case "$current_section" in
+                    metadata)
+                        parse_metadata_block_v2 "$block_content" "$temp_dir"
+                        ;;
+                    build|package|post_install|post_remove)
+                        write_script_section_v2 "$current_section" "$block_content" "$temp_dir"
+                        ;;
+                    depend)
+                        if [ -n "$current_subsection" ]; then
+                            write_deps_section_v2 "$current_subsection" "$block_content" "$temp_dir"
+                        fi
+                        ;;
+                    sources)
+                        write_sources_section_v2 "$block_content" "$temp_dir"
+                        ;;
+                    checksums)
+                        write_checksums_section_v2 "$block_content" "$temp_dir"
+                        ;;
+                esac
+            fi
+            
+            block_content=""
+            current_section=""
+            current_subsection=""
+            skip_section=0
+            continue
+        fi
+        
+        # === ACCUMULATE CONTENT ===
+        if [ $in_block -eq 1 ]; then
+            # Skip opening brace
+            case "$line" in "{") continue ;; esac
+            
+            if [ -z "$block_content" ]; then
+                block_content="$line"
+            else
+                block_content="$block_content
+$line"
+            fi
+        fi
+        
+    done < "$stars_file"
+}
+
+# Helper: Parse metadata block
+parse_metadata_block_v2() {
+    content="$1"
+    temp_dir="$2"
+    
+    printf '%s\n' "$content" | while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        
+        # Parse KEY = "VALUE"
+        key=$(printf '%s' "$line" | cut -d'=' -f1 | tr -d ' ' | tr 'A-Z' 'a-z')
+        value=$(printf '%s' "$line" | cut -d'=' -f2- | sed 's/^[[:space:]]*"//; s/"[[:space:]]*$//')
+        
+        case "$key" in
+            version)
+                printf '%s\n' "$value" > "$temp_dir/version"
+                ;;
+            description)
+                printf '%s\n' "$value" > "$temp_dir/info"
+                ;;
+            homepage)
+                printf '%s\n' "$value" >> "$temp_dir/info"
+                ;;
+            category)
+                # Store category for later use if needed
+                printf '%s\n' "$value" > "$temp_dir/.category"
+                ;;
+        esac
+    done
+}
+
+# Helper: Write script sections
+write_script_section_v2() {
+    section="$1"
+    content="$2"
+    temp_dir="$3"
+    
+    printf '#!/bin/sh\n%s\n' "$content" > "$temp_dir/$section"
+    chmod +x "$temp_dir/$section"
+}
+
+# Helper: Write dependency sections
+write_deps_section_v2() {
+    subsection="$1"
+    content="$2"
+    temp_dir="$3"
+    
+    printf '%s\n' "$content" | while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        printf '%s\n' "$line"
+    done > "$temp_dir/$subsection"
+}
+
+# Helper: Write sources
+write_sources_section_v2() {
+    content="$1"
+    temp_dir="$2"
+    
+    printf '%s\n' "$content" | while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        
+        # Parse: urls = "..."
+        if printf '%s' "$line" | grep -q '^urls[[:space:]]*='; then
+            url=$(printf '%s' "$line" | cut -d'=' -f2- | sed 's/^[[:space:]]*"//; s/"[[:space:]]*$//')
+            printf '%s\n' "$url"
+        fi
+    done > "$temp_dir/sources"
+}
+
+# Helper: Write checksums
+write_checksums_section_v2() {
+    content="$1"
+    temp_dir="$2"
+    
+    printf '%s\n' "$content" > "$temp_dir/checksums"
+}
+
+# v1 Parser (OLD FORMAT - backward compatibility)
+parse_stars_v1() {
+    stars_file="$1"
+    temp_dir="$2"
+    
+    # Extract metadata
+    awk '/^@[A-Z_]+$/ { exit } /^[A-Z_]+=/ { print }' "$stars_file" | \
+    while IFS='=' read -r key value; do
+        case "$key" in
+            VERSION) 
+                printf '%s\n' "$value" > "$temp_dir/version"
+                info "    ✓ VERSION: $value"
+                ;;
+            DESCRIPTION) 
+                printf '%s\n' "$value" > "$temp_dir/info"
+                ;;
+            HOMEPAGE)
+                printf '%s\n' "$value" >> "$temp_dir/info"
+                ;;
+        esac
+    done
+    
+    # Extract sections
+    for section in BUILD PACKAGE POST_INSTALL POST_REMOVE DEPENDS BDEPENDS RDEPENDS SOURCES CHECKSUMS; do
+        content=$(awk -v section="$section" '
+            /^@[A-Z_]+$/ { 
+                in_section = 0
+                if ($0 == "@" section) in_section = 1
+                next
+            }
+            in_section { print }
+        ' "$stars_file")
+        
+        if [ -n "$content" ]; then
+            case "$section" in
+                BUILD|PACKAGE|POST_INSTALL|POST_REMOVE)
+                    lower=$(printf '%s' "$section" | tr 'A-Z' 'a-z')
+                    printf '#!/bin/sh\n%s\n' "$content" > "$temp_dir/$lower"
+                    chmod +x "$temp_dir/$lower"
+                    info "    ✓ $section"
+                    ;;
+                *)
+                    lower=$(printf '%s' "$section" | tr 'A-Z' 'a-z')
+                    printf '%s\n' "$content" > "$temp_dir/$lower"
+                    info "    ✓ $section"
+                    ;;
+            esac
+        fi
+    done
+}
+
 # --- NETWORKING / RECIPE FUNCTIONS ---
 fetch_remote_recipe() {
-    pkg="$1"
+    _pkg="$1"
+    _force_repo="${2:-$REPO_CONTEXT}"  # Optional: explicit repo override
     
-    info "Attempting to fetch or refresh recipe for '$pkg' from remote..."
+    info "Attempting to fetch or refresh recipe for '$_pkg' from $_force_repo..."
 
     # Check if recipe already exists locally
-    existing_rpath=$(recipe_path "$pkg") 2>/dev/null || existing_rpath=""
+    existing_rpath=$(recipe_path "$_pkg") 2>/dev/null || existing_rpath=""
 
     if [ -n "$existing_rpath" ]; then
-        # Recipe exists - use its path
         category_pkg=$(printf '%s' "$existing_rpath" | sed "s|^${RECIPES_DIR}/||")
         local_dir="$RECIPES_DIR/$category_pkg"
     else
+        # Determine which index to search based on repo context
+        case "$_force_repo" in
+            asura)
+                search_index="$INDEX_FILE_ASURA"
+                info "  → Searching ASURA index..."
+                ;;
+            aoharu|*)
+                search_index="$INDEX_FILE_AOHARU"
+                info "  → Searching AOHARU index..."
+                ;;
+        esac
+        
         # Recipe doesn't exist - check if pkg has category already
-        case "$pkg" in
+        case "$_pkg" in
             */*)
                 # Already has category (e.g., "sys-libs/zlib")
-                category_pkg="$pkg"
+                category_pkg="$_pkg"
                 ;;
             *)
-                # No category - search in index for category
+                # No category - search in appropriate index for category
                 category=""
-                if [ -f "$INDEX_FILE_AOHARU" ]; then
-                    category=$(grep "^${pkg}[[:space:]]" "$INDEX_FILE_AOHARU" | awk '{print $3}' | head -n1)
+                if [ -f "$search_index" ]; then
+                    category=$(grep "^${_pkg}[[:space:]]" "$search_index" | awk '{print $3}' | head -n1)
                 fi
                 
-                # Try ASURA index if not found
-                if [ -z "$category" ] && [ -f "$INDEX_FILE_ASURA" ]; then
-                    category=$(grep "^${pkg}[[:space:]]" "$INDEX_FILE_ASURA" | awk '{print $3}' | head -n1)
+                # Fallback: try other index if not found
+                if [ -z "$category" ] && [ "$_force_repo" = "asura" ] && [ -f "$INDEX_FILE_AOHARU" ]; then
+                    category=$(grep "^${_pkg}[[:space:]]" "$INDEX_FILE_AOHARU" | awk '{print $3}' | head -n1)
+                fi
+                
+                if [ -z "$category" ] && [ "$_force_repo" = "aoharu" ] && [ -f "$INDEX_FILE_ASURA" ]; then
+                    category=$(grep "^${_pkg}[[:space:]]" "$INDEX_FILE_ASURA" | awk '{print $3}' | head -n1)
                 fi
                 
                 if [ -n "$category" ]; then
-                    category_pkg="${category}/${pkg}"
+                    category_pkg="${category}/${_pkg}"
                 else
                     # Not in index, assume no category
-                    category_pkg="$pkg"
+                    category_pkg="$_pkg"
                 fi
                 ;;
         esac
@@ -1135,22 +1464,44 @@ fetch_remote_recipe() {
     
     mkdir -p "$local_dir"
 
-    # Build remote URL
-    remote_base="${RECIPE_RAW_URL%/}/recipes/${category_pkg}"
+    # Build remote URL based on repo context
+    case "$_force_repo" in
+        asura)
+            remote_base="${USER_RECIPE_RAW_URL%/}/recipes/${category_pkg}"
+            ;;
+        aoharu|*)
+            remote_base="${RECIPE_RAW_URL%/}/recipes/${category_pkg}"
+            ;;
+    esac
 
     required_files="version build"
     optional_files="depends bdepends rdepends package post_install post_remove checksums conflicts info sources"
+
+    stars_url="${remote_base}.stars"
+    stars_dest="${local_dir}.stars"
+    
+    if curl -f#SL "$stars_url" -o "$stars_dest" 2>/dev/null; then
+        info "Downloaded .stars recipe: $stars_dest"
+        # Make the directory for consistency
+        mkdir -p "$local_dir"
+        # Expand .stars to directory for immediate use
+        expand_stars_recipe "$stars_dest" "$local_dir"
+        return 0
+    fi
+    
+    # Fallback to directory-based recipe if .stars not found
+    info "  → .stars not found, trying directory-based recipe..."
 
     # Download files
     for file in $required_files $optional_files; do
         url="$remote_base/$file"
         dest="$local_dir/$file"
         
-        if curl -fsSL "$url" -o "$dest" 2>/dev/null; then
+        if curl -f#SL "$url" -o "$dest" 2>/dev/null; then
             :
         else
             if printf '%s' "$required_files" | grep -qw "$file"; then
-                err "Failed to fetch mandatory file '$file' for package '$pkg' from $url"
+                err "Failed to fetch mandatory file '$file' for package '$_pkg' from $url ($_force_repo repo)"
             fi
             rm -f "$dest"
         fi
@@ -1162,8 +1513,9 @@ fetch_remote_recipe() {
     chmod +x "$local_dir/post_install" 2>/dev/null || true
     chmod +x "$local_dir/post_remove" 2>/dev/null || true
 
-    info "Recipe for '$pkg' refreshed successfully at $local_dir."
+    info "Recipe for '$_pkg' fetched from $_force_repo at $local_dir."
 }
+
 fetch_remote_recipe_stars() {
     _pkg="$1"
     
@@ -1181,7 +1533,7 @@ fetch_remote_recipe_stars() {
     
     mkdir -p "$(dirname "$local_path")"
     
-    if curl -fsSL "$remote_url" -o "$local_path" 2>/dev/null; then
+    if curl -f#SL "$remote_url" -o "$local_path" 2>/dev/null; then
         info "Downloaded .stars recipe: $local_path"
         return 0
     fi
@@ -1206,7 +1558,7 @@ download_sources() {
         dest_file="$buildtmp/$filename"
 
         info "  -> Downloading $filename"
-        if ! curl -fsSL "$url" -o "$dest_file"; then
+        if ! curl -f#SL "$url" -o "$dest_file"; then
             err "Failed to download source file from $url"
         fi
     done
@@ -1226,8 +1578,15 @@ verify_checksums_and_extract() {
         [ -z "$line" ] && continue
         case "$line" in \#*) continue ;; esac
 
-        expected_hash=$(printf '%s' "$line" | awk '{print $1}')
-        filename=$(printf '%s' "$line" | awk '{print $2}')
+        if printf '%s' "$line" | grep -q ':'; then
+            # Format: sha256:hash filename
+            expected_hash=$(printf '%s' "$line" | cut -d' ' -f1 | cut -d':' -f2)
+            filename=$(printf '%s' "$line" | awk '{print $2}')
+        else
+            # Format: hash filename
+            expected_hash=$(printf '%s' "$line" | awk '{print $1}')
+            filename=$(printf '%s' "$line" | awk '{print $2}')
+        fi
 
         [ -n "$expected_hash" ] || err "Checksum file format error for $pkg. Line: '$line'"
         [ -n "$filename" ] || err "Checksum file format error for $pkg. Line: '$line'"
@@ -1266,72 +1625,113 @@ verify_checksums_and_extract() {
 
 # --- BUILD / SYNC ---
 sync_pkg_recursive() {
-    pkg="$1"
+    _pkg="$1"
     FORCE_CMD=${2:-$FORCE_BUILD}
     IS_EXPLICIT=${3:-0}
+    _parent_repo="${4:-$REPO_CONTEXT}"
 
-    pkg=$(sanitize_pkg_name "$pkg")
+    _pkg=$(sanitize_pkg_name "$_pkg")
 
     # Check visited (circular dependency)
     case " $VISITED_PACKAGES " in
-        *" $pkg "*)
-            err "[$pkg] CIRCULAR DEPENDENCY DETECTED! Chain: $VISITED_PACKAGES -> $pkg"
+        *" $_pkg "*)
+            err "[$_pkg] CIRCULAR DEPENDENCY DETECTED! Chain: $VISITED_PACKAGES -> $_pkg"
             ;;
     esac
     
-    VISITED_PACKAGES="$VISITED_PACKAGES $pkg"
+    VISITED_PACKAGES="$VISITED_PACKAGES $_pkg"
+
+    if [ "$IS_EXPLICIT" -eq 0 ]; then
+        REPO_CONTEXT="aoharu"
+        info "[$_pkg] Dependency - using AOHARU repository"
+    fi
 
     # === EARLY EXIT CONDITIONS (for dependencies only) ===
     if [ "$IS_EXPLICIT" -eq 0 ]; then
-        # Check if already installed
-        if is_pkg_installed "$pkg"; then
-            installed_ver=$(get_installed_ver "$pkg")
-            info "Dependency '$pkg' already installed ($installed_ver). Skipping."
+        # FIX: Use $_pkg consistently
+        if is_pkg_installed "$_pkg"; then
+            installed_ver=$(get_installed_ver "$_pkg")
+            info "Dependency '$_pkg' already installed ($installed_ver). Skipping."
             return 0
         fi
         
-        # Check virtuals
-        if check_virtual "$pkg"; then
+        if check_virtual "$_pkg"; then
             return 0
         fi
         
-        # Check host dependency
-        if [ "$FORCE_CMD" -eq 0 ] && check_host_dependency "$pkg"; then
-            info "Dependency '$pkg' satisfied by host. Skipping build/fetch."
+        if [ "$FORCE_CMD" -eq 0 ] && check_host_dependency "$_pkg"; then
+            info "Dependency '$_pkg' satisfied by host. Skipping build/fetch."
             return 0
         fi
     fi
-info "DEBUG: Still processing $pkg, IS_EXPLICIT=$IS_EXPLICIT"
+
+    if [ "$IS_EXPLICIT" -eq 1 ]; then
+        EXPLICIT_PKG_REPO="$REPO_CONTEXT"
+    fi
+
     # === FETCH RECIPE IF NEEDED ===
     recipe_exists=0
-    if recipe_path "$pkg" >/dev/null 2>&1; then 
+    if recipe_path "$_pkg" >/dev/null 2>&1; then 
         recipe_exists=1
+        info "[$_pkg] Using local recipe"
     fi
     
     if [ "$recipe_exists" -eq 0 ]; then
-        if ! fetch_remote_recipe "$pkg"; then
-            err "[$pkg] Recipe not found in repository and not provided by host."
+        if ! fetch_remote_recipe "$_pkg" "$REPO_CONTEXT"; then
+            if [ "$IS_EXPLICIT" -eq 0 ] && [ "$REPO_CONTEXT" = "asura" ]; then
+                info "[$_pkg] Not found in ASURA, falling back to AOHARU..."
+                fetch_remote_recipe "$_pkg" "aoharu" || err "[$_pkg] Recipe not found in any repository"
+            else
+                err "[$_pkg] Recipe not found in $REPO_CONTEXT repository"
+            fi
         fi
     fi
     
-    recipe_dir=$(recipe_path "$pkg") || err "[$pkg] Recipe not found after fetch."
+    recipe_dir=$(recipe_path "$_pkg") || err "[$_pkg] Recipe not found after fetch."
 
-    # Check if masked
-    rpath=$(recipe_path "$pkg")
-    recipe_ver=$(cat "$rpath/version" 2>/dev/null || printf 'unknown')
+    # FIX: Expand .stars and get proper paths
+    expanded_rpath="$recipe_dir"
+    stars_temp=""
+    db_path=""
     
-    if is_masked "$pkg" "$recipe_ver"; then
-        err "[$pkg] Package version $recipe_ver is MASKED. Check $MASK_FILE"
+    if [ -f "$recipe_dir" ]; then
+        case "$recipe_dir" in
+            *.stars)
+                stars_temp="$TMPDIR/astral-stars-expand-$_pkg-$$"
+                expand_stars_recipe "$recipe_dir" "$stars_temp"
+                expanded_rpath="$stars_temp"
+                db_path=$(printf '%s' "$recipe_dir" | sed "s|^${RECIPES_DIR}/||; s|\.stars$||")
+                ;;
+        esac
+    else
+        db_path=$(printf '%s' "$recipe_dir" | sed "s|^${RECIPES_DIR}/||")
     fi
 
-   # === RESOLVE DEPENDENCIES RECURSIVELY ===
-    info "Checking dependencies for $pkg..."
+    # FIX: Get version from expanded recipe
+    recipe_ver=$(cat "$expanded_rpath/version" 2>/dev/null || printf 'unknown')
     
-    # CRITICAL: Save $pkg because get_pkg_deps will overwrite it!
-    _main_pkg="$pkg"
+    if is_masked "$_pkg" "$recipe_ver"; then
+        [ -n "$stars_temp" ] && rm -rf "$stars_temp"
+        err "[$_pkg] Package version $recipe_ver is MASKED. Check $MASK_FILE"
+    fi
+
+    # === RESOLVE DEPENDENCIES RECURSIVELY ===
+    info "Checking dependencies for $_pkg (repo: $REPO_CONTEXT)..."
+
+    _main_pkg="$_pkg"
     
     deps_tmp=$(mktemp "$TMPDIR/astral-deps.XXXXXX") || err "mktemp failed for dependency resolution"
-    get_pkg_deps "$_main_pkg" > "$deps_tmp"
+    
+    # FIX: Get deps from expanded recipe if available
+    if [ -f "$expanded_rpath/depends" ] || [ -f "$expanded_rpath/bdepends" ] || [ -f "$expanded_rpath/rdepends" ]; then
+        # Temporarily create symlink for get_pkg_deps to find
+        temp_recipe_link="$RECIPES_DIR/.__temp_$_main_pkg"
+        ln -sf "$expanded_rpath" "$temp_recipe_link" 2>/dev/null || true
+        get_pkg_deps "$_main_pkg" > "$deps_tmp" 2>/dev/null || touch "$deps_tmp"
+        rm -f "$temp_recipe_link"
+    else
+        get_pkg_deps "$_main_pkg" > "$deps_tmp" 2>/dev/null || touch "$deps_tmp"
+    fi
     
     while IFS= read -r dep_pkg; do
         dep_pkg=$(printf '%s' "$dep_pkg" | tr -d '[:space:]')
@@ -1340,20 +1740,19 @@ info "DEBUG: Still processing $pkg, IS_EXPLICIT=$IS_EXPLICIT"
         case " $VISITED_PACKAGES " in
             *" $dep_pkg "*)
                 rm -f "$deps_tmp"
+                [ -n "$stars_temp" ] && rm -rf "$stars_temp"
                 err "[$_main_pkg] Would create circular dependency with: $dep_pkg"
                 ;;
         esac
         
-        # Recursively install dependency (NOT explicit)
-        # The dependency will check its own host/virtual/installed status
-        sync_pkg_recursive "$dep_pkg" "$FORCE_CMD" 0 || {
+        sync_pkg_recursive "$dep_pkg" "$FORCE_CMD" 0 "$REPO_CONTEXT" || {    
             rm -f "$deps_tmp"
+            [ -n "$stars_temp" ] && rm -rf "$stars_temp"
             err "[$_main_pkg] Failed to install dependency: $dep_pkg"
         }
     done < "$deps_tmp"
     rm -f "$deps_tmp"
     
-    # Restore the main package name
     pkg="$_main_pkg"
 
     # === CHECK IF MAIN PACKAGE ALREADY INSTALLED ===
@@ -1361,7 +1760,8 @@ info "DEBUG: Still processing $pkg, IS_EXPLICIT=$IS_EXPLICIT"
     if [ "$installed_ver" = "$recipe_ver" ] && [ "$FORCE_CMD" -eq 0 ]; then
         info "Package '$pkg' already installed at version $installed_ver."
         
-        # Add to world set if explicitly requested
+        [ -n "$stars_temp" ] && rm -rf "$stars_temp"
+        
         if [ "$IS_EXPLICIT" -eq 1 ]; then
             if is_in_world "$pkg"; then
                 info "Package already in world set."
@@ -1374,70 +1774,88 @@ info "DEBUG: Still processing $pkg, IS_EXPLICIT=$IS_EXPLICIT"
     fi
 
     # === BUILD THE PACKAGE ===
-    info "[$pkg] Building version $recipe_ver..."
-    
-    # Mark if installing ccache to suppress warnings
+    info "[$_pkg] Building version $recipe_ver (from $REPO_CONTEXT)..."
+
     if [ "$pkg" = "ccache" ] || [ "$pkg" = "dev-util/ccache" ]; then
         INSTALLING_CCACHE=1
         export INSTALLING_CCACHE
     fi
     
-    build_from_recipe "$pkg" "$FORCE_CMD"
+    build_from_recipe "$_pkg" "$FORCE_CMD"
     
     unset INSTALLING_CCACHE
     
-    # Add to world set if explicitly requested
+    # Cleanup expanded stars temp
+    [ -n "$stars_temp" ] && rm -rf "$stars_temp"
+    
     if [ "$IS_EXPLICIT" -eq 1 ]; then
         add_to_world "$pkg"
     fi
 }
 
-# hoping that this fucking asura sync doesnt explode
+# === ASURA OVERLAY SYSTEM ===
+# ASURA is a overlay on top of AOHARU
+# explicit package from ASURA, dependencies from AOHARU
 sync_pkg_asura() {
-    pkg="$1"
+    _pkg="$1"
     FORCE_CMD=${2:-0}
     IS_EXPLICIT=${3:-0}
     
-    # Validate USER_RECIPE_RAW_URL
     if [ -z "$USER_RECIPE_RAW_URL" ]; then
-        err "USER_REPO_URL not configured. Cannot sync from ASURA."
+        err "USER_RECIPE_RAW_URL not configured in $CONFIG_FILE. Cannot sync from ASURA."
     fi
     
-    info "Syncing '$pkg' from ASURA..."
-
-    # Use subshell to isolate URL change
-    (
-        RECIPE_RAW_URL="$USER_RECIPE_RAW_URL"
-        export RECIPE_RAW_URL
-        sync_pkg_recursive "$pkg" "$FORCE_CMD" "$IS_EXPLICIT"
-    ) || err "Failed to sync from ASURA"
+    info "╔═══════════════════════════════════════════════════════════════════╗"
+    info "║ ASURA: Astaraxia User Repository For all (Community Overlay)      ║"
+    info "╠═══════════════════════════════════════════════════════════════════╣"
+    info "║ Package:      $_pkg (from ASURA)                                  ║"
+    info "║ Dependencies: Fetched from AOHARU (official, trusted)             ║"
+    info "║ Security:     ASURA packages are user-contributed.                ║"
+    info "╚═══════════════════════════════════════════════════════════════════╝"
+    warn "Review package before installing: astral --inspect $_pkg"
+    
+    # Set ASURA context for the main package only
+    REPO_CONTEXT="asura"
+    
+    sync_pkg_recursive "$_pkg" "$FORCE_CMD" "$IS_EXPLICIT" "asura"
+    
+    # Reset to AOHARU
+    REPO_CONTEXT="aoharu"
+    info "✓ ASURA sync complete, context reset to AOHARU"
 }
 
 build_from_recipe() {
-    _pkg="$1"  # Changed from pkg to _pkg
+    _pkg="$1"
     FORCE_CMD=${2:-$FORCE_BUILD}
     BUILD_BINPKG=${3:-0}
 
     rpath=$(recipe_path "$_pkg") || err "recipe $_pkg not found"
     
-    # Check if it's a .stars file
+    # === NEW: Handle .stars format ===
     is_stars_recipe=0
-    if [ -f "$rpath" ] && printf '%s' "$rpath" | grep -q '\.stars$'; then
-        is_stars_recipe=1
-        info "[$_pkg] Using .stars recipe format"
-        
-        # Expand .stars to temporary directory
-        stars_temp="$TMPDIR/astral-stars-$_pkg-$$"
-        expand_stars_recipe "$rpath" "$stars_temp"
-        rpath="$stars_temp"
-        
-        # Ensure cleanup
-        trap "rm -rf '$stars_temp'" EXIT
+    stars_temp=""
+    
+    if [ -f "$rpath" ]; then
+        # Check if it's a .stars file
+        case "$rpath" in
+            *.stars)
+                is_stars_recipe=1
+                info "[$_pkg] Using .stars recipe format"
+                
+                # Expand .stars to temporary directory
+                stars_temp="$TMPDIR/astral-stars-$_pkg-$$"
+                expand_stars_recipe "$rpath" "$stars_temp"
+                rpath="$stars_temp"
+                
+                # Ensure cleanup
+                trap "rm -rf '$stars_temp'" EXIT
+                ;;
+        esac
     fi
     
     recipe_ver="unknown"
     [ -f "$rpath/version" ] && recipe_ver=$(cat "$rpath/version")
-    installed_ver=$(get_installed_ver "$_pkg") 
+    installed_ver=$(get_installed_ver "$_pkg")
 
     # DRY-RUN MODE
     if [ "$DRY_RUN" -eq 1 ]; then
@@ -1535,7 +1953,11 @@ build_from_recipe() {
     else
         err "Recipe $pkg has no build script"
     fi
-
+    
+    if [ -n "$stars_temp" ] && [ -d "$stars_temp" ]; then
+        rm -rf "$stars_temp"
+    fi
+    
     trap - EXIT
     rm -rf "$buildtmp"
 }
@@ -1611,7 +2033,7 @@ update_repo() {
             ;;
     esac
 
-    if curl -fsSL "$INDEX_URL" -o "$INDEX_FILE"; then
+    if curl -f#SL "$INDEX_URL" -o "$INDEX_FILE"; then
         info "Database updated successfully."
     else
         err "Failed to download index from $INDEX_URL"
@@ -1866,7 +2288,7 @@ self_update() {
 
     command -v curl >/dev/null 2>&1 || { err "curl not found"; return 1; }
 
-    if ! curl -fsSL "$update_url" -o "$tmp_file"; then
+    if ! curl -f#SL "$update_url" -o "$tmp_file"; then
         err "Failed to download new astral script from $update_url"; return 1
     fi
 
@@ -2369,7 +2791,7 @@ clear_ccache() {
 
 # --- ENTRY / CLI PARSING ---
 
-# Require root for all operations (astral must be invoked by root, sudo, or doas)
+# Require root for all operations
 if [ "$(id -u)" -ne 0 ]; then
     err "Astral must be run as root (via sudo or doas)."
 fi
