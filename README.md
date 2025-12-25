@@ -68,10 +68,10 @@ It may work. It may also break things.
 
 # Table Of Content
 
+* [Installation](#installation)
 * [CHANGES](#changes)
 * [Versioning](#versioning)
 * [Architecture Overview](#architecture-overview)
-* [Installation](#installation)
 * [Recipe Format](#recipe-format)
 * [Build Script Example](#build-script-example-build)
 * [Package Script Example](#package-script-example-package)
@@ -80,25 +80,43 @@ It may work. It may also break things.
 * [Troubleshooting](#troubleshooting)
 * [FAQ](#faq)
 
-## Changes (v0.7.4.0 Main)
+## Installation
 
-### New in v0.7.4.0
-- Added ccache.. yeah thats it
+### Manual Installation
+
+Place the script into `/usr/bin/astral`:
+
+```bash
+curl -o /usr/bin/astral https://raw.githubusercontent.com/Astaraxia-Linux/Astral/main/astral
+chmod +x /usr/bin/astral
+```
+
+Astral must be a single executable file.
+
 ---
 
-### ✅ Implemented (v0.7.3.0)
-* ✅ File ownership database (`.files.index`)
-* ✅ Conflict detection before install
-* ✅ Safe uninstall (never removes shared directories)
-* ✅ Versioned dependencies
-* ✅ Security checks on build scripts
-* ✅ Atomic transactions
-* ✅ Dry-run mode
-* ✅ Instant lock detection with process info
-* ✅ Force install flag (`-f`)
-* ✅ Reverse-dependency tracking
+## Changes (v2.0.1.0 Main)
 
-### 🚧 Not implemented yet (but planned)
+### New in v2.0.1.0
+- `.stars` Now supports 2 Version! yey?
+- Fixed early host dependency check
+---
+
+### Implemented (v2.0.1.0)
+*  File ownership database (`.files.index`)
+*  Conflict detection before install
+*  Safe uninstall (never removes shared directories)
+*  Versioned dependencies
+*  Security checks on build scripts
+*  Atomic transactions
+*  Dry-run mode
+*  Instant lock detection with process info
+*  Force install flag (`-f`)
+*  Reverse-dependency tracking
+*  Ccache Support
+* Supports 2 recipes format, `Directory` based and `.stars` based
+
+### Not implemented yet (but planned)
 * Signature checking / GPG verification
 * Multiple repository priorities
 * Parallel builds
@@ -151,23 +169,12 @@ Current DB structure:
 
 ---
 
-## Installation
-
-### Manual Installation
-
-Place the script into `/usr/bin/astral`:
-
-```bash
-curl -o /usr/bin/astral https://raw.githubusercontent.com/Astaraxia-Linux/Astral/main/astral
-chmod +x /usr/bin/astral
-```
-
-Astral must be a single executable file.
-
----
-
 ## Recipe Format
+### `.stars` Based
 
+- [`.stars` Specification](https://github.com/Astaraxia-Linux/Astral/blob/V2.0.1.0-Main/.stars.md)
+
+### Directory Based:
 Each package lives in:
 
 ```
