@@ -172,7 +172,7 @@ Current DB structure:
 ## Recipe Format
 ### `.stars` Based
 
-- [`.stars` Specification](https://github.com/Astaraxia-Linux/Astral/blob/V2.0.1.0-Main/.stars.md)
+- [`.stars` Specification](https://github.com/Astaraxia-Linux/Astral/blob/main/.stars.md)
 
 ### Directory Based:
 Each package lives in:
