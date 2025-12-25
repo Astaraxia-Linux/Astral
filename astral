@@ -1,9 +1,10 @@
 #!/bin/sh
-# Astral v2.0.0.0 BDGE - minimal POSIX package manager for Astaraxia
+# Astral v2.0.1.0 BDGE - minimal POSIX package manager for Astaraxia
 # My brain hurts :3, added 2 Version for .stars
-# V: 1 - Major . 0 - Minor . 0 - Patches . 0 - hotfixes
+# fix early exit host depen
+# V: 1 - Major . 0 - Minor . 1 - Patches . 0 - hotfixes
 
-version="2.0.0.0 BDGE"
+version="2.0.1.0 BDGE"
 
 # Set strict execution environment, meow~
 set -eu
@@ -1641,34 +1642,38 @@ sync_pkg_recursive() {
     
     VISITED_PACKAGES="$VISITED_PACKAGES $_pkg"
 
+    # Set repo context for dependencies
     if [ "$IS_EXPLICIT" -eq 0 ]; then
         REPO_CONTEXT="aoharu"
         info "[$_pkg] Dependency - using AOHARU repository"
+    else
+        EXPLICIT_PKG_REPO="$REPO_CONTEXT"
     fi
 
     # === EARLY EXIT CONDITIONS (for dependencies only) ===
+    # CHECK BEFORE FETCHING!
     if [ "$IS_EXPLICIT" -eq 0 ]; then
-        # FIX: Use $_pkg consistently
+        # Check if already installed
         if is_pkg_installed "$_pkg"; then
             installed_ver=$(get_installed_ver "$_pkg")
             info "Dependency '$_pkg' already installed ($installed_ver). Skipping."
             return 0
         fi
         
+        # Check virtuals
         if check_virtual "$_pkg"; then
             return 0
         fi
         
+        # Check host dependency
         if [ "$FORCE_CMD" -eq 0 ] && check_host_dependency "$_pkg"; then
             info "Dependency '$_pkg' satisfied by host. Skipping build/fetch."
             return 0
         fi
     fi
 
-    if [ "$IS_EXPLICIT" -eq 1 ]; then
-        EXPLICIT_PKG_REPO="$REPO_CONTEXT"
-    fi
-
+    # === ONLY REACH HERE IF WE NEED TO ACTUALLY INSTALL ===
+    
     # === FETCH RECIPE IF NEEDED ===
     recipe_exists=0
     if recipe_path "$_pkg" >/dev/null 2>&1; then 
@@ -1689,7 +1694,7 @@ sync_pkg_recursive() {
     
     recipe_dir=$(recipe_path "$_pkg") || err "[$_pkg] Recipe not found after fetch."
 
-    # FIX: Expand .stars and get proper paths
+    # Expand .stars and get proper paths
     expanded_rpath="$recipe_dir"
     stars_temp=""
     db_path=""
@@ -1707,7 +1712,7 @@ sync_pkg_recursive() {
         db_path=$(printf '%s' "$recipe_dir" | sed "s|^${RECIPES_DIR}/||")
     fi
 
-    # FIX: Get version from expanded recipe
+    # Get version from expanded recipe
     recipe_ver=$(cat "$expanded_rpath/version" 2>/dev/null || printf 'unknown')
     
     if is_masked "$_pkg" "$recipe_ver"; then
@@ -1722,7 +1727,7 @@ sync_pkg_recursive() {
     
     deps_tmp=$(mktemp "$TMPDIR/astral-deps.XXXXXX") || err "mktemp failed for dependency resolution"
     
-    # FIX: Get deps from expanded recipe if available
+    # Get deps from expanded recipe if available
     if [ -f "$expanded_rpath/depends" ] || [ -f "$expanded_rpath/bdepends" ] || [ -f "$expanded_rpath/rdepends" ]; then
         # Temporarily create symlink for get_pkg_deps to find
         temp_recipe_link="$RECIPES_DIR/.__temp_$_main_pkg"
@@ -1745,6 +1750,7 @@ sync_pkg_recursive() {
                 ;;
         esac
         
+        # Recursively install dependency (IS_EXPLICIT=0 means dependency)
         sync_pkg_recursive "$dep_pkg" "$FORCE_CMD" 0 "$REPO_CONTEXT" || {    
             rm -f "$deps_tmp"
             [ -n "$stars_temp" ] && rm -rf "$stars_temp"
