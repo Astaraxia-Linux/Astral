@@ -1,9 +1,10 @@
 #!/bin/sh
-# Astral v4.0.0.0 Main - minimal POSIX package manager for Astaraxia
+# Astral v4.0.0.1 Main - minimal POSIX package manager for Astaraxia
 # ROLLBACKSSS (now my back can roll)
-# V: 4 - Major . 0 - Minor . 0 - Patches . 0 - hotfixes
+# shitty symlinks added Debug
+# V: 4 - Major . 0 - Minor . 1 - Patches . 1 - hotfixes
 
-version="4.0.0.0 Main"
+version="4.0.0.1 Main"
 
 # Set strict execution environment, meow~
 set -eu
@@ -53,6 +54,7 @@ mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
+debug() { printf 'DEBUG: %s\n' "$*"; }
 
 # --- REPOSITORY CONTEXT ---
 REPO_CONTEXT="aoharu"  # Current repository context (aoharu or asura)
@@ -3270,27 +3272,33 @@ link_package_to_generation() {
     gen_path="$profile_path/generation-$generation"
     
     info "Linking $pkg to generation $generation..."
-    
+    debug "$generation"
     # Create symlinks for each directory
     for subdir in bin lib include share etc; do
         if [ -d "$store_path/$subdir" ]; then
+            debug "store path: $store_path_path/$subdir"
             mkdir -p "$gen_path/$subdir"
-            
+            debug "$gen_path/$subdir"
+
+            debug "Subdir $store_path/$subdir"
             # Link all files in subdir
             find "$store_path/$subdir" -mindepth 1 -maxdepth 1 | while read -r item; do
                 item_name=$(basename "$item")
-                
+                debug "Item: $item"
                 # Remove old link if exists
                 rm -f "$gen_path/$subdir/$item_name"
                 
                 # Create new link
                 ln -sf "$item" "$gen_path/$subdir/$item_name"
+                debug "New link: $gen_path/$subdir/$item_name"
             done
         fi
     done
     
     # Update generation metadata
     pkg_entry="$pkg:$store_path"
+    debug "pkg_entry: $pkg_entry"
+    debug "Updating Generation Metadata in $gen_path/.meta"
     if ! grep -q "^$pkg:" "$gen_path/.meta" 2>/dev/null; then
         echo "$pkg_entry" >> "$gen_path/.meta"
     fi
@@ -3671,7 +3679,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ $# -lt 1 ]; then usage; exit 1; fi
+if [ $# -lt 1 ]; then err "no operation specified (use -h or --help for help)"; exit 1; fi
 
 if [ "$INSTALL_ROOT" != "/" ]; then
     INSTALL_ROOT="${INSTALL_ROOT%/}"
@@ -3705,6 +3713,10 @@ case "$1" in
     VISITED_PACKAGES=""
     build_from_recipe_enhanced "$2" "$FORCE_BUILD"
     FORCE_BUILD=0
+    ;;
+
+    -h|--help|--H|--HELP|--Help)
+    usage
     ;;
 
 -Re|--resume)
