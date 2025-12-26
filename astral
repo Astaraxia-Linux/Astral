@@ -1,6 +1,7 @@
 #!/bin/sh
 # Astral v4.0.0.2 Main - minimal POSIX package manager for Astaraxia
-# this version is a pain in the ass to do so
+# this version is a pain in the ass to do so.
+# store is fucked, sync is fucked, hel even compile is fucked
 # V: 4 - Major . 0 - Minor . 0 - Patches . 2 - hotfixes
 
 version="4.0.0.2 Main"
