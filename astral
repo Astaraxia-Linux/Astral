@@ -1,10 +1,9 @@
 #!/bin/sh
-# Astral v2.0.1.1 Main - minimal POSIX package manager for Astaraxia
-# My brain hurts :3, added 2 Version for .stars
-# fix early exit host depen
-# V: 1 - Major . 0 - Minor . 1 - Patches . 1 - hotfixes
+# Astral v3.0.0.0 Main - minimal POSIX package manager for Astaraxia
+# My brain hurts GAHHHH. added shyeit
+# V: 3 - Major . 0 - Minor . 0 - Patches . 0 - hotfixes
 
-version="2.0.1.1 Main"
+version="3.0.0.0 Main"
 
 # Set strict execution environment, meow~
 set -eu
@@ -152,8 +151,17 @@ CCACHE_COMPRESS="true"
 CCACHE_COMPRESSLEVEL="6"
 
 # Features
-FEATURES="ccache parallel-make"
+FEATURES="ccache parallel-make strip"
 BINPKG_ENABLED="no"
+
+# Binary stripping
+STRIP_BINARIES="yes"     # Strip executables
+STRIP_LIBS="yes"         # Strip shared libraries
+STRIP_STATIC="yes"       # Strip static libraries
+
+# Collision detection
+COLLISION_DETECT="yes"   # Detect file collisions
+GHOST_FILE_CHECK="yes"   # Check for files installed outside \$PKGDIR
 
 # Dependency overrides
 HOST_PROVIDED="gcc make libc glibc linux-headers"
@@ -598,48 +606,54 @@ usage() {
 └────────────────────────────────────────────────┘
 
 Global Options:
-  --dir <DIR>           Installation root (default: /)
-  -f, --force           Force operation (per-command)
-  -n, --dry-run         Preview without making changes
+  --dir <DIR>             Installation root (default: /)
+  -f, --force             Force operation (bypass conflicts)
+  -n, --dry-run           Preview without making changes
+  -v, --verbose           Enable verbose output
 
 Package Management:
-  -S, --Sync <pkg>      Install/upgrade from AOHARU
-  -SA, --Sync-Asura <pkg> Install from ASURA (community)
-  -C, --Compile <pkg>   Build from local recipe
-  -R, --Remove <pkg>    Remove package
-  -r, --RemoveDep <pkg> Remove package + orphaned deps
-  --autoremove          Remove all orphaned packages
+  -S, --Sync <pkg>        Install/upgrade from AOHARU
+  -SA, --Sync-Asura <pkg> Install from ASURA (community overlay)
+  -C, --Compile <pkg>     Build from local recipe
+  -R, --Remove <pkg>      Remove package
+  -r, --RemoveDep <pkg>   Remove package + orphaned deps
+  --autoremove            Remove all orphaned packages
+  -Re, --resume <pkg>     Resume interrupted build
 
 Query & Information:
-  -s, --search <pkg>    Search for packages
-  -I, --info <pkg>      Show package details
-  -D, --Deps <pkg>      Show dependency tree
-  -Dc, --DepCheck       Check for broken dependencies
-  -p, --preview <pkg>   Preview install (Portage -p style)
-  -w, --why <pkg>       Show why package is installed
-  -W, --world           List explicitly installed packages
-  -ll, --List-Installed List all installed packages
-  --host-check <pkg>    Test if package is on host
-  --host-deps           Show all host dependencies
+  -s, --search <pkg>      Search for packages
+  -I, --info <pkg>        Show package details
+  -D, --Deps <pkg>        Show dependency tree
+  -Dc, --DepCheck         Check for broken dependencies
+  -p, --preview <pkg>     Preview install
+  -w, --why <pkg>         Show why package is installed
+  -W, --world             List explicitly installed packages
+  -ll, --List-Installed   List all installed packages
+  --host-check <pkg>      Test if package is on host
+  --host-deps             Show all host dependencies
 
 System Operations:
-  -UA, --Upgrade-All    Upgrade all packages
-  -u, --Update [repo]   Update repository index
-  -Cc, --Clean-Cache    Clean uninstalled recipes
-  -RI, --rebuild-index  Rebuild file ownership index
+  -UA, --Upgrade-All      Upgrade all packages
+  -u, --Update [repo]     Update repository index
+  -Cc, --Clean-Cache      Clean uninstalled recipes
+  -RI, --rebuild-index    Rebuild file ownership index
 
-Advanced:
-  --ccache-stats        Show ccache statistics
-  --ccache-clear        Clear ccache
-  --list-virtuals       Show virtual package providers
-  --mask <pkg [op ver]> Mask package version
-  --unmask <pkg>        Unmask package
-  --config              Show configuration
-  -SE, --show-env       Show build environment
+Advanced Features:
+  --ccache-stats          Show ccache statistics
+  --ccache-clear          Clear ccache
+  --list-virtuals         Show virtual package providers
+  --mask <pkg [op ver]>   Mask package version
+  --unmask <pkg>          Unmask package
+  --config                Show configuration
+  -SE, --show-env         Show build environment
 
 Maintenance:
-  -U, --self-update [br] Update Astral itself
-  -V, --Version         Show version
+  -U, --self-update [br]  Update Astral itself
+  -V, --Version           Show version
+
+┌────────────────────────────────────┐
+│ Astral is maintained by One Maniac │
+└────────────────────────────────────┘
 USAGE
 }
 
@@ -1632,6 +1646,8 @@ verify_checksums_and_extract() {
 # --- BUILD / SYNC ---
 sync_pkg_recursive() {
     _pkg="$1"
+    pkg="$_pkg"
+    _main_pkg="$pkg"
     FORCE_CMD=${2:-$FORCE_BUILD}
     IS_EXPLICIT=${3:-0}
     _parent_repo="${4:-$REPO_CONTEXT}"
@@ -1842,71 +1858,35 @@ sync_pkg_asura() {
     info "✓ ASURA sync complete, context reset to AOHARU"
 }
 
-build_from_recipe() {
+build_from_recipe_enhanced() {
     _pkg="$1"
     FORCE_CMD=${2:-$FORCE_BUILD}
     BUILD_BINPKG=${3:-0}
 
     rpath=$(recipe_path "$_pkg") || err "recipe $_pkg not found"
-
-    # === NEW: Handle .stars format ===
+    
+    # Handle .stars format
     is_stars_recipe=0
     stars_temp=""
-
+    
     if [ -f "$rpath" ]; then
-        # Check if it's a .stars file
         case "$rpath" in
             *.stars)
                 is_stars_recipe=1
                 info "[$_pkg] Using .stars recipe format"
-
-                # Expand .stars to temporary directory
                 stars_temp="$TMPDIR/astral-stars-$_pkg-$$"
                 expand_stars_recipe "$rpath" "$stars_temp"
                 rpath="$stars_temp"
-
-                # Ensure cleanup
                 trap "rm -rf '$stars_temp'" EXIT
                 ;;
         esac
     fi
-
+    
     recipe_ver="unknown"
     [ -f "$rpath/version" ] && recipe_ver=$(cat "$rpath/version")
     installed_ver=$(get_installed_ver "$_pkg")
 
-    # DRY-RUN MODE
-    if [ "$DRY_RUN" -eq 1 ]; then
-        info "[DRY-RUN] Would build package: $pkg"
-        info "[DRY-RUN] Recipe version: $recipe_ver"
-        info "[DRY-RUN] Installed version: $installed_ver"
-
-        # Check dependencies
-        info "[DRY-RUN] Dependencies:"
-        deps=$(get_pkg_deps "$pkg")
-        if [ -n "$deps" ]; then
-            printf '%s\n' "$deps" | while IFS= read -r dep; do
-                dep=$(printf '%s' "$dep" | tr -d '[:space:]')
-                [ -z "$dep" ] && continue
-                if is_pkg_installed "$dep"; then
-                    info "[DRY-RUN]   ✓ $dep (installed)"
-                else
-                    info "[DRY-RUN]   ✗ $dep (would be installed)"
-                fi
-            done
-        else
-            info "[DRY-RUN]   (none)"
-        fi
-
-        # Only run safety checks in dry-run (no actual build)
-        check_script_safety "$rpath/build" "$pkg"
-        [ -f "$rpath/package" ] && check_script_safety "$rpath/package" "$pkg"
-
-        info "[DRY-RUN] Build would complete successfully (no actual build performed)"
-        return 0
-    fi
-
-    # Check if already installed at same version (BEFORE safety checks)
+    # Check if already installed
     if [ "$installed_ver" != "none" ]; then
         if [ "$installed_ver" = "$recipe_ver" ] && [ "$FORCE_CMD" -eq 0 ]; then
             info "Package '$pkg' is already installed at version $installed_ver. Skipping."
@@ -1919,8 +1899,8 @@ build_from_recipe() {
     else
         info "Installing '$pkg' version $recipe_ver..."
     fi
-
-    # Run safety checks on build scripts (only if we're actually building)
+    
+    # Safety checks
     check_script_safety "$rpath/build" "$pkg"
     [ -f "$rpath/package" ] && check_script_safety "$rpath/package" "$pkg"
     [ -f "$rpath/post_install" ] && check_script_safety "$rpath/post_install" "$pkg"
@@ -1939,17 +1919,41 @@ build_from_recipe() {
     download_sources "$rpath" "$buildtmp"
     verify_checksums_and_extract "$pkg" "$rpath" "$buildtmp"
 
+    # FEATURE 2: Take filesystem snapshot BEFORE build
+    snapshot_before="$TMPDIR/astral-snapshot-before-$$"
+    take_fs_snapshot "$snapshot_before"
+
     if [ -f "./build" ]; then
         chmod +x ./build || true
         PKGDIR="$buildtmp/pkg"
         mkdir -p "$PKGDIR"
+        
         info "Starting isolated build for $pkg..."
+        
+        # FEATURE 1: Save state after configure
+        save_build_state "$pkg" "configure" "$buildtmp"
+        
         ( DESTDIR="$PKGDIR" ./build ) || err "build failed for $pkg"
+        
+        # FEATURE 1: Save state after build
+        save_build_state "$pkg" "build" "$buildtmp"
 
         if [ -f "./package" ]; then
             info "Running package hook for $pkg..."
             ( DESTDIR="$PKGDIR" PKGDIR="$PKGDIR" ./package ) || err "package() failed for $pkg"
         fi
+        
+        # FEATURE 1: Save state after package
+        save_build_state "$pkg" "package" "$buildtmp"
+
+        # FEATURE 2: Take snapshot AFTER build and detect ghost files
+        snapshot_after="$TMPDIR/astral-snapshot-after-$$"
+        take_fs_snapshot "$snapshot_after"
+        detect_ghost_files "$snapshot_before" "$snapshot_after" "$pkg"
+        rm -f "$snapshot_before" "$snapshot_after"
+
+        # FEATURE 4: Strip binaries if enabled
+        strip_binaries "$PKGDIR" "$pkg"
 
         create_meta "$pkg" "$recipe_ver" "x86_64" "$PKGDIR"
 
@@ -1960,8 +1964,11 @@ build_from_recipe() {
             || true
         )
 
-        check_file_conflicts "$pkg" "$PKGDIR" "$FORCE_CMD"
+        # FEATURE 3: Enhanced collision detection
+        check_file_conflicts_advanced "$pkg" "$PKGDIR" "$FORCE_CMD"
+        
         atomic_install "$pkg" "$PKGDIR" "$recipe_ver" "$rpath" "$new_files"
+        
         if [ -f "$buildtmp/post_install" ]; then
             info "Running post_install hook for $pkg..."
             ( DESTDIR="$INSTALL_ROOT" PKGDIR="$PKGDIR" "$buildtmp/post_install" ) || info "Warning: post_install failed for $pkg"
@@ -1971,11 +1978,11 @@ build_from_recipe() {
     else
         err "Recipe $pkg has no build script"
     fi
-
+    
     if [ -n "$stars_temp" ] && [ -d "$stars_temp" ]; then
         rm -rf "$stars_temp"
     fi
-
+    
     trap - EXIT
     rm -rf "$buildtmp"
 }
@@ -2445,7 +2452,7 @@ list_installed() {
     fi
     info "--- Installed Packages ---"
     last_category=""
-    find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null |
+    find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null |1
     sed "s|^${DB_DIR}/||" | sed 's|/version$||' | sort |
     while IFS= read -r pkg_path; do
         pkg_name=$(basename "$pkg_path")
@@ -2714,7 +2721,307 @@ check_system_deps() {
         info "✗ Found packages with broken dependencies."
     fi
 }
+# === Build State Management ===
+# Save build state
+save_build_state() {
+    pkg="$1"
+    stage="$2"  # configure, build, package, complete
+    buildtmp="$3"
+    
+    state_file="$buildtmp/.astral_build_state"
+    
+    cat > "$state_file" <<EOF
+PACKAGE=$pkg
+STAGE=$stage
+TIMESTAMP=$(date +%s)
+VERSION=$recipe_ver
+EOF
+    
+    info "[$pkg] Build state saved: $stage"
+}
 
+# Load build state
+load_build_state() {
+    buildtmp="$1"
+    state_file="$buildtmp/.astral_build_state"
+    
+    if [ -f "$state_file" ]; then
+        . "$state_file"
+        return 0
+    fi
+    
+    return 1
+}
+
+# Resume build from saved state
+resume_build() {
+    pkg="$1"
+    
+    info "╔════════════════════════════════════════════════════════════════╗"
+    info "║                    Resuming Build: $pkg"
+    info "╚════════════════════════════════════════════════════════════════╝"
+    info ""
+    
+    # Find build directory
+    buildtmp=$(find "$TMPDIR" -maxdepth 1 -type d -name "astral-build-${pkg}-*" 2>/dev/null | head -n1)
+    
+    if [ -z "$buildtmp" ]; then
+        err "No interrupted build found for '$pkg'. Start fresh with: astral -S $pkg"
+    fi
+    
+    if ! load_build_state "$buildtmp"; then
+        err "Build state file not found in $buildtmp"
+    fi
+    
+    info "Found interrupted build:"
+    info "  Package:   $PACKAGE"
+    info "  Stage:     $STAGE"
+    info "  Timestamp: $(date -d "@$TIMESTAMP" 2>/dev/null || date -r "$TIMESTAMP")"
+    info ""
+    
+    cd "$buildtmp" || err "Failed to enter build directory"
+    
+    # Resume from appropriate stage
+    case "$STAGE" in
+        configure)
+            info "Resuming from: make"
+            if [ -f "./build" ]; then
+                ( cd "$(find . -maxdepth 1 -type d ! -name . | head -n1)" && make -j$(nproc) )
+                save_build_state "$pkg" "build" "$buildtmp"
+            fi
+            ;;
+        build)
+            info "Resuming from: package/install"
+            # Continue to package stage
+            ;;
+        package)
+            info "Build already packaged, installing..."
+            # Continue to install
+            ;;
+        *)
+            err "Unknown build stage: $STAGE"
+            ;;
+    esac
+    
+    info "✓ Build resumed successfully"
+}
+
+# === Ghost File Detector (pls workk) ===
+# Take filesystem snapshot
+take_fs_snapshot() {
+    snapshot_file="$1"
+    
+    info "Taking filesystem snapshot..."
+    
+    # Capture timestamps and paths of critical directories
+    {
+        find /etc -maxdepth 3 -type f -printf "%T@ %p\n" 2>/dev/null
+        find /usr/bin -maxdepth 1 -type f -printf "%T@ %p\n" 2>/dev/null
+        find /usr/lib -maxdepth 2 -type f -printf "%T@ %p\n" 2>/dev/null
+        find /usr/lib64 -maxdepth 2 -type f -printf "%T@ %p\n" 2>/dev/null
+        find /lib -maxdepth 2 -type f -printf "%T@ %p\n" 2>/dev/null
+        find /lib64 -maxdepth 2 -type f -printf "%T@ %p\n" 2>/dev/null
+    } | sort > "$snapshot_file"
+}
+
+# Detect ghost files (files created outside $PKGDIR)
+detect_ghost_files() {
+    before_snapshot="$1"
+    after_snapshot="$2"
+    pkg="$3"
+    
+    info "Checking for ghost files (files installed outside \$PKGDIR)..."
+    
+    # Compare snapshots
+    ghost_files=$(comm -13 "$before_snapshot" "$after_snapshot" | awk '{print $2}')
+    
+    if [ -n "$ghost_files" ]; then
+        warn "╔════════════════════════════════════════════════════════════════╗"
+        warn "║  GHOST FILES DETECTED: Files modified outside \$PKGDIR!        ║"
+        warn "╚════════════════════════════════════════════════════════════════╝"
+        warn ""
+        warn "Package '$pkg' modified files directly on the system:"
+        warn ""
+        
+        printf '%s\n' "$ghost_files" | while read -r file; do
+            warn "  ⚠️  $file"
+        done
+        
+        warn ""
+        warn "This is a packaging bug! The build script should install to \$PKGDIR,"
+        warn "not directly to the system."
+        warn ""
+        warn "These files are NOT tracked by Astral and may cause issues."
+        warn ""
+        
+        # Ask if user wants to continue
+        if [ "$FORCE_BUILD" -eq 0 ]; then
+            printf "Continue anyway? (y/N): "
+            read -r response
+            case "$response" in
+                [Yy]*) return 0 ;;
+                *) err "Installation aborted due to ghost files" ;;
+            esac
+        else
+            warn "Continuing due to --force flag"
+        fi
+    else
+        info "  ✓ No ghost files detected (clean install)"
+    fi
+}
+
+# === Collision Protector ===
+
+# Check for file collisions (improved version that's already in your code)
+check_file_conflicts_advanced() {
+    pkg="$1"
+    pkgdir="$2"
+    force="$3"
+    
+    conflict_file="$TMPDIR/conflicts.$$"
+    collision_file="$TMPDIR/collisions.$$"
+
+    info "╔════════════════════════════════════════════════════════════════╗"
+    info "║                      Collision Detection                       ║"
+    info "╚════════════════════════════════════════════════════════════════╝"
+    info ""
+    info "Checking for file conflicts and collisions..."
+
+    [ ! -d "$pkgdir" ] && return 0
+
+    conflicts=0
+    collisions=0
+
+    ( cd "$pkgdir" && find . -type f -o -type l ) | sed 's|^\./||' | while IFS= read -r file; do
+        [ -z "$file" ] && continue
+        [ "$file" = ".astral-meta" ] && continue
+
+        target_path="$INSTALL_ROOT/$file"
+
+        # Skip if file doesn't exist yet
+        [ ! -e "$target_path" ] && [ ! -L "$target_path" ] && continue
+
+        # Check who owns this file
+        owner=$(get_file_owner "$file") || owner=""
+
+        if [ -n "$owner" ]; then
+            owner_name=$(basename "$owner")
+            if [ "$owner_name" != "$pkg" ]; then
+                # Check if files are identical (collision vs conflict)
+                if cmp -s "$pkgdir/$file" "$target_path" 2>/dev/null; then
+                    # Same content = collision (less severe)
+                    printf "COLLISION|%s|%s\n" "$file" "$owner"
+                else
+                    # Different content = conflict (severe)
+                    printf "CONFLICT|%s|%s\n" "$file" "$owner"
+                fi
+            fi
+        fi
+    done > "$conflict_file"
+
+    # Separate conflicts and collisions
+    grep "^CONFLICT" "$conflict_file" | cut -d'|' -f2,3 > "$collision_file" || true
+    conflicts=$(wc -l < "$collision_file" 2>/dev/null || echo 0)
+    
+    grep "^COLLISION" "$conflict_file" | cut -d'|' -f2,3 >> "$collision_file" || true
+    collisions=$(grep -c "^COLLISION" "$conflict_file" 2>/dev/null || echo 0)
+
+    # Display conflicts
+    if [ "$conflicts" -gt 0 ]; then
+        warn "╔════════════════════════════════════════════════════════════════╗"
+        warn "║                   FILE CONFLICTS DETECTED                      ║"
+        warn "╚════════════════════════════════════════════════════════════════╝"
+        warn ""
+        warn "The following files are owned by other packages (DIFFERENT content):"
+        warn ""
+        
+        grep "^CONFLICT" "$conflict_file" | while IFS='|' read -r type file owner; do
+            warn "  ✗ CONFLICT: $file"
+            warn "    Currently owned by: $owner"
+        done
+        
+        if [ "$force" -eq 0 ]; then
+            rm -f "$conflict_file" "$collision_file"
+            err "Aborting installation due to file conflicts. Use --force to override."
+        fi
+    fi
+    
+    # Display collisions (same content)
+    if [ "$collisions" -gt 0 ]; then
+        info ""
+        info "File collisions detected (same content, safe):"
+        info ""
+        
+        grep "^COLLISION" "$conflict_file" | while IFS='|' read -r type file owner; do
+            info "  ⚠️  $file (also in $owner)"
+        done
+        
+        info ""
+        info "These files are identical and can be safely overwritten."
+    fi
+
+    if [ "$conflicts" -eq 0 ] && [ "$collisions" -eq 0 ]; then
+        info "  ✓ No conflicts or collisions detected"
+    fi
+
+    rm -f "$conflict_file" "$collision_file"
+}
+
+# === Auto-stripp ===
+# Strip binaries and libraries
+strip_binaries() {
+    pkgdir="$1"
+    pkg="$2"
+    
+    # Check if stripping is enabled
+    if [ "$STRIP_BINARIES" != "yes" ]; then
+        return 0
+    fi
+    
+    info "╔════════════════════════════════════════════════════════════════╗"
+    info "║                 Stripping Debug Symbols                       ║"
+    info "╚════════════════════════════════════════════════════════════════╝"
+    info ""
+    
+    stripped_count=0
+    
+    # Strip binaries
+    find "$pkgdir" -type f -executable 2>/dev/null | while read -r file; do
+        if file "$file" | grep -q 'ELF.*executable'; then
+            if strip --strip-unneeded "$file" 2>/dev/null; then
+                info "  Stripped: $(basename "$file")"
+                stripped_count=$((stripped_count + 1))
+            fi
+        fi
+    done
+    
+    # Strip shared libraries
+    find "$pkgdir" -type f -name "*.so*" 2>/dev/null | while read -r file; do
+        if file "$file" | grep -q 'ELF.*shared object'; then
+            if strip --strip-unneeded "$file" 2>/dev/null; then
+                info "  Stripped: $(basename "$file")"
+                stripped_count=$((stripped_count + 1))
+            fi
+        fi
+    done
+    
+    # Strip static libraries
+    find "$pkgdir" -type f -name "*.a" 2>/dev/null | while read -r file; do
+        if strip --strip-debug "$file" 2>/dev/null; then
+            info "  Stripped: $(basename "$file")"
+            stripped_count=$((stripped_count + 1))
+        fi
+    done
+    
+    if [ $stripped_count -gt 0 ]; then
+        info ""
+        info "✓ Stripped $stripped_count files"
+    else
+        info "  No files needed stripping"
+    fi
+}
+
+# === Lock SIAL ===
 acquire_lock() {
     lockdir=$(dirname "$LOCK_FILE")
     mkdir -p "$lockdir" 2>/dev/null || true
@@ -2875,14 +3182,19 @@ case "$1" in
 -C|--Compile)
     [ $# -gt 1 ] || err "package name required"
     VISITED_PACKAGES=""
-    build_from_recipe "$2" "$FORCE_BUILD"
+    build_from_recipe_enhanced "$2" "$FORCE_BUILD"
     FORCE_BUILD=0
+    ;;
+
+-Re|--resume)
+    [ $# -gt 1 ] || err "package name required"
+    resume_build "$2"
     ;;
 
 -SA|--Sync-Asura)
     [ $# -gt 1 ] || err "package name required"
     VISITED_PACKAGES=""
-    sync_pkg_asura "$2" "$FORCE_BUILD" 1
+    sync_pkg_asura "$2" "$FORCE_BUILD" 1 
     FORCE_BUILD=0
     ;;
 
@@ -2975,6 +3287,12 @@ case "$1" in
 
 --rebuild-index|-RI)
     rebuild_files_index
+    ;;
+
+    -v|--verbose)
+    VERBOSE=1
+    export VERBOSE
+    shift
     ;;
 
 --show-env|-SE)
