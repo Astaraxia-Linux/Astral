@@ -506,7 +506,7 @@ main() {
         echo "Failed tests:"
         grep "^FAIL:" "$RESULTS_FILE" | sed 's/^FAIL: /  - /'
         echo ""
-        printf "${RED}⚠️  DO NOT MERGE - Fix these issues first!${NC}\n"
+        printf "${RED} DO NOT MERGE - Fix these issues first!${NC}\n"
         cleanup_test_env
         exit 1
     else
