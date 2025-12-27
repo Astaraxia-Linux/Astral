@@ -1,10 +1,10 @@
 #!/bin/sh
-# Astral v4.0.0.3 Main - minimal POSIX package manager for Astaraxia
+# Astral v4.0.0.4 Main - minimal POSIX package manager for Astaraxia
 # Fixed build_from_recipe_enchanced
-# gotta fix 3 errors
-# V: 4 - Major . 0 - Minor . 0 - Patches . 3 - hotfixes
+# gotta fix 2 errors
+# V: 4 - Major . 0 - Minor . 0 - Patches . 4 - hotfixes
 
-version="4.0.0.3 Main"
+version="4.0.0.4 Main"
 
 # Set strict execution environment, meow~
 set -eu
@@ -82,6 +82,13 @@ FEATURES=""
 BINPKG_ENABLED="no"
 HOST_PROVIDED=${HOST_PROVIDED:-""}
 CACHE_BIN=${CACHE_BIN:-/var/cache/astral/bin}
+# Binary stripping
+STRIP_BINARIES="yes"
+STRIP_LIBS="yes"
+STRIP_STATIC="yes"
+# Collision detection
+COLLISION_DETECT="yes"
+GHOST_FILE_CHECK="yes"
 
 load_config() {
     if [ -f "$CONFIG_FILE" ]; then
