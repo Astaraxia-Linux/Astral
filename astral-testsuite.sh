@@ -1,6 +1,7 @@
 #!/bin/sh
 # Astral Package Manager - Debug & Test Suite
 # Run this to diagnose issues
+# V 1.1.0
 
 set -eu
 
@@ -121,6 +122,10 @@ EOF
     # Test: Install pkg-a and check if pkg variable stays consistent
     output=$(ASTRAL_DEBUG=1 astral --dir="$INSTALL_ROOT" -C pkg-a 2>&1)
 
+    echo "=== ASTRAL OUTPUT ==="
+    echo "$output"
+    echo "=== END OUTPUT ==="
+
     # Check for variable corruption indicators
     if echo "$output" | grep -qi "variable corruption"; then
         log_fail "Variable corruption detected during dependency resolution"
@@ -208,34 +213,40 @@ EOF
 
 test_circular_deps() {
     log_test "Testing circular dependency detection"
-
+    
     # Create circular dependency: pkg-x -> pkg-y -> pkg-x
     mkdir -p "$RECIPES_DIR"/{pkg-x,pkg-y}
-
+    
     echo "1.0.0" > "$RECIPES_DIR/pkg-x/version"
     echo "pkg-y" > "$RECIPES_DIR/pkg-x/depends"
     cat > "$RECIPES_DIR/pkg-x/build" <<'EOF'
 #!/bin/sh
 mkdir -p "$PKGDIR/usr/bin"
-echo "x" > "$PKGDIR/usr/bin/pkg-x"
+echo "#!/bin/sh" > "$PKGDIR/usr/bin/pkg-x"
+echo "echo x" >> "$PKGDIR/usr/bin/pkg-x"
+chmod +x "$PKGDIR/usr/bin/pkg-x"
 EOF
     chmod +x "$RECIPES_DIR/pkg-x/build"
-
+    
     echo "1.0.0" > "$RECIPES_DIR/pkg-y/version"
     echo "pkg-x" > "$RECIPES_DIR/pkg-y/depends"
     cat > "$RECIPES_DIR/pkg-y/build" <<'EOF'
 #!/bin/sh
 mkdir -p "$PKGDIR/usr/bin"
-echo "y" > "$PKGDIR/usr/bin/pkg-y"
+echo "#!/bin/sh" > "$PKGDIR/usr/bin/pkg-y"
+echo "echo y" >> "$PKGDIR/usr/bin/pkg-y"
+chmod +x "$PKGDIR/usr/bin/pkg-y"
 EOF
     chmod +x "$RECIPES_DIR/pkg-y/build"
-
+    
     # Try to install - should fail with circular dependency error
     if astral --dir="$INSTALL_ROOT" -C pkg-x 2>&1 | grep -qi "circular"; then
         log_pass "Circular dependency correctly detected and blocked"
         return 0
     else
         log_fail "Circular dependency NOT detected - this is dangerous!"
+        # Show what actually happened
+        astral --dir="$INSTALL_ROOT" -C pkg-x 2>&1 | tail -n 20
         return 1
     fi
 }
