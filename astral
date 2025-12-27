@@ -1,10 +1,10 @@
 #!/bin/sh
-# Astral v4.0.0.2 Main - minimal POSIX package manager for Astaraxia
-# this version is a pain in the ass to do so.
-# store is fucked, sync is fucked, hel even compile is fucked
-# V: 4 - Major . 0 - Minor . 0 - Patches . 2 - hotfixes
+# Astral v4.0.0.3 Main - minimal POSIX package manager for Astaraxia
+# Fixed build_from_recipe_enchanced
+# gotta fix 3 errors
+# V: 4 - Major . 0 - Minor . 0 - Patches . 3 - hotfixes
 
-version="4.0.0.2 Main"
+version="4.0.0.3 Main"
 
 # Set strict execution environment, meow~
 set -eu
@@ -1666,66 +1666,63 @@ verify_checksums_and_extract() {
 
 # --- BUILD / SYNC ---
 sync_pkg_recursive() {
-    _pkg="$1"
-    pkg="$_pkg"
-    _main_pkg="$pkg"
-    FORCE_CMD=${2:-$FORCE_BUILD}
-    IS_EXPLICIT=${3:-0}
+    _requested_pkg="$1"
+    _force_cmd=${2:-$FORCE_BUILD}
+    _is_explicit=${3:-0}
     _parent_repo="${4:-$REPO_CONTEXT}"
-
-    _pkg=$(sanitize_pkg_name "$_pkg")
-
+    
+    # CRITICAL: Use local variable naming to prevent corruption
+    _pkg=$(sanitize_pkg_name "$_requested_pkg")
+    _pkg_original="$_pkg"  # Save original value
+    
     # Check visited (circular dependency)
     case " $VISITED_PACKAGES " in
         *" $_pkg "*)
             err "[$_pkg] CIRCULAR DEPENDENCY DETECTED! Chain: $VISITED_PACKAGES -> $_pkg"
             ;;
     esac
-
+    
     VISITED_PACKAGES="$VISITED_PACKAGES $_pkg"
-
+    
     # Set repo context for dependencies
-    if [ "$IS_EXPLICIT" -eq 0 ]; then
+    if [ "$_is_explicit" -eq 0 ]; then
         REPO_CONTEXT="aoharu"
         info "[$_pkg] Dependency - using AOHARU repository"
     else
         EXPLICIT_PKG_REPO="$REPO_CONTEXT"
     fi
-
+    
     # === EARLY EXIT CONDITIONS (for dependencies only) ===
-    # CHECK BEFORE FETCHING!
-    if [ "$IS_EXPLICIT" -eq 0 ]; then
+    if [ "$_is_explicit" -eq 0 ]; then
         # Check if already installed
         if is_pkg_installed "$_pkg"; then
             installed_ver=$(get_installed_ver "$_pkg")
             info "Dependency '$_pkg' already installed ($installed_ver). Skipping."
             return 0
         fi
-
+        
         # Check virtuals
         if check_virtual "$_pkg"; then
             return 0
         fi
-
+        
         # Check host dependency
-        if [ "$FORCE_CMD" -eq 0 ] && check_host_dependency "$_pkg"; then
+        if [ "$_force_cmd" -eq 0 ] && check_host_dependency "$_pkg"; then
             info "Dependency '$_pkg' satisfied by host. Skipping build/fetch."
             return 0
         fi
     fi
-
-    # === ONLY REACH HERE IF WE NEED TO ACTUALLY INSTALL ===
-
+    
     # === FETCH RECIPE IF NEEDED ===
     recipe_exists=0
     if recipe_path "$_pkg" >/dev/null 2>&1; then
         recipe_exists=1
         info "[$_pkg] Using local recipe"
     fi
-
+    
     if [ "$recipe_exists" -eq 0 ]; then
         if ! fetch_remote_recipe "$_pkg" "$REPO_CONTEXT"; then
-            if [ "$IS_EXPLICIT" -eq 0 ] && [ "$REPO_CONTEXT" = "asura" ]; then
+            if [ "$_is_explicit" -eq 0 ] && [ "$REPO_CONTEXT" = "asura" ]; then
                 info "[$_pkg] Not found in ASURA, falling back to AOHARU..."
                 fetch_remote_recipe "$_pkg" "aoharu" || err "[$_pkg] Recipe not found in any repository"
             else
@@ -1733,14 +1730,14 @@ sync_pkg_recursive() {
             fi
         fi
     fi
-
+    
     recipe_dir=$(recipe_path "$_pkg") || err "[$_pkg] Recipe not found after fetch."
-
+    
     # Expand .stars and get proper paths
     expanded_rpath="$recipe_dir"
     stars_temp=""
     db_path=""
-
+    
     if [ -f "$recipe_dir" ]; then
         case "$recipe_dir" in
             *.stars)
@@ -1753,98 +1750,105 @@ sync_pkg_recursive() {
     else
         db_path=$(printf '%s' "$recipe_dir" | sed "s|^${RECIPES_DIR}/||")
     fi
-
+    
     # Get version from expanded recipe
     recipe_ver=$(cat "$expanded_rpath/version" 2>/dev/null || printf 'unknown')
-
+    
     if is_masked "$_pkg" "$recipe_ver"; then
         [ -n "$stars_temp" ] && rm -rf "$stars_temp"
         err "[$_pkg] Package version $recipe_ver is MASKED. Check $MASK_FILE"
     fi
-
+    
     # === RESOLVE DEPENDENCIES RECURSIVELY ===
     info "Checking dependencies for $_pkg (repo: $REPO_CONTEXT)..."
-
-    _main_pkg="$_pkg"
-
+    
     deps_tmp=$(mktemp "$TMPDIR/astral-deps.XXXXXX") || err "mktemp failed for dependency resolution"
-
+    
     # Get deps from expanded recipe if available
     if [ -f "$expanded_rpath/depends" ] || [ -f "$expanded_rpath/bdepends" ] || [ -f "$expanded_rpath/rdepends" ]; then
         # Temporarily create symlink for get_pkg_deps to find
-        temp_recipe_link="$RECIPES_DIR/.__temp_$_main_pkg"
+        temp_recipe_link="$RECIPES_DIR/.__temp_$_pkg"
         ln -sf "$expanded_rpath" "$temp_recipe_link" 2>/dev/null || true
-        get_pkg_deps "$_main_pkg" > "$deps_tmp" 2>/dev/null || touch "$deps_tmp"
+        get_pkg_deps "$_pkg" > "$deps_tmp" 2>/dev/null || touch "$deps_tmp"
         rm -f "$temp_recipe_link"
     else
-        get_pkg_deps "$_main_pkg" > "$deps_tmp" 2>/dev/null || touch "$deps_tmp"
+        get_pkg_deps "$_pkg" > "$deps_tmp" 2>/dev/null || touch "$deps_tmp"
     fi
+    
 
-info "DEBUG: Dependencies found for $_main_pkg:"
-cat "$deps_tmp" >&2
-info "DEBUG: End of dependencies"
-
+    # CRITICAL FIX: Isolate dependencies in subshell
     while IFS= read -r dep_pkg; do
         dep_pkg=$(printf '%s' "$dep_pkg" | tr -d '[:space:]')
         [ -z "$dep_pkg" ] && continue
-
-info "DEBUG: About to process dependency: $dep_pkg for main package: $_main_pkg"
 
         case " $VISITED_PACKAGES " in
             *" $dep_pkg "*)
                 rm -f "$deps_tmp"
                 [ -n "$stars_temp" ] && rm -rf "$stars_temp"
-                err "[$_main_pkg] Would create circular dependency with: $dep_pkg"
+                err "[$_pkg_original] Would create circular dependency with: $dep_pkg"
                 ;;
         esac
 
-        # Recursively install dependency (IS_EXPLICIT=0 means dependency)
-        sync_pkg_recursive "$dep_pkg" "$FORCE_CMD" 0 "$REPO_CONTEXT" || {
+        # Run in subshell to prevent variable pollution
+        (
+            unset _pkg _pkg_original
+            sync_pkg_recursive "$dep_pkg" "$_force_cmd" 0 "$REPO_CONTEXT"
+        ) || {
             rm -f "$deps_tmp"
             [ -n "$stars_temp" ] && rm -rf "$stars_temp"
-            err "[$_main_pkg] Failed to install dependency: $dep_pkg"
+            err "[$_pkg_original] Failed to install dependency: $dep_pkg"
         }
     done < "$deps_tmp"
     rm -f "$deps_tmp"
-    info "DEBUG: Finished processing deps, restoring pkg=$_main_pkg"
-pkg="$_main_pkg"
-
+    
+    # Verify $_pkg wasn't corrupted
+    if [ "$_pkg" != "$_pkg_original" ]; then
+        warn "DETECTED: Variable corruption, restoring..."
+        _pkg="$_pkg_original"
+    fi
+    
+    # Verify $_pkg wasn't corrupted
+    if [ "$_pkg" != "$_pkg_original" ]; then
+        warn "DETECTED: Variable corruption ($_pkg_original became $_pkg), restoring..."
+        _pkg="$_pkg_original"
+    fi
+    
     # === CHECK IF MAIN PACKAGE ALREADY INSTALLED ===
-    installed_ver=$(get_installed_ver "$pkg")
-    if [ "$installed_ver" = "$recipe_ver" ] && [ "$FORCE_CMD" -eq 0 ]; then
-        info "Package '$pkg' already installed at version $installed_ver."
-
+    installed_ver=$(get_installed_ver "$_pkg")
+    if [ "$installed_ver" = "$recipe_ver" ] && [ "$_force_cmd" -eq 0 ]; then
+        info "Package '$_pkg' already installed at version $installed_ver."
+        
         [ -n "$stars_temp" ] && rm -rf "$stars_temp"
-
-        if [ "$IS_EXPLICIT" -eq 1 ]; then
-            if is_in_world "$pkg"; then
+        
+        if [ "$_is_explicit" -eq 1 ]; then
+            if is_in_world "$_pkg"; then
                 info "Package already in world set."
             else
-                add_to_world "$pkg"
+                add_to_world "$_pkg"
                 info "Added to world set (marked as explicitly installed)."
             fi
         fi
         return 0
     fi
-
+    
     # === BUILD THE PACKAGE ===
-    info "[$pkg] Building version $recipe_ver (from $REPO_CONTEXT)..."
-
-    if [ "$pkg" = "ccache" ] || [ "$pkg" = "dev-util/ccache" ]; then
+    info "[$_pkg] Building version $recipe_ver (from $REPO_CONTEXT)..."
+    
+    if [ "$_pkg" = "ccache" ] || [ "$_pkg" = "dev-util/ccache" ]; then
         INSTALLING_CCACHE=1
         export INSTALLING_CCACHE
     fi
-
-    # FIX: Use $pkg instead of $_pkg
-    build_from_recipe_enhanced "$pkg" "$FORCE_CMD"
-
+    
+    # CRITICAL: Pass $_pkg (not $pkg) to build function
+    build_from_recipe_enhanced "$_pkg" "$_force_cmd"
+    
     unset INSTALLING_CCACHE
-
+    
     # Cleanup expanded stars temp
     [ -n "$stars_temp" ] && rm -rf "$stars_temp"
-
-    if [ "$IS_EXPLICIT" -eq 1 ]; then
-        add_to_world "$pkg"
+    
+    if [ "$_is_explicit" -eq 1 ]; then
+        add_to_world "$_pkg"
     fi
 }
 
@@ -1885,6 +1889,8 @@ build_from_recipe_enhanced() {
     BUILD_BINPKG=${3:-0}
 
     rpath=$(recipe_path "$_pkg") || err "recipe $_pkg not found"
+
+    pkg="$_pkg"
     
     # Handle .stars format
     is_stars_recipe=0
@@ -2832,18 +2838,17 @@ resume_build() {
 take_fs_snapshot() {
     snapshot_file="$1"
     
-    info "Taking filesystem snapshot..."
-    
-    # Capture timestamps and paths of critical directories
+    # Store ONLY file paths (no timestamps) for reliable comparison
     {
-        find /etc -maxdepth 3 -type f -printf "%T@ %p\n" 2>/dev/null
-        find /usr/bin -maxdepth 1 -type f -printf "%T@ %p\n" 2>/dev/null
-        find /usr/lib -maxdepth 2 -type f -printf "%T@ %p\n" 2>/dev/null
-        find /usr/lib64 -maxdepth 2 -type f -printf "%T@ %p\n" 2>/dev/null
-        find /lib -maxdepth 2 -type f -printf "%T@ %p\n" 2>/dev/null
-        find /lib64 -maxdepth 2 -type f -printf "%T@ %p\n" 2>/dev/null
-    } | sort > "$snapshot_file"
+        find /etc -maxdepth 3 -type f 2>/dev/null
+        find /usr/bin -maxdepth 1 -type f 2>/dev/null
+        find /usr/lib -maxdepth 2 -type f 2>/dev/null
+        find /usr/lib64 -maxdepth 2 -type f 2>/dev/null
+        find /lib -maxdepth 2 -type f 2>/dev/null
+        find /lib64 -maxdepth 2 -type f 2>/dev/null
+    } | sort -u > "$snapshot_file"
 }
+
 
 # Detect ghost files (files created outside $PKGDIR)
 detect_ghost_files() {
@@ -2851,28 +2856,46 @@ detect_ghost_files() {
     after_snapshot="$2"
     pkg="$3"
     
+    # Skip if using alternate install root (testing)
+    if [ "$INSTALL_ROOT" != "/" ]; then
+        info "Skipping ghost file detection (using alternate install root)"
+        return 0
+    fi
+    
     info "Checking for ghost files (files installed outside \$PKGDIR)..."
     
-    # Compare snapshots
-    ghost_files=$(comm -13 "$before_snapshot" "$after_snapshot" | awk '{print $2}')
+    # Compare snapshots (now just paths, no timestamps)
+    ghost_files=$(comm -13 "$before_snapshot" "$after_snapshot")
     
     if [ -n "$ghost_files" ]; then
+        ghost_count=$(printf '%s\n' "$ghost_files" | wc -l)
+        
         warn "╔════════════════════════════════════════════════════════════════╗"
-        warn "║  GHOST FILES DETECTED: Files modified outside \$PKGDIR!        ║"
+        warn "║  GHOST FILES DETECTED: $ghost_count file(s) modified outside \$PKGDIR!        ║"
         warn "╚════════════════════════════════════════════════════════════════╝"
         warn ""
         warn "Package '$pkg' modified files directly on the system:"
         warn ""
         
-        printf '%s\n' "$ghost_files" | while read -r file; do
+        printf '%s\n' "$ghost_files" | head -n 20 | while read -r file; do
             warn "  ⚠️  $file"
         done
+        
+        if [ "$ghost_count" -gt 20 ]; then
+            warn "  ... and $((ghost_count - 20)) more files"
+        fi
         
         warn ""
         warn "This is a packaging bug! The build script should install to \$PKGDIR,"
         warn "not directly to the system."
         warn ""
-        warn "These files are NOT tracked by Astral and may cause issues."
+        warn "These files are NOT tracked by Astral and may cause issues during removal."
+        warn ""
+        
+        # Save ghost files list for potential recovery
+        ghost_log="$LOG_DIR/ghost-files-$pkg-$(date +%s).log"
+        printf '%s\n' "$ghost_files" > "$ghost_log"
+        warn "Ghost files list saved to: $ghost_log"
         warn ""
         
         # Ask if user wants to continue
@@ -2880,15 +2903,103 @@ detect_ghost_files() {
             printf "Continue anyway? (y/N): "
             read -r response
             case "$response" in
-                [Yy]*) return 0 ;;
-                *) err "Installation aborted due to ghost files" ;;
+                [Yy]*) 
+                    warn "Continuing installation (ghost files will not be tracked)"
+                    return 0 
+                    ;;
+                *) 
+                    err "Installation aborted due to ghost files" 
+                    ;;
             esac
         else
-            warn "Continuing due to --force flag"
+            warn "Continuing due to --force flag (ghost files will not be tracked)"
         fi
     else
         info "  ✓ No ghost files detected (clean install)"
     fi
+}
+
+take_fs_snapshot_enhanced() {
+    snapshot_file="$1"
+    pkg="$2"
+    
+    info "Taking enhanced filesystem snapshot for $pkg..."
+    
+    # Create a hash-based snapshot for better change detection
+    {
+        # Critical system directories
+        for dir in /etc /usr/bin /usr/lib /usr/lib64 /lib /lib64 /usr/local; do
+            if [ -d "$dir" ]; then
+                find "$dir" -type f 2>/dev/null | while read -r file; do
+                    # Store: path|size|mtime for efficient comparison
+                    stat -c "%n|%s|%Y" "$file" 2>/dev/null || \
+                        stat -f "%N|%z|%m" "$file" 2>/dev/null
+                done
+            fi
+        done
+    } | sort > "$snapshot_file"
+}
+
+detect_ghost_files_enhanced() {
+    before_snapshot="$1"
+    after_snapshot="$2"
+    pkg="$3"
+    pkgdir="$4"
+    
+    info "Performing enhanced ghost file detection..."
+    
+    # Expected files (what's in $PKGDIR)
+    expected_files=$(mktemp)
+    if [ -d "$pkgdir" ]; then
+        ( cd "$pkgdir" && find . -type f 2>/dev/null ) | \
+            sed 's|^\./|/|' | sort > "$expected_files"
+    fi
+    
+    # Find new files on system
+    new_files=$(mktemp)
+    comm -13 "$before_snapshot" "$after_snapshot" | \
+        cut -d'|' -f1 | sort > "$new_files"
+    
+    # Ghost files = new files NOT in $PKGDIR
+    ghost_files=$(mktemp)
+    comm -23 "$new_files" "$expected_files" > "$ghost_files"
+    
+    ghost_count=$(wc -l < "$ghost_files")
+    
+    if [ "$ghost_count" -gt 0 ]; then
+        warn "╔════════════════════════════════════════════════════════════════╗"
+        warn "║          GHOST FILES: $ghost_count file(s) outside \$PKGDIR!          ║"
+        warn "╚════════════════════════════════════════════════════════════════╝"
+        warn ""
+        
+        # Categorize ghost files by directory
+        info "Ghost files by directory:"
+        cut -d'/' -f2-3 "$ghost_files" | sort | uniq -c | sort -rn | while read -r count path; do
+            warn "  /$path: $count files"
+        done
+        
+        warn ""
+        warn "First 10 ghost files:"
+        head -n 10 "$ghost_files" | while read -r file; do
+            warn "  ⚠️  $file"
+        done
+        
+        # Cleanup
+        rm -f "$expected_files" "$new_files" "$ghost_files"
+        
+        if [ "$FORCE_BUILD" -eq 0 ]; then
+            printf "\nContinue anyway? (y/N): "
+            read -r response
+            case "$response" in
+                [Yy]*) return 0 ;;
+                *) err "Installation aborted" ;;
+            esac
+        fi
+    else
+        info "  ✓ No ghost files detected"
+    fi
+    
+    rm -f "$expected_files" "$new_files" "$ghost_files"
 }
 
 # === Collision Protector ===
@@ -3272,33 +3383,42 @@ link_package_to_generation() {
     gen_path="$profile_path/generation-$generation"
     
     info "Linking $pkg to generation $generation..."
-    debug "Generation: $generation"
+    
+    # Verify store path exists
+    if [ ! -d "$store_path" ]; then
+        err "Store path does not exist: $store_path"
+    fi
+    
     # Create symlinks for each directory
     for subdir in bin lib include share etc; do
         if [ -d "$store_path/$subdir" ]; then
-            debug "store path: $store_path_path/$subdir"
             mkdir -p "$gen_path/$subdir"
-            debug "$gen_path/$subdir"
-
-            debug "Subdir $store_path/$subdir"
+            
             # Link all files in subdir
             find "$store_path/$subdir" -mindepth 1 -maxdepth 1 | while read -r item; do
                 item_name=$(basename "$item")
-                debug "Item: $item"
-                # Remove old link if exists
-                rm -f "$gen_path/$subdir/$item_name"
+                target_link="$gen_path/$subdir/$item_name"
                 
-                # Create new link
-                ln -sf "$item" "$gen_path/$subdir/$item_name"
-                debug "New link: $gen_path/$subdir/$item_name"
+                # Remove old link if exists
+                rm -f "$target_link"
+                
+                # Create ABSOLUTE symlink directly to store
+                if ! ln -sf "$item" "$target_link"; then
+                    warn "Failed to create symlink: $target_link -> $item"
+                    continue
+                fi
+                
+                # Verify the symlink works
+                if [ ! -e "$target_link" ]; then
+                    warn "Broken symlink created: $target_link"
+                    rm -f "$target_link"
+                fi
             done
         fi
     done
-
+    
     # Update generation metadata
     pkg_entry="$pkg:$store_path"
-    debug "pkg_entry: $pkg_entry"
-    debug "Updating Generation Metadata in $gen_path/.meta"
     if ! grep -q "^$pkg:" "$gen_path/.meta" 2>/dev/null; then
         echo "$pkg_entry" >> "$gen_path/.meta"
     fi
@@ -3307,64 +3427,64 @@ link_package_to_generation() {
 update_system_symlinks() {
     profile="${1:-default}"
     profile_path="$ASTRAL_PROFILES/$profile"
-    current_gen="$profile_path/current"
     
-    info "Updating system symlinks..."
-    debug "Profile path: $profile_path"
-    debug "Current generation link: $current_gen"
+    # Resolve the ACTUAL current generation path (not a symlink)
+    if [ ! -L "$profile_path/current" ]; then
+        err "Profile 'current' symlink missing"
+    fi
+    
+    current_gen_link=$(readlink "$profile_path/current")
+    current_gen="$profile_path/$current_gen_link"
+    
+    if [ ! -d "$current_gen" ]; then
+        err "Current generation does not exist: $current_gen"
+    fi
+    
+    info "Updating system symlinks from generation: $current_gen_link"
     
     # Update /usr/local to point to profile
-    # (safer than /usr to avoid conflicts)
     for subdir in bin lib include share; do
-        usr_local="/usr/local/$subdir"
-        system_dir="${INSTALL_ROOT}${usr_local#/}"
-        debug "System dir: $system_dir"
-        debug "Subdir: $subdir"
+        system_dir="${INSTALL_ROOT}/usr/local/$subdir"
         gen_dir="$current_gen/$subdir"
-        debug "Generation dir: $gen_dir"
         
-        if [ -d "$gen_dir" ]; then
-            debug "Generation dir exists, creating system dir"
-            mkdir -p "$system_dir"
-            
-            # Count files in generation dir
-            file_count=$(find "$gen_dir" -mindepth 1 -maxdepth 1 | wc -l)
-            debug "Files in generation dir: $file_count"
-            
-            # Remove broken symlinks from system dir
-            find "$system_dir" -type l ! -exec test -e {} \; -delete 2>/dev/null || true
-            
-            # Link new files - follow the generation symlink to get actual store path
-            find "$gen_dir" -mindepth 1 -maxdepth 1 | while read -r item; do
-                item_name=$(basename "$item")
-                debug "Processing item: $item"
-                debug "Item name: $item_name"
-                
-                # Get the real target (follow all symlinks)
-                real_target=$(readlink -f "$item" 2>/dev/null || true)
-                debug "Real target resolved: $real_target"
-                
-                if [ -n "$real_target" ] && [ -e "$real_target" ]; then
-                    debug "Creating symlink: $system_dir/$item_name -> $real_target"
-                    rm -f "$system_dir/$item_name"
-                    if ln -sf "$real_target" "$system_dir/$item_name"; then
-                        info "  ✓ Linked $item_name"
-                        debug "Symlink created successfully"
-                    else
-                        warn "  ✗ Failed to create symlink for $item_name"
-                    fi
-                else
-                    warn "  ✗ Failed to resolve target for $item_name (target: $real_target)"
-                    debug "Item exists check: $([ -e "$item" ] && echo yes || echo no)"
-                    debug "Item is link: $([ -L "$item" ] && echo yes || echo no)"
-                    if [ -L "$item" ]; then
-                        debug "Link points to: $(readlink "$item")"
-                    fi
-                fi
-            done
-        else
-            debug "Generation dir does not exist: $gen_dir"
+        if [ ! -d "$gen_dir" ]; then
+            continue
         fi
+        
+        mkdir -p "$system_dir"
+        
+        # Remove broken symlinks from system dir
+        find "$system_dir" -maxdepth 1 -type l ! -exec test -e {} \; -delete 2>/dev/null || true
+        
+        # Link files from generation (which point to store)
+        find "$gen_dir" -mindepth 1 -maxdepth 1 -type l | while read -r gen_link; do
+            item_name=$(basename "$gen_link")
+            system_link="$system_dir/$item_name"
+            
+            # Get the final target (follow all symlinks)
+            real_target=$(readlink -f "$gen_link" 2>/dev/null)
+            
+            if [ -z "$real_target" ] || [ ! -e "$real_target" ]; then
+                warn "Cannot resolve: $gen_link"
+                continue
+            fi
+            
+            # Remove old system link
+            rm -f "$system_link"
+            
+            # Create system link pointing DIRECTLY to store (skip generation middleman)
+            if ln -sf "$real_target" "$system_link"; then
+                info "  ✓ Linked $item_name"
+            else
+                warn "  ✗ Failed to link $item_name"
+            fi
+            
+            # Verify it works
+            if [ ! -e "$system_link" ]; then
+                warn "  ✗ Broken link: $system_link"
+                rm -f "$system_link"
+            fi
+        done
     done
     
     info "✓ System symlinks updated"
