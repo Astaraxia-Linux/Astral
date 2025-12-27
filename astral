@@ -638,6 +638,18 @@ System Operations:
   -Cc, --Clean-Cache      Clean uninstalled recipes
   -RI, --rebuild-index    Rebuild file ownership index
 
+Multi-Flag Operations:
+  -UA             Update repos + Upgrade all packages
+  -UACc           Update + Upgrade + Clean + ccache stats
+  -IC             Rebuild index + Clean cache
+  -WD             Show world + Check dependencies
+  -vUA            Verbose mode + Update + Upgrade
+
+  Combinable flags:
+    U = Update repos       A = Upgrade all      C = Clean cache
+    I = Rebuild index      D = Dep check        W = World list
+    c = ccache stats       v = Verbose mode
+
 Advanced Features:
   --ccache-stats          Show ccache statistics
   --ccache-clear          Clear ccache
@@ -655,6 +667,38 @@ Maintenance:
 │ Astral is maintained by One Maniac │
 └────────────────────────────────────┘
 USAGE
+}
+
+multiflagss() {
+cat <<'USAGE_MULTI'
+╔════════════════════════════════════════════════════════════╗
+║          Astral Multi-Flag Command Reference               ║
+╠════════════════════════════════════════════════════════════╣
+║ Combine single-letter flags for quick operations           ║
+╠════════════════════════════════════════════════════════════╣
+║ Flag │ Operation                                           ║
+╠══════╪═════════════════════════════════════════════════════╣
+║  U   │ Update repository indexes                           ║
+║  A   │ Upgrade all packages                                ║
+║  C   │ Clean cache (remove uninstalled recipes)            ║
+║  I   │ Rebuild file ownership index                        ║
+║  D   │ Check dependencies                                  ║
+║  W   │ List world set                                      ║
+║  c   │ Show ccache statistics                              ║
+║  v   │ Enable verbose mode                                 ║
+╠══════╧═════════════════════════════════════════════════════╣
+║ Examples:                                                  ║
+║                                                            ║
+║  astral -UA      # Update repos + Upgrade all              ║
+║  astral -UACc    # Update + Upgrade + Clean + ccache stats ║
+║  astral -UIC     # Update + Rebuild index + Clean          ║
+║  astral -WD      # Show world + Check deps                 ║
+║  astral -vUA     # Verbose Update + Upgrade                ║
+╠════════════════════════════════════════════════════════════╣
+║ Requires arguments (use separately):                       ║
+║  -S, -C, -R, -I, -s, --info, etc.                          ║
+╚════════════════════════════════════════════════════════════╝
+USAGE_MULTI
 }
 
 # --- CORE UTILITY FUNCTIONS ---
@@ -3114,6 +3158,142 @@ clear_ccache() {
     info "ccache cleared"
 }
 
+parse_combined_flags() {
+    flags="$1"
+    
+    # Strip leading dash
+    flags="${flags#-}"
+    
+    # Process each character as a flag
+    i=1
+    while [ $i -le ${#flags} ]; do
+        flag=$(printf '%s' "$flags" | cut -c $i)
+        
+        case "$flag" in
+            U) echo "update" ;;
+            A) echo "upgrade-all" ;;
+            C) echo "clean-cache" ;;
+            I) echo "rebuild-index" ;;
+            D) echo "dep-check" ;;
+            W) echo "world" ;;
+            s) echo "search" ;;
+            i) echo "info" ;;
+            c) echo "ccache-stats" ;;
+            v) echo "verbose" ;;
+            *) echo "unknown:$flag" ;;
+        esac
+        
+        i=$((i + 1))
+    done
+}
+
+# Check if argument is a combined flag
+is_combined_flag() {
+    arg="$1"
+    
+    # Must start with single dash and have 2+ characters
+    case "$arg" in
+        -[A-Za-z][A-Za-z]*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Execute combined operations
+execute_combined() {
+    combined_flags="$1"
+    shift  # Remove flag argument
+    remaining_args="$*"
+    
+    info "Executing Combined Operations"
+
+    operations=$(parse_combined_flags "$combined_flags")
+    
+    # Display planned operations
+    info "Planned operations:"
+    printf '%s\n' "$operations" | while read -r op; do
+        case "$op" in
+            update) info "  1. Update repository indexes" ;;
+            upgrade-all) info "  2. Upgrade all packages" ;;
+            clean-cache) info "  3. Clean recipe cache" ;;
+            rebuild-index) info "  4. Rebuild file index" ;;
+            dep-check) info "  5. Check dependencies" ;;
+            world) info "  6. List world set" ;;
+            ccache-stats) info "  7. Show ccache stats" ;;
+            verbose) info "  → Verbose mode enabled" ;;
+            search) info "  → Search (requires argument)" ;;
+            info) info "  → Show info (requires argument)" ;;
+            unknown:*) 
+                flag="${op#unknown:}"
+                err "Unknown flag in combination: -$flag"
+                ;;
+        esac
+    done
+    
+    info ""
+    
+    # Execute operations in order
+    printf '%s\n' "$operations" | while read -r op; do
+        case "$op" in
+            update)
+                info ">>> Updating repositories..."
+                update_repo "" || warn "Update failed"
+                info ""
+                ;;
+            upgrade-all)
+                info ">>> Upgrading all packages..."
+                upgrade_all || warn "Upgrade failed"
+                info ""
+                ;;
+            clean-cache)
+                info ">>> Cleaning cache..."
+                clean_cache
+                info ""
+                ;;
+            rebuild-index)
+                info ">>> Rebuilding file index..."
+                rebuild_files_index
+                info ""
+                ;;
+            dep-check)
+                info ">>> Checking dependencies..."
+                check_system_deps
+                info ""
+                ;;
+            world)
+                info ">>> Listing world set..."
+                list_world
+                info ""
+                ;;
+            ccache-stats)
+                info ">>> Showing ccache stats..."
+                show_ccache_stats
+                info ""
+                ;;
+            verbose)
+                VERBOSE=1
+                export VERBOSE
+                ;;
+            search)
+                if [ -n "$remaining_args" ]; then
+                    search_pkg "$remaining_args"
+                else
+                    err "Search requires package name: astral -s <pkg>"
+                fi
+                ;;
+            info)
+                if [ -n "$remaining_args" ]; then
+                    show_pkg_info "$remaining_args"
+                else
+                    err "Info requires package name: astral -i <pkg>"
+                fi
+                ;;
+        esac
+    done
+    
+    info "✓ All operations complete"
+}
+
+
 # --- ENTRY / CLI PARSING ---
 
 # Require root for all operations
@@ -3170,6 +3350,11 @@ ensure_default_config
 ensure_default_virtuals
 ensure_default_mask
 load_config
+
+if is_combined_flag "$1"; then
+    execute_combined "$@"
+    exit 0
+fi
 
 case "$1" in
 -S|--Sync)
