@@ -1,12 +1,19 @@
 #!/bin/sh
-# Astral v3.1.0.0 Main - minimal POSIX package manager for Astaraxia
-# My brain hurts GAHHHH. added shyeit
-# V: 3 - Major . 1 - Minor . 0 - Patches . 0 - hotfixes
+# Astral v3.1.1.0 Main - minimal POSIX package manager for Astaraxia
+# Added multi-flags, some colors for output, and fixed some bugs, yey
+# V: 3 - Major . 1 - Minor . 1 - Patches . 0 - hotfixes
 
-version="3.1.0.0 Main"
+version="3.1.1.0 Main"
 
 # Set strict execution environment, meow~
 set -eu
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
 
 # Global state variables
 INSTALL_ROOT="/"    # Installation target directory
@@ -50,9 +57,16 @@ LOCK_FILE=${LOCK_FILE:-/var/lock/astral.lock}
 
 mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 
-err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-info() { printf '%s\n' "$*"; }
-warn() { printf 'WARNING: %s\n' "$*" >&2; }
+err() { printf "${RED}[ERROR]${NC} %s\n" "$*" >&2; exit 1; }
+info() { printf "${NC}%s\n" "$*"; }
+warn() { printf "${YELLOW}[WARNING]${NC} %s\n" "$*" >&2; }
+debug() { printf "${GREEN}[DEBUG]${NC} %s\n" "$*"; }
+vinfo() {
+    [ "${VERBOSE:-0}" = "1" ] && info "$@"
+}
+vwarn() {
+    [ "${VERBOSE:-0}" = "1" ] && warn "$@"
+}
 
 # --- REPOSITORY CONTEXT ---
 REPO_CONTEXT="aoharu"  # Current repository context (aoharu or asura)
@@ -1127,6 +1141,7 @@ test_host_dependency() {
 expand_stars_recipe() {
     stars_file="$1"
     temp_dir="$2"
+    pkg_name="${3:-$(basename "$stars_file" .stars)}"
 
     mkdir -p "$temp_dir"
 
@@ -1348,17 +1363,17 @@ parse_metadata_block_v2() {
 
         case "$key" in
             version)
-                printf '%s\n' "$value" > "$temp_dir/version"
+                printf '%s\n' "$value" > "$temp_dir/version" || err "Failed to write version file"
                 ;;
             description)
-                printf '%s\n' "$value" > "$temp_dir/info"
+                printf '%s\n' "$value" > "$temp_dir/info" || err "Failed to write info file"
                 ;;
             homepage)
-                printf '%s\n' "$value" >> "$temp_dir/info"
+                printf '%s\n' "$value" >> "$temp_dir/info" || err "Failed to write info 2 file"
                 ;;
             category)
                 # Store category for later use if needed
-                printf '%s\n' "$value" > "$temp_dir/.category"
+                printf '%s\n' "$value" > "$temp_dir/.category" || err "Failed to write category file"
                 ;;
         esac
     done
@@ -1535,7 +1550,7 @@ fetch_remote_recipe() {
     stars_dest="${local_dir}.stars"
 
     # Try flat structure first (category/package.stars)
-    if curl -f#SL "$stars_url_flat" -o "$stars_dest" 2>/dev/null; then
+    if curl -fsSL --progress-bar "$stars_url_flat" -o "$stars_dest" 2>/dev/null; then
         info "Downloaded .stars recipe (flat): $stars_dest"
         mkdir -p "$local_dir"
         expand_stars_recipe "$stars_dest" "$local_dir"
@@ -1794,23 +1809,18 @@ sync_pkg_recursive() {
 
     # Get deps from expanded recipe if available
     if {
-        [ -f "$expanded_rpath/depends" ] && cat "$expanded_rpath/depends"
-        [ -f "$expanded_rpath/bdepends" ] && cat "$expanded_rpath/bdepends"
-        [ -f "$expanded_rpath/rdepends" ] && cat "$expanded_rpath/rdepends"
-    } | grep -v '^[[:space:]]*#' | grep -v '^[[:space:]]*$' | awk '{print $1}' | sort -u > "$deps"
+            [ -f "$expanded_rpath/depends" ] && cat "$expanded_rpath/depends"
+            [ -f "$expanded_rpath/bdepends" ] && cat "$expanded_rpath/bdepends"
+            [ -f "$expanded_rpath/rdepends" ] && cat "$expanded_rpath/rdepends"
+        } | grep -v '^[[:space:]]*#' | grep -v '^[[:space:]]*$' | awk '{print $1}' | sort -u > "$deps_tmp"
+
     else
         get_pkg_deps "$_main_pkg" > "$deps_tmp" 2>/dev/null || touch "$deps_tmp"
     fi
 
-info "DEBUG: Dependencies found for $_main_pkg:"
-cat "$deps_tmp" >&2
-info "DEBUG: End of dependencies"
-
     while IFS= read -r dep_pkg; do
         dep_pkg=$(printf '%s' "$dep_pkg" | tr -d '[:space:]')
         [ -z "$dep_pkg" ] && continue
-
-info "DEBUG: About to process dependency: $dep_pkg for main package: $_main_pkg"
 
         case " $VISITED_PACKAGES " in
             *" $dep_pkg "*)
@@ -1828,7 +1838,6 @@ info "DEBUG: About to process dependency: $dep_pkg for main package: $_main_pkg"
         }
     done < "$deps_tmp"
     rm -f "$deps_tmp"
-    info "DEBUG: Finished processing deps, restoring pkg=$_main_pkg"
 pkg="$_main_pkg"
 
     # === CHECK IF MAIN PACKAGE ALREADY INSTALLED ===
@@ -1934,35 +1943,35 @@ build_from_recipe_enhanced() {
     # Check if already installed
     if [ "$installed_ver" != "none" ]; then
         if [ "$installed_ver" = "$recipe_ver" ] && [ "$FORCE_CMD" -eq 0 ]; then
-            info "Package '$pkg' is already installed at version $installed_ver. Skipping."
+            info "Package '$_pkg' is already installed at version $installed_ver. Skipping."
             return 0
         elif [ "$FORCE_CMD" -eq 1 ]; then
-            info "Force rebuilding $pkg."
+            info "Force rebuilding $_pkg."
         else
-            info "Upgrading '$pkg' from $installed_ver to $recipe_ver..."
+            info "Upgrading '$_pkg' from $installed_ver to $recipe_ver..."
         fi
     else
-        info "Installing '$pkg' version $recipe_ver..."
+        info "Installing '$_pkg' version $recipe_ver..."
     fi
     
     # Safety checks
-    check_script_safety "$rpath/build" "$pkg"
-    [ -f "$rpath/package" ] && check_script_safety "$rpath/package" "$pkg"
-    [ -f "$rpath/post_install" ] && check_script_safety "$rpath/post_install" "$pkg"
+    check_script_safety "$rpath/build" "$_pkg"
+    [ -f "$rpath/package" ] && check_script_safety "$rpath/package" "$_pkg"
+    [ -f "$rpath/post_install" ] && check_script_safety "$rpath/post_install" "$_pkg"
 
-    buildtmp="$TMPDIR/astral-build-$pkg-$$"
+    buildtmp="$TMPDIR/astral-build-$_pkg-$$"
     mkdir -p "$buildtmp"
     if [ -d "$rpath" ]; then
         cp -a "$rpath"/* "$buildtmp"/ 2>/dev/null || true
     else
-        err "Directory recipe structure not found for $pkg."
+        err "Directory recipe structure not found for $_pkg."
     fi
     cd "$buildtmp" || err "cd failed"
 
     trap "rm -rf '$buildtmp'" EXIT
 
     download_sources "$rpath" "$buildtmp"
-    verify_checksums_and_extract "$pkg" "$rpath" "$buildtmp"
+    verify_checksums_and_extract "$_pkg" "$rpath" "$buildtmp"
 
     # FEATURE 2: Take filesystem snapshot BEFORE build
     snapshot_before="$TMPDIR/astral-snapshot-before-$$"
@@ -1973,34 +1982,34 @@ build_from_recipe_enhanced() {
         PKGDIR="$buildtmp/pkg"
         mkdir -p "$PKGDIR"
         
-        info "Starting isolated build for $pkg..."
+        info "Starting isolated build for $_pkg..."
         
-        # FEATURE 1: Save state after configure
-        save_build_state "$pkg" "configure" "$buildtmp"
+        # Save state after configure
+        save_build_state "$_pkg" "configure" "$buildtmp" "$recipe_ver"
         
-        ( DESTDIR="$PKGDIR" ./build ) || err "build failed for $pkg"
+        ( DESTDIR="$PKGDIR" ./build ) || err "build failed for $_pkg"
         
-        # FEATURE 1: Save state after build
-        save_build_state "$pkg" "build" "$buildtmp"
+        # Save state after build
+        save_build_state "$_pkg" "build" "$buildtmp" "$recipe_ver"
 
         if [ -f "./package" ]; then
-            info "Running package hook for $pkg..."
-            ( DESTDIR="$PKGDIR" PKGDIR="$PKGDIR" ./package ) || err "package() failed for $pkg"
+            info "Running package hook for $_pkg..."
+            ( DESTDIR="$PKGDIR" PKGDIR="$PKGDIR" ./package ) || err "package() failed for $_pkg"
         fi
         
-        # FEATURE 1: Save state after package
-        save_build_state "$pkg" "package" "$buildtmp"
+        # Save state after package
+       save_build_state "$_pkg" "package" "$buildtmp" "$recipe_ver"
 
         # FEATURE 2: Take snapshot AFTER build and detect ghost files
         snapshot_after="$TMPDIR/astral-snapshot-after-$$"
         take_fs_snapshot "$snapshot_after"
-        detect_ghost_files "$snapshot_before" "$snapshot_after" "$pkg"
+        detect_ghost_files "$snapshot_before" "$snapshot_after" "$_pkg"
         rm -f "$snapshot_before" "$snapshot_after"
 
         # FEATURE 4: Strip binaries if enabled
-        strip_binaries "$PKGDIR" "$pkg"
+        strip_binaries "$PKGDIR" "$_pkg"
 
-        create_meta "$pkg" "$recipe_ver" "x86_64" "$PKGDIR"
+        create_meta "$_pkg" "$recipe_ver" "x86_64" "$PKGDIR"
 
         new_files=$(
             ( cd "$PKGDIR" && find . -mindepth 1 -print ) \
@@ -2010,18 +2019,18 @@ build_from_recipe_enhanced() {
         )
 
         # FEATURE 3: Enhanced collision detection
-        check_file_conflicts_advanced "$pkg" "$PKGDIR" "$FORCE_CMD"
+        check_file_conflicts_advanced "$_pkg" "$PKGDIR" "$FORCE_CMD"
         
-        atomic_install "$pkg" "$PKGDIR" "$recipe_ver" "$rpath" "$new_files"
+        atomic_install "$_pkg" "$PKGDIR" "$recipe_ver" "$rpath" "$new_files"
         
         if [ -f "$buildtmp/post_install" ]; then
-            info "Running post_install hook for $pkg..."
+            info "Running post_install hook for $_pkg..."
             ( DESTDIR="$INSTALL_ROOT" PKGDIR="$PKGDIR" "$buildtmp/post_install" ) || info "Warning: post_install failed for $pkg"
         fi
 
-        info "Successfully installed $pkg ($recipe_ver)."
+        info "Successfully installed $_pkg ($recipe_ver)."
     else
-        err "Recipe $pkg has no build script"
+        err "Recipe $_pkg has no build script"
     fi
     
     if [ -n "$stars_temp" ] && [ -d "$stars_temp" ]; then
@@ -2031,6 +2040,11 @@ build_from_recipe_enhanced() {
     trap - EXIT
     rm -rf "$buildtmp"
 }
+
+build_from_recipe() {
+    build_from_recipe_enhanced "$@"
+}
+
 
 # Track explicitly installed packages
 add_to_world() {
@@ -2555,7 +2569,7 @@ check_deps_tree() {
         fi
     fi
 
-    deps=$(get_pkg_deps "$pkg" || true)
+    deps=$(get_pkg_deps "$1" || true)
     [ -z "$deps" ] && return 0
 
     printf '%s\n' "$deps" | while IFS= read -r dep; do
@@ -2770,8 +2784,9 @@ check_system_deps() {
 # Save build state
 save_build_state() {
     pkg="$1"
-    stage="$2"  # configure, build, package, complete
+    stage="$2"
     buildtmp="$3"
+    version="${4:-unknown}"  # Add version parameter
     
     state_file="$buildtmp/.astral_build_state"
     
@@ -2779,7 +2794,7 @@ save_build_state() {
 PACKAGE=$pkg
 STAGE=$stage
 TIMESTAMP=$(date +%s)
-VERSION=$recipe_ver
+VERSION=$version
 EOF
     
     info "[$pkg] Build state saved: $stage"
@@ -3019,7 +3034,7 @@ strip_binaries() {
     pkg="$2"
     
     # Check if stripping is enabled
-    if [ "$STRIP_BINARIES" != "yes" ]; then
+    if [ "${STRIP_BINARIES:-no}" != "yes" ]; then
         return 0
     fi
     
