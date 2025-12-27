@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v3.0.0.0 Main - minimal POSIX package manager for Astaraxia
+# Astral v3.1.0.0 Main - minimal POSIX package manager for Astaraxia
 # My brain hurts GAHHHH. added shyeit
-# V: 3 - Major . 0 - Minor . 0 - Patches . 0 - hotfixes
+# V: 3 - Major . 1 - Minor . 0 - Patches . 0 - hotfixes
 
-version="3.0.0.0 Main"
+version="3.1.0.0 Main"
 
 # Set strict execution environment, meow~
 set -eu
@@ -888,14 +888,14 @@ get_pkg_deps() {
 }
 
 get_legacy_deps() {
-    pkg="$1"
+    _pkg="$1"
     depfile=""
 
-    pkg_path=$(resolve_installed_path "$pkg") 2>/dev/null || pkg_path="$pkg"
+    pkg_path=$(resolve_installed_path "$_pkg") 2>/dev/null || pkg_path="$_pkg"
     depfile="$DB_DIR/$pkg_path/depends"
 
     if [ ! -f "$depfile" ]; then
-        rpath=$(recipe_path "$pkg") 2>/dev/null || rpath=""
+        rpath=$(recipe_path "$_pkg") 2>/dev/null || rpath=""
         [ -n "$rpath" ] && depfile="$rpath/depends"
     fi
 
@@ -904,14 +904,14 @@ get_legacy_deps() {
 }
 
 get_build_deps() {
-    pkg="$1"
+    _pkg="$1"
     depfile=""
 
-    pkg_path=$(resolve_installed_path "$pkg") 2>/dev/null || pkg_path="$pkg"
+    pkg_path=$(resolve_installed_path "$_pkg") 2>/dev/null || pkg_path="$_pkg"
     depfile="$DB_DIR/$pkg_path/bdepends"
 
     if [ ! -f "$depfile" ]; then
-        rpath=$(recipe_path "$pkg") 2>/dev/null || rpath=""
+        rpath=$(recipe_path "$_pkg") 2>/dev/null || rpath=""
         [ -n "$rpath" ] && depfile="$rpath/bdepends"
     fi
 
@@ -921,14 +921,14 @@ get_build_deps() {
 
 # Get runtime dependencies (RDEPEND)
 get_runtime_deps() {
-    pkg="$1"
+    _pkg="$1"
     depfile=""
 
-    pkg_path=$(resolve_installed_path "$pkg") 2>/dev/null || pkg_path="$pkg"
+    pkg_path=$(resolve_installed_path "$_pkg") 2>/dev/null || pkg_path="$_pkg"
     depfile="$DB_DIR/$pkg_path/rdepends"
 
     if [ ! -f "$depfile" ]; then
-        rpath=$(recipe_path "$pkg") 2>/dev/null || rpath=""
+        rpath=$(recipe_path "$_pkg") 2>/dev/null || rpath=""
         [ -n "$rpath" ] && depfile="$rpath/rdepends"
     fi
 
@@ -1768,7 +1768,7 @@ sync_pkg_recursive() {
         case "$recipe_dir" in
             *.stars)
                 stars_temp="$TMPDIR/astral-stars-expand-$_pkg-$$"
-                expand_stars_recipe "$recipe_dir" "$stars_temp"
+                expand_stars_recipe "$recipe_dir" "$stars_temp" "$_pkg"
                 expanded_rpath="$stars_temp"
                 db_path=$(printf '%s' "$recipe_dir" | sed "s|^${RECIPES_DIR}/||; s|\.stars$||")
                 ;;
@@ -1793,12 +1793,11 @@ sync_pkg_recursive() {
     deps_tmp=$(mktemp "$TMPDIR/astral-deps.XXXXXX") || err "mktemp failed for dependency resolution"
 
     # Get deps from expanded recipe if available
-    if [ -f "$expanded_rpath/depends" ] || [ -f "$expanded_rpath/bdepends" ] || [ -f "$expanded_rpath/rdepends" ]; then
-        # Temporarily create symlink for get_pkg_deps to find
-        temp_recipe_link="$RECIPES_DIR/.__temp_$_main_pkg"
-        ln -sf "$expanded_rpath" "$temp_recipe_link" 2>/dev/null || true
-        get_pkg_deps "$_main_pkg" > "$deps_tmp" 2>/dev/null || touch "$deps_tmp"
-        rm -f "$temp_recipe_link"
+    if {
+        [ -f "$expanded_rpath/depends" ] && cat "$expanded_rpath/depends"
+        [ -f "$expanded_rpath/bdepends" ] && cat "$expanded_rpath/bdepends"
+        [ -f "$expanded_rpath/rdepends" ] && cat "$expanded_rpath/rdepends"
+    } | grep -v '^[[:space:]]*#' | grep -v '^[[:space:]]*$' | awk '{print $1}' | sort -u > "$deps"
     else
         get_pkg_deps "$_main_pkg" > "$deps_tmp" 2>/dev/null || touch "$deps_tmp"
     fi
@@ -1859,7 +1858,7 @@ pkg="$_main_pkg"
     fi
 
     # FIX: Use $pkg instead of $_pkg
-    build_from_recipe "$pkg" "$FORCE_CMD"
+    build_from_recipe_enhanced "$pkg" "$FORCE_CMD"
 
     unset INSTALLING_CCACHE
 
@@ -1909,6 +1908,8 @@ build_from_recipe_enhanced() {
 
     rpath=$(recipe_path "$_pkg") || err "recipe $_pkg not found"
     
+    pkg="$_pkg"
+
     # Handle .stars format
     is_stars_recipe=0
     stars_temp=""
@@ -2496,7 +2497,7 @@ list_installed() {
     fi
     info "--- Installed Packages ---"
     last_category=""
-    find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null |1
+    find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null |
     sed "s|^${DB_DIR}/||" | sed 's|/version$||' | sort |
     while IFS= read -r pkg_path; do
         pkg_name=$(basename "$pkg_path")
