@@ -1,6 +1,6 @@
 #!/bin/sh
 # Astral Package Manager - Debug & Test Suite
-# Run this to diagnose issues before merging
+# Run this to diagnose issues
 
 set -eu
 
