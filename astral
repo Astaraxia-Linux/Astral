@@ -1,13 +1,20 @@
 #!/bin/sh
-# Astral v4.0.0.4 Main - minimal POSIX package manager for Astaraxia
-# Fixed build_from_recipe_enchanced
-# gotta fix 2 errors
-# V: 4 - Major . 0 - Minor . 0 - Patches . 4 - hotfixes
+# Astral v4.0.0.5 Main - minimal POSIX package manager for Astaraxia
+# could not install packages, store fucked, not stable af, fix this yourself then
+# i fucking hate this fucking package manger, fuck this
+# V: 4 - Major . 0 - Minor . 0 - Patches . 5 - hotfixes
 
-version="4.0.0.4 Main"
+version="4.0.0.5 Main"
 
 # Set strict execution environment, meow~
 set -eu
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
 
 # Global state variables
 INSTALL_ROOT="/"    # Installation target directory
@@ -48,13 +55,14 @@ INDEX_FILE_ASURA="$DB_DIR/index_asura"
 
 # --- Misc Var ---
 LOCK_FILE=${LOCK_FILE:-/var/lock/astral.lock}
+TESTSUITE="/usr/bin/astral-testsuite.sh"
 
 mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$CACHE_BIN" "$DB_DIR" "$LOG_DIR" "$TMPDIR"
 
-err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-info() { printf '%s\n' "$*"; }
-warn() { printf 'WARNING: %s\n' "$*" >&2; }
-debug() { printf 'DEBUG: %s\n' "$*"; }
+err() { printf "${RED}ERROR:${NC} %s\n" "$*" >&2; exit 1; }
+info() { printf "${NC}%s\n" "$*"; }
+warn() { printf "${YELLOW}WARNING:${NC} %s\n" "$*" >&2; }
+debug() { printf "${GREEN}DEBUG:${NC} %s\n" "$*"; }
 
 # --- REPOSITORY CONTEXT ---
 REPO_CONTEXT="aoharu"  # Current repository context (aoharu or asura)
@@ -379,20 +387,25 @@ SAFETY_WARNING
 }
 
 # --- FILE OWNERSHIP DATABASE ---
-check_file_conflicts() {
+# Check for file collisions
+check_file_conflicts_advanced() {
     pkg="$1"
     pkgdir="$2"
     force="$3"
-
+    
     conflict_file="$TMPDIR/conflicts.$$"
+    collision_file="$TMPDIR/collisions.$$"
 
-    [ "$DRY_RUN" -eq 1 ] && info "[DRY-RUN] Checking for file conflicts..."
-    [ "$DRY_RUN" -eq 0 ] && info "Checking for file conflicts..."
+    info "╔════════════════════════════════════════════════════════════════╗"
+    info "║                      Collision Detection                       ║"
+    info "╚════════════════════════════════════════════════════════════════╝"
+    info ""
+    info "Checking for file conflicts and collisions..."
 
     [ ! -d "$pkgdir" ] && return 0
 
-    conflicts=""
-    conflict_count=0
+    conflicts=0
+    collisions=0
 
     ( cd "$pkgdir" && find . -type f -o -type l ) | sed 's|^\./||' | while IFS= read -r file; do
         [ -z "$file" ] && continue
@@ -409,33 +422,64 @@ check_file_conflicts() {
         if [ -n "$owner" ]; then
             owner_name=$(basename "$owner")
             if [ "$owner_name" != "$pkg" ]; then
-                conflict_count=$((conflict_count + 1))
-                warn "  ✗ CONFLICT: $file (owned by $owner)"
-                printf '%s|%s\n' "$file" "$owner"
+                # Check if files are identical (collision vs conflict)
+                if cmp -s "$pkgdir/$file" "$target_path" 2>/dev/null; then
+                    # Same content = collision (less severe)
+                    printf "COLLISION|%s|%s\n" "$file" "$owner"
+                else
+                    # Different content = conflict (severe)
+                    printf "CONFLICT|%s|%s\n" "$file" "$owner"
+                fi
             fi
-        else
-            # File exists but not tracked
-            conflict_count=$((conflict_count + 1))
-            warn "  ✗ CONFLICT: $file (untracked file on system)"
-            printf '%s|%s\n' "$file" "UNTRACKED"
         fi
-    done > "$TMPDIR/conflicts.$$"
+    done > "$conflict_file"
 
-    conflict_count=$(wc -l < "$TMPDIR/conflicts.$$" 2>/dev/null || echo 0)
-    if [ "$conflict_count" -gt 0 ]; then
-        if [ "$force" -eq 0 ]; then
-            cat "$TMPDIR/conflicts.$$" >&2
-            rm -f "$TMPDIR/conflicts.$$"
-            err "Found $conflict_count file conflict(s). Use -f/--force to override."
-        else
-            warn "Overriding $conflict_count file conflict(s) due to --force"
-            cat "$TMPDIR/conflicts.$$" >&2
+    # Separate conflicts and collisions
+    grep "^CONFLICT" "$conflict_file" | cut -d'|' -f2,3 > "$collision_file" || true
+    conflicts=$(grep -c "^CONFLICT" "$conflict_file" 2>/dev/null | tr -d ' ' || echo 0)
+    
+    grep "^COLLISION" "$conflict_file" | cut -d'|' -f2,3 >> "$collision_file" || true
+    collisions=$(grep -c "^COLLISION" "$conflict_file" 2>/dev/null | tr -d ' ' || echo 0)
+
+    # Display conflicts
+    if [ "$conflicts" -gt 0 ]; then
+        warn "╔════════════════════════════════════════════════════════════════╗"
+        warn "║                   FILE CONFLICTS DETECTED                      ║"
+        warn "╚════════════════════════════════════════════════════════════════╝"
+        warn ""
+        warn "The following files are owned by other packages (DIFFERENT content):"
+        warn ""
+        
+        grep "^CONFLICT" "$conflict_file" | while IFS='|' read -r type file owner; do
+            warn "  ✗ CONFLICT: $file"
+            warn "    Currently owned by: $owner"
+        done
+        
+        if [ "${force:-0}" -eq 0 ]; then
+            rm -f "$conflict_file" "$collision_file"
+            err "Aborting installation due to file conflicts. Use --force to override."
         fi
-    else
-        info "  ✓ No file conflicts detected"
+    fi
+    
+    # Display collisions (same content)
+    if [ "$collisions" -gt 0 ]; then
+        info ""
+        info "File collisions detected (same content, safe):"
+        info ""
+        
+        grep "^COLLISION" "$conflict_file" | while IFS='|' read -r type file owner; do
+            warn "$file (also in $owner)"
+        done
+        
+        info ""
+        info "These files are identical and can be safely overwritten."
     fi
 
-    rm -f "$TMPDIR/conflicts.$$"
+    if [ "$conflicts" -eq 0 ] && [ "$collisions" -eq 0 ]; then
+        info "  ✓ No conflicts or collisions detected"
+    fi
+
+    rm -f "$conflict_file" "$collision_file"
 }
 
 # --- VERSION COMPARISON ---
@@ -1682,13 +1726,14 @@ sync_pkg_recursive() {
     _pkg=$(sanitize_pkg_name "$_requested_pkg")
     _pkg_original="$_pkg"  # Save original value
     
-    # Check visited (circular dependency)
+    # Check visited (circular dependency) BEFORE adding to list
     case " $VISITED_PACKAGES " in
         *" $_pkg "*)
             err "[$_pkg] CIRCULAR DEPENDENCY DETECTED! Chain: $VISITED_PACKAGES -> $_pkg"
             ;;
     esac
-    
+
+    # Add to visited list (will be removed if early exit occurs)
     VISITED_PACKAGES="$VISITED_PACKAGES $_pkg"
     
     # Set repo context for dependencies
@@ -1699,23 +1744,29 @@ sync_pkg_recursive() {
         EXPLICIT_PKG_REPO="$REPO_CONTEXT"
     fi
     
-    # === EARLY EXIT CONDITIONS (for dependencies only) ===
+   # === EARLY EXIT CONDITIONS (for dependencies only) ===
     if [ "$_is_explicit" -eq 0 ]; then
         # Check if already installed
         if is_pkg_installed "$_pkg"; then
             installed_ver=$(get_installed_ver "$_pkg")
             info "Dependency '$_pkg' already installed ($installed_ver). Skipping."
+            # Remove from visited since it's satisfied
+            VISITED_PACKAGES=$(printf '%s' "$VISITED_PACKAGES" | sed "s/ $_pkg / /g; s/^ //; s/ $//")
             return 0
         fi
         
-        # Check virtuals
+        # Check virtuals FIRST (before any recipe fetching)
         if check_virtual "$_pkg"; then
+            # Remove from visited since it's satisfied
+            VISITED_PACKAGES=$(printf '%s' "$VISITED_PACKAGES" | sed "s/ $_pkg / /g; s/^ //; s/ $//")
             return 0
         fi
         
-        # Check host dependency
+        # Check host dependency BEFORE fetching recipe
         if [ "$_force_cmd" -eq 0 ] && check_host_dependency "$_pkg"; then
             info "Dependency '$_pkg' satisfied by host. Skipping build/fetch."
+            # Remove from visited since it's satisfied by host
+            VISITED_PACKAGES=$(printf '%s' "$VISITED_PACKAGES" | sed "s/ $_pkg / /g; s/^ //; s/ $//")
             return 0
         fi
     fi
@@ -1768,9 +1819,9 @@ sync_pkg_recursive() {
     
     # === RESOLVE DEPENDENCIES RECURSIVELY ===
     info "Checking dependencies for $_pkg (repo: $REPO_CONTEXT)..."
-    
+
     deps_tmp=$(mktemp "$TMPDIR/astral-deps.XXXXXX") || err "mktemp failed for dependency resolution"
-    
+
     # Get deps from expanded recipe if available
     if [ -f "$expanded_rpath/depends" ] || [ -f "$expanded_rpath/bdepends" ] || [ -f "$expanded_rpath/rdepends" ]; then
         # Temporarily create symlink for get_pkg_deps to find
@@ -1781,38 +1832,20 @@ sync_pkg_recursive() {
     else
         get_pkg_deps "$_pkg" > "$deps_tmp" 2>/dev/null || touch "$deps_tmp"
     fi
-    
 
-    # CRITICAL FIX: Isolate dependencies in subshell
+    # Process dependencies directly from file (no intermediate list needed)
     while IFS= read -r dep_pkg; do
         dep_pkg=$(printf '%s' "$dep_pkg" | tr -d '[:space:]')
         [ -z "$dep_pkg" ] && continue
 
-        case " $VISITED_PACKAGES " in
-            *" $dep_pkg "*)
-                rm -f "$deps_tmp"
-                [ -n "$stars_temp" ] && rm -rf "$stars_temp"
-                err "[$_pkg_original] Would create circular dependency with: $dep_pkg"
-                ;;
-        esac
-
-        # Run in subshell to prevent variable pollution
-        (
-            unset _pkg _pkg_original
-            sync_pkg_recursive "$dep_pkg" "$_force_cmd" 0 "$REPO_CONTEXT"
-        ) || {
+        # Recurse - the function will handle early exits for satisfied deps
+        if ! sync_pkg_recursive "$dep_pkg" "$_force_cmd" 0 "$REPO_CONTEXT"; then
             rm -f "$deps_tmp"
             [ -n "$stars_temp" ] && rm -rf "$stars_temp"
             err "[$_pkg_original] Failed to install dependency: $dep_pkg"
-        }
+        fi
     done < "$deps_tmp"
     rm -f "$deps_tmp"
-    
-    # Verify $_pkg wasn't corrupted
-    if [ "$_pkg" != "$_pkg_original" ]; then
-        warn "DETECTED: Variable corruption, restoring..."
-        _pkg="$_pkg_original"
-    fi
     
     # Verify $_pkg wasn't corrupted
     if [ "$_pkg" != "$_pkg_original" ]; then
@@ -1838,7 +1871,7 @@ sync_pkg_recursive() {
         return 0
     fi
     
-    # === BUILD THE PACKAGE ===
+   # === BUILD THE PACKAGE ===
     info "[$_pkg] Building version $recipe_ver (from $REPO_CONTEXT)..."
     
     if [ "$_pkg" = "ccache" ] || [ "$_pkg" = "dev-util/ccache" ]; then
@@ -1846,8 +1879,15 @@ sync_pkg_recursive() {
         export INSTALLING_CCACHE
     fi
     
-    # CRITICAL: Pass $_pkg (not $pkg) to build function
-    build_from_recipe_enhanced "$_pkg" "$_force_cmd"
+    # Check if store mode is enabled
+    if [ "$USE_STORE_MODE" = "yes" ]; then
+        info "[$_pkg] Using store-based installation"
+        # Use expanded_rpath (handles both .stars and directory recipes)
+        build_to_store "$_pkg" "$recipe_ver" "$expanded_rpath"
+    else
+        info "[$_pkg] Using legacy installation"
+        build_from_recipe_enhanced "$_pkg" "$_force_cmd"
+    fi
     
     unset INSTALLING_CCACHE
     
@@ -3009,103 +3049,6 @@ detect_ghost_files_enhanced() {
     rm -f "$expected_files" "$new_files" "$ghost_files"
 }
 
-# === Collision Protector ===
-
-# Check for file collisions (improved version that's already in your code)
-check_file_conflicts_advanced() {
-    pkg="$1"
-    pkgdir="$2"
-    force="$3"
-    
-    conflict_file="$TMPDIR/conflicts.$$"
-    collision_file="$TMPDIR/collisions.$$"
-
-    info "╔════════════════════════════════════════════════════════════════╗"
-    info "║                      Collision Detection                       ║"
-    info "╚════════════════════════════════════════════════════════════════╝"
-    info ""
-    info "Checking for file conflicts and collisions..."
-
-    [ ! -d "$pkgdir" ] && return 0
-
-    conflicts=0
-    collisions=0
-
-    ( cd "$pkgdir" && find . -type f -o -type l ) | sed 's|^\./||' | while IFS= read -r file; do
-        [ -z "$file" ] && continue
-        [ "$file" = ".astral-meta" ] && continue
-
-        target_path="$INSTALL_ROOT/$file"
-
-        # Skip if file doesn't exist yet
-        [ ! -e "$target_path" ] && [ ! -L "$target_path" ] && continue
-
-        # Check who owns this file
-        owner=$(get_file_owner "$file") || owner=""
-
-        if [ -n "$owner" ]; then
-            owner_name=$(basename "$owner")
-            if [ "$owner_name" != "$pkg" ]; then
-                # Check if files are identical (collision vs conflict)
-                if cmp -s "$pkgdir/$file" "$target_path" 2>/dev/null; then
-                    # Same content = collision (less severe)
-                    printf "COLLISION|%s|%s\n" "$file" "$owner"
-                else
-                    # Different content = conflict (severe)
-                    printf "CONFLICT|%s|%s\n" "$file" "$owner"
-                fi
-            fi
-        fi
-    done > "$conflict_file"
-
-    # Separate conflicts and collisions
-    grep "^CONFLICT" "$conflict_file" | cut -d'|' -f2,3 > "$collision_file" || true
-    conflicts=$(wc -l < "$collision_file" 2>/dev/null || echo 0)
-    
-    grep "^COLLISION" "$conflict_file" | cut -d'|' -f2,3 >> "$collision_file" || true
-    collisions=$(grep -c "^COLLISION" "$conflict_file" 2>/dev/null || echo 0)
-
-    # Display conflicts
-    if [ "$conflicts" -gt 0 ]; then
-        warn "╔════════════════════════════════════════════════════════════════╗"
-        warn "║                   FILE CONFLICTS DETECTED                      ║"
-        warn "╚════════════════════════════════════════════════════════════════╝"
-        warn ""
-        warn "The following files are owned by other packages (DIFFERENT content):"
-        warn ""
-        
-        grep "^CONFLICT" "$conflict_file" | while IFS='|' read -r type file owner; do
-            warn "  ✗ CONFLICT: $file"
-            warn "    Currently owned by: $owner"
-        done
-        
-        if [ "$force" -eq 0 ]; then
-            rm -f "$conflict_file" "$collision_file"
-            err "Aborting installation due to file conflicts. Use --force to override."
-        fi
-    fi
-    
-    # Display collisions (same content)
-    if [ "$collisions" -gt 0 ]; then
-        info ""
-        info "File collisions detected (same content, safe):"
-        info ""
-        
-        grep "^COLLISION" "$conflict_file" | while IFS='|' read -r type file owner; do
-            info "  ⚠️  $file (also in $owner)"
-        done
-        
-        info ""
-        info "These files are identical and can be safely overwritten."
-    fi
-
-    if [ "$conflicts" -eq 0 ] && [ "$collisions" -eq 0 ]; then
-        info "  ✓ No conflicts or collisions detected"
-    fi
-
-    rm -f "$conflict_file" "$collision_file"
-}
-
 # === Auto-stripp ===
 # Strip binaries and libraries
 strip_binaries() {
@@ -3373,10 +3316,69 @@ switch_to_generation() {
     ln -sf "generation-$gen_number" "$profile_path/current.tmp"
     mv -f "$profile_path/current.tmp" "$profile_path/current"
     
-    # Update system symlinks
-    update_system_symlinks "$profile"
+    # FIX: Pass the generation number directly
+    update_system_symlinks_for_gen "$profile" "$gen_number"
     
     info "✓ Switched to generation $gen_number"
+}
+
+update_system_symlinks_for_gen() {
+    profile="$1"
+    gen_number="$2"
+    profile_path="$ASTRAL_PROFILES/$profile"
+    
+    current_gen="$profile_path/generation-$gen_number"
+    
+    if [ ! -d "$current_gen" ]; then
+        err "Generation $gen_number does not exist: $current_gen"
+    fi
+    
+    info "Updating system symlinks from generation: generation-$gen_number"
+    
+    # Update /usr/local to point to this generation
+    for subdir in bin lib include share; do
+        system_dir="/usr/local/$subdir"
+        gen_dir="$current_gen/$subdir"
+        
+        [ ! -d "$gen_dir" ] && continue
+        
+        mkdir -p "$system_dir"
+        
+        # Remove broken symlinks
+        find "$system_dir" -maxdepth 1 -type l ! -exec test -e {} \; -delete 2>/dev/null || true
+        
+        # Link files from generation
+        find "$gen_dir" -mindepth 1 -maxdepth 1 -type l 2>/dev/null | while read -r gen_link; do
+            item_name=$(basename "$gen_link")
+            system_link="$system_dir/$item_name"
+            
+            # Follow all symlinks to get final target
+            real_target=$(readlink -f "$gen_link" 2>/dev/null)
+            
+            if [ -z "$real_target" ] || [ ! -e "$real_target" ]; then
+                warn "Cannot resolve: $gen_link"
+                continue
+            fi
+            
+            # Remove old link
+            rm -f "$system_link"
+            
+            # Create new link pointing directly to store
+            if ln -sf "$real_target" "$system_link"; then
+                info "  ✓ Linked $item_name"
+            else
+                warn "  ✗ Failed to link $item_name"
+            fi
+            
+            # Verify
+            if [ ! -e "$system_link" ]; then
+                warn "  ✗ Broken link: $system_link"
+                rm -f "$system_link"
+            fi
+        done
+    done
+    
+    info "✓ System symlinks updated"
 }
 
 # === SYMLINK MANAGEMENT ===
@@ -3588,10 +3590,13 @@ EOF
     # Create new generation and link
     profile="default"
     new_gen=$(create_new_generation "$profile")
-    debug "Linking package to generation"
+    info "Linking $pkg to generation $new_gen..."
     link_package_to_generation "$pkg" "$store_path" "$profile" "$new_gen"
-    debug "switching generation"
-    switch_to_generation "$profile" "$new_gen"
+    profile_path="$ASTRAL_PROFILES/$profile"
+    ln -sf "generation-$new_gen" "$profile_path/current"
+    update_system_symlinks "$profile"
+    
+    info "✓ Switched to generation $new_gen"
     
     # Cleanup
     rm -rf "$buildtmp"
@@ -3863,40 +3868,39 @@ load_config
 
 case "$1" in
 -S|--Sync)
-    [ $# -gt 1 ] || err "package name required"
-    VISITED_PACKAGES=""
-    
-    # Use store-based installation if enabled
-    if [ "$USE_STORE_MODE" = "yes" ]; then
-        sync_pkg_with_store "$2" "$FORCE_BUILD"
-    else
-        sync_pkg_recursive "$2" "$FORCE_BUILD" 1
-    fi
-    
-    FORCE_BUILD=0
-    ;;
+        [ $# -gt 1 ] || err "package name required"
+        
+        VISITED_PACKAGES=""
+        
+        if [ "$USE_STORE_MODE" = "yes" ]; then
+            sync_pkg_with_store "$2" "$FORCE_BUILD"
+        else
+            sync_pkg_recursive "$2" "$FORCE_BUILD" 1
+        fi
+        
+        VISITED_PACKAGES=""
+        FORCE_BUILD=0
+        ;;
 
 -C|--Compile)
     [ $# -gt 1 ] || err "package name required"
     VISITED_PACKAGES=""
     build_from_recipe_enhanced "$2" "$FORCE_BUILD"
+    VISITED_PACKAGES=""
     FORCE_BUILD=0
-    ;;
-
-    -h|--help|--H|--HELP|--Help)
-    usage
-    ;;
-
--Re|--resume)
-    [ $# -gt 1 ] || err "package name required"
-    resume_build "$2"
     ;;
 
 -SA|--Sync-Asura)
     [ $# -gt 1 ] || err "package name required"
     VISITED_PACKAGES=""
     sync_pkg_asura "$2" "$FORCE_BUILD" 1 
+    VISITED_PACKAGES=""
     FORCE_BUILD=0
+    ;;
+
+-Re|--resume)
+    [ $# -gt 1 ] || err "package name required"
+    resume_build "$2"
     ;;
 
 --Upgrade-All|-UA)
@@ -4111,12 +4115,17 @@ case "$1" in
     info "Store mode disabled. Using legacy installation."
     ;;
 
-    -debug-store)
-
+    -debug)
+        # Todo: Fix lock when running testsuite
+        if [ -x "$TESTSUITE" ]; then
+            "$TESTSUITE"
+        else
+            err "Testsuite not found or not executable"
+        fi
     ;; # yes this is intentional for the user who wants to inspect tf is wrong with this fucking package manager that sometimes work, other times, keeps fucking around like a little bitch that needs to be tamed, but astral is not a pet. exactly. its a bitch.
 
   *|-*|--*)
-    echo "Error: Unknown command or option '$1'" >&2
+    err "Unknown command or option '$1'"
     usage
     exit 1
     ;;
