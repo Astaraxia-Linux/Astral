@@ -1808,13 +1808,15 @@ sync_pkg_recursive() {
     deps_tmp=$(mktemp "$TMPDIR/astral-deps.XXXXXX") || err "mktemp failed for dependency resolution"
 
     # Get deps from expanded recipe if available
-    if {
+    if [ -f "$expanded_rpath/depends" ] || [ -f "$expanded_rpath/bdepends" ] || [ -f "$expanded_rpath/rdepends" ]; then
+        # Read deps directly from expanded recipe (for .stars files)
+        {
             [ -f "$expanded_rpath/depends" ] && cat "$expanded_rpath/depends"
             [ -f "$expanded_rpath/bdepends" ] && cat "$expanded_rpath/bdepends"
             [ -f "$expanded_rpath/rdepends" ] && cat "$expanded_rpath/rdepends"
         } | grep -v '^[[:space:]]*#' | grep -v '^[[:space:]]*$' | awk '{print $1}' | sort -u > "$deps_tmp"
-
     else
+        # Fallback to get_pkg_deps for regular directory recipes
         get_pkg_deps "$_main_pkg" > "$deps_tmp" 2>/dev/null || touch "$deps_tmp"
     fi
 
