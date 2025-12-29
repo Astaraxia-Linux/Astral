@@ -659,6 +659,7 @@ Global Options:
   --dir <DIR>             Installation root (default: /)
   -f, --force             Force operation (bypass conflicts)
   -n, --dry-run           Preview without making changes
+  -y, --yes               Auto-confirm installation (skip prompt)
   -v, --verbose           Enable verbose output
 
 Package Management:
@@ -707,7 +708,8 @@ Maintenance:
 USAGE
 }
 
-multiflagss() {
+# Never gonna use ts
+multiflagss() { 
 cat <<'USAGE_MULTI'
 ╔════════════════════════════════════════════════════════════╗
 ║          Astral Multi-Flag Command Reference               ║
@@ -1728,10 +1730,8 @@ verify_checksums_and_extract() {
 
 # --- BUILD / SYNC ---
 sync_pkg_recursive() {
-    # Create debug directory
-    mkdir -p /tmp/astral-debug
-    DEBUG_LOG="/tmp/astral-debug/sync_trace_$$.log"
-    
+    LOG="/var/log/astral_sync_$$.log"
+    info "View astral logs in $LOG"
     # Log entry with all parameters
     {
         echo "==== ENTER sync_pkg_recursive ===="
@@ -1746,81 +1746,85 @@ sync_pkg_recursive() {
         echo "  VISITED_PACKAGES: '$VISITED_PACKAGES'"
         echo "  REPO_CONTEXT: '$REPO_CONTEXT'"
         echo ""
-    } >> "$DEBUG_LOG"
+    } >> "$LOG"
     
     # Save parameters immediately
     CALL_PKG="$1"
     CALL_FORCE="${2:-$FORCE_BUILD}"
     CALL_EXPLICIT="${3:-0}"
     CALL_REPO="${4:-$REPO_CONTEXT}"
-    
-    echo "Saved to local vars:" >> "$DEBUG_LOG"
-    echo "  CALL_PKG='$CALL_PKG'" >> "$DEBUG_LOG"
-    echo "  CALL_EXPLICIT='$CALL_EXPLICIT'" >> "$DEBUG_LOG"
-    echo "" >> "$DEBUG_LOG"
+
+    if [ "$CALL_EXPLICIT" -eq 1 ] && [ "${SKIP_CONFIRMATION:-0}" -eq 0 ]; then
+        preview_and_confirm_install "$CALL_PKG" 0
+    fi
+
+    echo "Saved to local vars:" >> "$LOG"
+    echo "  CALL_PKG='$CALL_PKG'" >> "$LOG"
+    echo "  CALL_EXPLICIT='$CALL_EXPLICIT'" >> "$LOG"
+    echo "" >> "$LOG"
     
     # Sanitize
     CALL_PKG_CLEAN=$(sanitize_pkg_name "$CALL_PKG")
-    echo "After sanitize: CALL_PKG_CLEAN='$CALL_PKG_CLEAN'" >> "$DEBUG_LOG"
-    echo "" >> "$DEBUG_LOG"
+    echo "After sanitize: CALL_PKG_CLEAN='$CALL_PKG_CLEAN'" >> "$LOG"
+    echo "" >> "$LOG"
     
     # Circular dependency check
     case " $VISITED_PACKAGES " in
         *" $CALL_PKG_CLEAN "*)
-            echo "ERROR: Circular dependency!" >> "$DEBUG_LOG"
+            echo "ERROR: Circular dependency!" >> "$LOG"
             err "[$CALL_PKG_CLEAN] CIRCULAR DEPENDENCY DETECTED! Chain: $VISITED_PACKAGES -> $CALL_PKG_CLEAN"
             ;;
     esac
     VISITED_PACKAGES="$VISITED_PACKAGES $CALL_PKG_CLEAN"
-    echo "Updated VISITED_PACKAGES: '$VISITED_PACKAGES'" >> "$DEBUG_LOG"
-    echo "" >> "$DEBUG_LOG"
+    echo "Updated VISITED_PACKAGES: '$VISITED_PACKAGES'" >> "$LOG"
+    echo "" >> "$LOG"
     
     # Set repo context
     if [ "${3:-0}" -eq 0 ]; then
         REPO_CONTEXT="aoharu"
         info "[$CALL_PKG_CLEAN] Dependency - using AOHARU repository"
-        echo "Set REPO_CONTEXT=aoharu (dependency)" >> "$DEBUG_LOG"
+        echo "Set REPO_CONTEXT=aoharu (dependency)" >> "$LOG"
     else
         EXPLICIT_PKG_REPO="$REPO_CONTEXT"
-        echo "Kept REPO_CONTEXT=$REPO_CONTEXT (explicit)" >> "$DEBUG_LOG"
+        echo "Kept REPO_CONTEXT=$REPO_CONTEXT (explicit)" >> "$LOG"
     fi
-    echo "" >> "$DEBUG_LOG"
+    echo "" >> "$LOG"
     
     # === EARLY EXIT CONDITIONS ===
-    echo "Checking early exit conditions (CALL_EXPLICIT=$CALL_EXPLICIT)..." >> "$DEBUG_LOG"
+    echo "Checking early exit conditions (CALL_EXPLICIT=$CALL_EXPLICIT)..." >> "$LOG"
     if [ "${3:-0}" -eq 0 ]; then
-        echo "  This is a dependency, checking early exits..." >> "$DEBUG_LOG"
+        echo "  This is a dependency, checking early exits..." >> "$LOG"
         
         # Already installed?
         if is_pkg_installed "$CALL_PKG_CLEAN"; then
             installed_ver=$(get_installed_ver "$CALL_PKG_CLEAN")
             info "Dependency '$CALL_PKG_CLEAN' already installed ($installed_ver). Skipping."
-            echo "  EARLY EXIT: Already installed" >> "$DEBUG_LOG"
-            echo "==== EXIT (already installed) ====" >> "$DEBUG_LOG"
-            echo "" >> "$DEBUG_LOG"
+            echo "  EARLY EXIT: Already installed" >> "$LOG"
+            echo "==== EXIT (already installed) ====" >> "$LOG"
+            echo "" >> "$LOG"
             return 0
         fi
         
         # Virtual?
         if check_virtual "$CALL_PKG_CLEAN"; then
-            echo "  EARLY EXIT: Virtual satisfied" >> "$DEBUG_LOG"
-            echo "==== EXIT (virtual) ====" >> "$DEBUG_LOG"
-            echo "" >> "$DEBUG_LOG"
+            echo "  EARLY EXIT: Virtual satisfied" >> "$LOG"
+            echo "==== EXIT (virtual) ====" >> "$LOG"
+            echo "" >> "$LOG"
             return 0
         fi
         
         # Host provided?
         if [ "$CALL_FORCE" -eq 0 ] && check_host_dependency "$CALL_PKG_CLEAN"; then
             info "Dependency '$CALL_PKG_CLEAN' satisfied by host. Skipping build/fetch."
-            echo "  EARLY EXIT: Host provided" >> "$DEBUG_LOG"
-            echo "==== EXIT (host provided) ====" >> "$DEBUG_LOG"
-            echo "" >> "$DEBUG_LOG"
+            echo "  EARLY EXIT: Host provided" >> "$LOG"
+            echo "==== EXIT (host provided) ====" >> "$LOG"
+            echo "" >> "$LOG"
             return 0
         fi
         
-        echo "  No early exit, continuing..." >> "$DEBUG_LOG"
+        echo "  No early exit, continuing..." >> "$LOG"
     else
-        echo "  This is explicit install, no early exit" >> "$DEBUG_LOG"
+        echo "  This is explicit install, no early exit" >> "$LOG"
     fi
     
     # === FETCH RECIPE ===
@@ -1844,7 +1848,7 @@ sync_pkg_recursive() {
         case "$recipe_dir" in
             *.stars)
                 stars_temp="$TMPDIR/astral-stars-expand-$CALL_PKG_CLEAN-$$"
-                echo "  Expanding .stars to: $stars_temp" >> "$DEBUG_LOG"
+                echo "  Expanding .stars to: $stars_temp" >> "$LOG"
                 expand_stars_recipe "$recipe_dir" "$stars_temp" "$CALL_PKG_CLEAN"
                 expanded_rpath="$stars_temp"
                 ;;
@@ -3136,6 +3140,169 @@ clear_ccache() {
     info "ccache cleared"
 }
 
+preview_and_confirm_install() {
+    pkg="$1"
+    skip_confirmation="${2:-0}"
+
+    info "╔════════════════════════════════════════════════════════════════╗"
+    info "║              Installation Preview: $pkg"
+    info "╚════════════════════════════════════════════════════════════════╝"
+    info ""
+    info "Computing dependency tree..."
+    info ""
+
+    # Collect dependencies recursively with tree structure
+    temp_tree="$TMPDIR/astral-tree-$$"
+    > "$temp_tree"
+    
+    new_packages=""
+    new_count=0
+    
+    # Recursive function to build tree
+    build_dep_tree() {
+        local p="$1"
+        local indent="$2"
+        local is_last="${3:-0}"
+        local visited_list="$4"
+        
+        # Check if already visited (circular dep check)
+        case " $visited_list " in
+            *" $p "*) 
+                printf '%s%s %s [CIRCULAR]\n' "$indent" "$([ $is_last -eq 1 ] && echo '└─' || echo '├─')" "$p" >> "$temp_tree"
+                return 0
+                ;;
+        esac
+        
+        visited_list="$visited_list $p"
+        
+        # Determine status
+        local status_icon=""
+        local status_text=""
+        local category=""
+        
+        # Try to get category from recipe
+        local rpath=$(recipe_path "$p" 2>/dev/null || echo "")
+        if [ -n "$rpath" ]; then
+            category=$(printf '%s' "$rpath" | sed "s|^${RECIPES_DIR}/||" | cut -d'/' -f1)
+            [ "$category" = "$p" ] && category=""
+        fi
+        
+        if is_pkg_installed "$p"; then
+            ver=$(get_installed_ver "$p")
+            status_icon="[✓]"
+            status_text="already installed"
+        elif check_host_dependency "$p"; then
+            status_icon="[H]"
+            status_text="provided by host"
+        else
+            status_icon="[+]"
+            status_text="to be installed"
+            new_packages="$new_packages $p"
+            new_count=$((new_count + 1))
+            
+            # Get version from recipe
+            if [ -n "$rpath" ]; then
+                ver=$(cat "$rpath/version" 2>/dev/null || echo "unknown")
+            else
+                ver="unknown"
+            fi
+        fi
+        
+        # Format package line
+        local pkg_display="$p"
+        [ -n "$category" ] && pkg_display="$category/$p"
+        
+        local branch="$([ $is_last -eq 1 ] && echo '└─' || echo '├─')"
+        printf '%s%s %s %-30s %s (v%s)\n' \
+            "$indent" "$branch" "$status_icon" "$pkg_display" "$status_text" "$ver" >> "$temp_tree"
+        
+        # Get dependencies
+        deps=$(get_pkg_deps "$p" 2>/dev/null || true)
+        if [ -n "$deps" ]; then
+            local dep_list=""
+            local dep_count=0
+            
+            # Count deps
+            for d in $deps; do
+                d=$(printf '%s' "$d" | tr -d '[:space:]')
+                [ -z "$d" ] && continue
+                dep_list="$dep_list $d"
+                dep_count=$((dep_count + 1))
+            done
+            
+            # Process each dependency
+            local current=0
+            for dep in $dep_list; do
+                current=$((current + 1))
+                local new_indent="$indent$([ $is_last -eq 1 ] && echo '    ' || echo '│   ')"
+                local dep_is_last=0
+                [ $current -eq $dep_count ] && dep_is_last=1
+                
+                build_dep_tree "$dep" "$new_indent" "$dep_is_last" "$visited_list"
+            done
+        fi
+    }
+    
+    # Build the tree
+    build_dep_tree "$pkg" "" 1 ""
+    
+    # Display the tree
+    cat "$temp_tree"
+    rm -f "$temp_tree"
+    
+    info ""
+    info "╔════════════════════════════════════════════════════════════════╗"
+    info "║                         Summary                                ║"
+    info "╠════════════════════════════════════════════════════════════════╣"
+    printf "${NC}║  Packages to install: %-38s║\n" "$new_count"
+    printf "${NC}║  Total size (approx): %-38s║\n" "Unknown"
+    info "╚════════════════════════════════════════════════════════════════╝"
+    
+    if [ $new_count -eq 0 ]; then
+        info ""
+        info "✓ All dependencies already satisfied. Nothing to install."
+        return 0
+    fi
+    
+    info ""
+    info "New packages to be installed:"
+    for p in $new_packages; do
+        # Get category if available
+        local rpath=$(recipe_path "$p" 2>/dev/null || echo "")
+        local pkg_display="$p"
+        if [ -n "$rpath" ]; then
+            local category=$(printf '%s' "$rpath" | sed "s|^${RECIPES_DIR}/||" | cut -d'/' -f1)
+            [ "$category" != "$p" ] && pkg_display="$category/$p"
+        fi
+        info "  • $pkg_display"
+    done
+    
+    # Skip confirmation if requested (for --yes flag)
+    if [ "$skip_confirmation" -eq 1 ]; then
+        info ""
+        info "Auto-confirming installation (--yes flag)"
+        return 0
+    fi
+    
+    # Confirmation prompt
+    info ""
+    printf "${YELLOW}Proceed with installation? [y/N]: ${NC}"
+    read -r response
+    
+    case "$response" in
+        [Yy]|[Yy][Ee][Ss])
+            info ""
+            info "✓ Confirmed. Starting installation..."
+            return 0
+            ;;
+        *)
+            info ""
+            info "✗ Installation cancelled by user"
+            exit 0
+            ;;
+    esac
+}
+
 # --- ENTRY / CLI PARSING ---
 
 # Require root for all operations
@@ -3144,6 +3311,8 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # --- Global Option Parsing ---
+SKIP_CONFIRMATION=0
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --dir)
@@ -3161,6 +3330,10 @@ while [ $# -gt 0 ]; do
             ;;
         -n|--dry-run)
             DRY_RUN=1
+            shift
+            ;;
+        -y|--yes)
+            SKIP_CONFIRMATION=1
             shift
             ;;
         -V|--version)
