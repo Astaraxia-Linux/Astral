@@ -95,14 +95,14 @@ Astral must be a single executable file.
 
 ---
 
-## Changes (v2.0.1.0 Main)
+## Changes (v3.1.2.0 Main)
 
-### New in v2.0.1.0
-- `.stars` Now supports 2 Version! yey?
-- Fixed early host dependency check
+### New in v3.1.2.0
+- Fixed collsion bugs
+- added confirmations
 ---
 
-### Implemented (v2.0.1.0)
+### Implemented (v3.1.2.0)
 *  File ownership database (`.files.index`)
 *  Conflict detection before install
 *  Safe uninstall (never removes shared directories)
@@ -114,7 +114,8 @@ Astral must be a single executable file.
 *  Force install flag (`-f`)
 *  Reverse-dependency tracking
 *  Ccache Support
-* Supports 2 recipes format, `Directory` based and `.stars` based
+*  Supports 2 recipes format, `Directory` based and `.stars` based
+*  added confirmations [y/n]
 
 ### Not implemented yet (but planned)
 * Signature checking / GPG verification
@@ -123,6 +124,7 @@ Astral must be a single executable file.
 * Download resume for interrupted transfers
 * Binary package caching (started, incomplete)
 * Delta upgrades
+* `--horizon`, for Astaraxia Linux Setup
 
 ## Versioning
 
@@ -132,13 +134,11 @@ Astral uses `0.MINOR.PATCH.HOTFIX` versioning:
 - **PATCH**: Improvements and additions
 - **HOTFIX**: Bug fixes and quick patches
 
-Example: `0.7.4.1`
-- 0 = Pre-release
-- 7 = 7th generation of features
-- 4 = 4th patch release
-- 1 = 1st hotfix
-
-Once Astral reaches production stability, versioning will switch to SemVer.
+Example: `3.1.2.0`
+- 3 = Release
+- 1 = 1st generation of features
+- 0 = 2th patch release
+- 0 = 0 hotfixs
 
 ## Architecture Overview
 
@@ -630,4 +630,4 @@ Yes! Use `astral --mask package >= 2.0` to prevent installation of specific vers
 
 ---
 
-Astral is still evolving. Expect the code to be scuffed, the philosophy to be based, and the implementation to be extremely transparent.
+Astral is still evolving. Expect the code to be a spagetti, the philosophy to be based, and the implementation to be extremely transparent.
