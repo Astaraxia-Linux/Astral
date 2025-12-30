@@ -630,4 +630,4 @@ Yes! Use `astral --mask package >= 2.0` to prevent installation of specific vers
 
 ---
 
-Astral is still evolving. Expect the code to be scuffed, the philosophy to be based, and the implementation to be extremely transparent.
+Astral is still evolving. Expect the code to be a spagetti, the philosophy to be based, and the implementation to be extremely transparent.
