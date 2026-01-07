@@ -1,11 +1,11 @@
 #!/bin/sh
 # astral-recipegen - Enhanced recipe generator for Astral package manager
-# Version: 2.0.0
+# Version: 2.1.0
 # Supports: v1 (@SECTION), v2 ($PKG.*), v3 (separated deps)
 
 set -eu
 
-VERSION="2.0.0"
+VERSION="2.1.0"
 RECIPES_DIR=${RECIPES_DIR:-/usr/src/astral/recipes}
 TMPDIR=${TMPDIR:-/tmp}
 
@@ -37,6 +37,7 @@ Commands:
   convert <recipe> <ver>   Convert recipe to different version
   migrate <recipe>         Migrate recipe to latest version (v3)
   dir-to-stars <dir>       Convert directory recipe to .stars
+  git                      
 
 Template Types:
   autotools                GNU Autotools (./configure && make)
@@ -1064,6 +1065,277 @@ convert_from_pkgbuild() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Git
+# ═══════════════════════════════════════════════════════════════════════════
+
+generate_from_git() {
+    pkg_name="$1"
+    git_url="$2"
+    format="${3:-v3}"
+    git_branch="${4:-main}"
+    
+    info "╔════════════════════════════════════════════════════════════════╗"
+    info "║          Generating Recipe from Git Repository                ║"
+    info "╚════════════════════════════════════════════════════════════════╝"
+    info ""
+    info "  Repository: $git_url"
+    info "  Branch:     $git_branch"
+    info ""
+    
+    # Check if git is available
+    command -v git >/dev/null 2>&1 || err "git is not installed"
+    
+    # Create temp directory
+    temp_dir=$(mktemp -d "$TMPDIR/astral-recipegen-git.XXXXXX")
+    trap "rm -rf '$temp_dir'" EXIT
+    
+    cd "$temp_dir" || exit 1
+    
+    # Clone repository
+    info "Cloning repository..."
+    if ! git clone --branch "$git_branch" --depth 1 "$git_url" repo 2>&1; then
+        err "Failed to clone repository"
+    fi
+    
+    cd repo || exit 1
+    source_root="$(pwd)"
+    
+    # Try to detect version from git tags
+    version=$(git describe --tags --abbrev=0 2>/dev/null || git rev-parse --short HEAD)
+    version=$(echo "$version" | sed 's/^v//; s/^V//')
+    
+    info "✓ Cloned successfully"
+    info "  Detected version: $version"
+    info ""
+    
+    # Detect build system
+    build_system="unknown"
+    build_files_found=""
+    
+    info "Detecting build system..."
+    
+    if [ -f configure.ac ] || [ -f configure.in ]; then
+        build_system="autotools"
+        build_files_found="configure.ac"
+        info "  ✓ GNU Autotools (configure.ac found)"
+    elif [ -f configure ]; then
+        build_system="autotools"
+        build_files_found="configure"
+        info "  ✓ GNU Autotools (configure script found)"
+    elif [ -f CMakeLists.txt ]; then
+        build_system="cmake"
+        build_files_found="CMakeLists.txt"
+        info "  ✓ CMake"
+    elif [ -f meson.build ]; then
+        build_system="meson"
+        build_files_found="meson.build"
+        info "  ✓ Meson"
+    elif [ -f setup.py ]; then
+        build_system="python"
+        build_files_found="setup.py"
+        info "  ✓ Python (setup.py)"
+    elif [ -f pyproject.toml ]; then
+        build_system="python"
+        build_files_found="pyproject.toml"
+        info "  ✓ Python (pyproject.toml)"
+    elif [ -f Cargo.toml ]; then
+        build_system="cargo"
+        build_files_found="Cargo.toml"
+        info "  ✓ Rust (Cargo)"
+    elif [ -f go.mod ]; then
+        build_system="go"
+        build_files_found="go.mod"
+        info "  ✓ Go modules"
+    elif [ -f package.json ]; then
+        build_system="npm"
+        build_files_found="package.json"
+        info "  ✓ Node.js (npm/yarn)"
+    elif [ -f Makefile ] || [ -f makefile ] || [ -f GNUmakefile ]; then
+        build_system="make"
+        build_files_found="Makefile"
+        info "  ✓ Plain Makefile"
+    elif [ -f build.sh ]; then
+        build_system="custom"
+        build_files_found="build.sh"
+        info "  ✓ Custom build script (build.sh)"
+    else
+        warn "  ✗ Could not detect build system"
+        info ""
+        info "Available files:"
+        ls -1 | head -n 20
+        build_system="unknown"
+    fi
+    
+    info ""
+    info "╔════════════════════════════════════════════════════════════════╗"
+    info "║                    Detection Summary                           ║"
+    info "╚════════════════════════════════════════════════════════════════╝"
+    info ""
+    info "  Name:         $pkg_name"
+    info "  Version:      $version"
+    info "  Build system: $build_system"
+    info "  Build files:  $build_files_found"
+    info "  Git URL:      $git_url"
+    info "  Branch:       $git_branch"
+    info ""
+    
+    # Prompt for additional info
+    exec </dev/tty
+    
+    printf "Category (default: app-misc): "
+    read -r category
+    [ -z "$category" ] && category="app-misc"
+    
+    printf "Description: "
+    read -r description
+    [ -z "$description" ] && description="$pkg_name - Git package"
+    
+    printf "Homepage URL (default: $git_url): "
+    read -r homepage
+    [ -z "$homepage" ] && homepage="$git_url"
+    
+    if [ "$format" = "v3" ]; then
+        printf "Build dependencies (space-separated, press Enter for auto): "
+        read -r bdeps_input
+        
+        printf "Runtime dependencies (space-separated): "
+        read -r rdeps_input
+        
+        if [ -z "$bdeps_input" ]; then
+            case "$build_system" in
+                autotools) bdeps="git gcc make autoconf automake libtool" ;;
+                cmake) bdeps="git gcc make cmake" ;;
+                meson) bdeps="git gcc meson ninja" ;;
+                python) bdeps="git python setuptools" ;;
+                cargo) bdeps="git cargo rust" ;;
+                go) bdeps="git go" ;;
+                npm) bdeps="git nodejs npm" ;;
+                *) bdeps="git gcc make" ;;
+            esac
+        else
+            bdeps="git $bdeps_input"
+        fi
+        
+        rdeps="$rdeps_input"
+    else
+        printf "Dependencies (space-separated, press Enter for auto): "
+        read -r deps_input
+        
+        if [ -z "$deps_input" ]; then
+            case "$build_system" in
+                autotools) deps_input="git gcc make autoconf" ;;
+                cmake) deps_input="git gcc make cmake" ;;
+                meson) deps_input="git gcc meson ninja" ;;
+                python) deps_input="git python setuptools" ;;
+                cargo) deps_input="git cargo rust" ;;
+                go) deps_input="git go" ;;
+                npm) deps_input="git nodejs npm" ;;
+                *) deps_input="git gcc make" ;;
+            esac
+        fi
+    fi
+    
+    # Generate build commands based on detected system
+    case "$build_system" in
+        autotools)
+            if [ -f configure ]; then
+                build_cmd="./configure --prefix=/usr
+    make -j\$(nproc)"
+            else
+                build_cmd="autoreconf -fi
+    ./configure --prefix=/usr
+    make -j\$(nproc)"
+            fi
+            package_cmd="make DESTDIR=\"\$PKGDIR\" install"
+            ;;
+        cmake)
+            build_cmd="mkdir -p build && cd build
+    cmake .. \\
+        -DCMAKE_INSTALL_PREFIX=/usr \\
+        -DCMAKE_BUILD_TYPE=Release
+    make -j\$(nproc)"
+            package_cmd="cd build
+    make DESTDIR=\"\$PKGDIR\" install"
+            ;;
+        meson)
+            build_cmd="meson setup build --prefix=/usr --buildtype=release
+    ninja -C build"
+            package_cmd="DESTDIR=\"\$PKGDIR\" ninja -C build install"
+            ;;
+        python)
+            if [ -f pyproject.toml ]; then
+                build_cmd="pip wheel --no-deps -w dist ."
+                package_cmd="pip install --root=\"\$PKGDIR\" --no-deps dist/*.whl"
+            else
+                build_cmd="python3 setup.py build"
+                package_cmd="python3 setup.py install --root=\"\$PKGDIR\" --optimize=1"
+            fi
+            ;;
+        cargo)
+            build_cmd="cargo build --release"
+            package_cmd="install -Dm755 target/release/$pkg_name \"\$PKGDIR/usr/bin/$pkg_name\""
+            ;;
+        go)
+            build_cmd="go build -o $pkg_name"
+            package_cmd="install -Dm755 $pkg_name \"\$PKGDIR/usr/bin/$pkg_name\""
+            ;;
+        npm)
+            build_cmd="npm install
+    npm run build"
+            package_cmd="npm install --global --prefix=\"\$PKGDIR/usr\""
+            ;;
+        make)
+            build_cmd="make -j\$(nproc)"
+            package_cmd="make DESTDIR=\"\$PKGDIR\" install"
+            ;;
+        custom)
+            build_cmd="./build.sh"
+            package_cmd="# TODO: Add installation commands"
+            ;;
+        *)
+            build_cmd="# TODO: Add build commands"
+            package_cmd="# TODO: Add installation commands"
+            ;;
+    esac
+    
+    output_file="${OUTPUT_FILE:-${RECIPES_DIR}/${category}/${pkg_name}.stars}"
+    mkdir -p "$(dirname "$output_file")"
+    
+    # Git source URL format
+    git_source="git+${git_url}#branch=${git_branch}"
+    
+    case "$format" in
+        v3)
+            generate_v3_from_data "$pkg_name" "$version" "$description" "$homepage" \
+                "$category" "" "$bdeps" "$rdeps" "" \
+                "$git_source" "# Git sources don't use checksums" \
+                "$build_cmd" "$package_cmd" "" "" "$output_file"
+            ;;
+        v2)
+            all_deps="$deps_input"
+            generate_v2_from_data "$pkg_name" "$version" "$description" "$homepage" \
+                "$category" "$all_deps" "" "" "" \
+                "$git_source" "# Git sources don't use checksums" \
+                "$build_cmd" "$package_cmd" "" "" "$output_file"
+            ;;
+        v1)
+            all_deps="$deps_input"
+            generate_v1_from_data "$pkg_name" "$version" "$description" "$homepage" \
+                "$all_deps" "$git_source" "# Git sources don't use checksums" \
+                "$build_cmd" "$package_cmd" "" "" "$output_file"
+            ;;
+    esac
+    
+    info "✓ Git recipe generated: $output_file"
+    info ""
+    info "Note: Git sources are cloned during build."
+    info "To pin to a specific commit, use: git+$git_url#commit=HASH"
+    
+    rm -rf "$temp_dir"
+}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # MAIN
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1134,6 +1406,15 @@ case "$command" in
         pkgbuild="$1"
         format="${2:-$OUTPUT_FORMAT}"
         convert_from_pkgbuild "$pkgbuild" "$format"
+        ;;
+
+    git)
+        [ $# -lt 2 ] && err "Usage: astral-recipegen git <name> <url> [branch] [version]"
+        pkg_name="$1"
+        git_url="$2"
+        git_branch="${3:-main}"
+        format="${4:-$OUTPUT_FORMAT}"
+        generate_from_git "$pkg_name" "$git_url" "$format" "$git_branch"
         ;;
     *)
         err "Unknown command: $command"
