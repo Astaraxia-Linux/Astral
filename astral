@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v3.3.0.0 Main - minimal POSIX package manager for Astaraxia
+# Astral v3.4.0.0 Main - minimal POSIX package manager for Astaraxia
 # Patched the patched
-# V: 3 - Major . 3 - Minor . 0 - Patches . 0 - hotfixes
+# V: 3 - Major . 4 - Minor . 0 - Patches . 0 - hotfixes
 
-version="3.3.0.0 Main"
+version="3.4.0.0 Main"
 
 # Set strict execution environment, meow~
 set -eu
@@ -637,24 +637,24 @@ detect_recipe_format() {
 
 astral_version() {
 cat <<EOF
-┌──────────────────────┐
+╭──────────────────────╮
 │ Astral: $version │
-└──────────────────────┘
+╰──────────────────────╯
 EOF
     exit 0
 }
 
 usage() {
     cat <<USAGE
-┌──────────────────────┐
+╭──────────────────────╮
 │ Astral: $version │
-└──────────────────────┘
-┌───────────────────────────────────┐
+╰──────────────────────╯
+╭───────────────────────────────────╮
 │ Astral File is in $SCRIPT_PATH │
-└───────────────────────────────────┘
-┌────────────────────────────────────────────────┐
+╰───────────────────────────────────╯
+╭────────────────────────────────────────────────╮
 │ Usage: astral [global_opts] <command> [pkg...] │
-└────────────────────────────────────────────────┘
+╰────────────────────────────────────────────────╯
 
 Global Options:
   --dir <DIR>             Installation root (default: /)
@@ -703,10 +703,120 @@ Maintenance:
   -U, --self-update [br]  Update Astral itself
   -V, --Version           Show version
 
-┌────────────────────────────────────┐
+╭────────────────────────────────────╮
 │ Astral is maintained by One Maniac │
-└────────────────────────────────────┘
+╰────────────────────────────────────╯
 USAGE
+}
+
+
+astral_chroot() {
+    chroot_dir="$1"
+    
+    [ -z "$chroot_dir" ] && err "Chroot directory required"
+    [ ! -d "$chroot_dir" ] && err "Directory does not exist: $chroot_dir"
+    
+    # Check if running as root
+    [ "$(id -u)" -ne 0 ] && err "Chroot requires root privileges"
+    
+    info "╭────────────────────────────────────────────────────────────────╮"
+    info "│                    Astral Chroot Environment                   │"
+    info "╰────────────────────────────────────────────────────────────────╯"
+    info ""
+    info "  Target: $chroot_dir"
+    info ""
+    
+    # Verify it looks like a valid system
+    if [ ! -d "$chroot_dir/usr" ] && [ ! -d "$chroot_dir/bin" ]; then
+        warn "Warning: Target doesn't look like a valid filesystem root"
+        printf "Continue anyway? (y/N): "
+        read -r response
+        case "$response" in
+            [Yy]*) ;;
+            *) err "Aborted by user" ;;
+        esac
+    fi
+    
+    # Mount essential filesystems
+    info "Mounting essential filesystems..."
+    
+    mount_if_needed() {
+        src="$1"
+        dst="$2"
+        type="$3"
+        opts="${4:-}"
+        
+        if ! mountpoint -q "$dst" 2>/dev/null; then
+            mkdir -p "$dst"
+            if [ -n "$opts" ]; then
+                mount -t "$type" -o "$opts" "$src" "$dst" || warn "Failed to mount $dst"
+            else
+                mount -t "$type" "$src" "$dst" || warn "Failed to mount $dst"
+            fi
+            info "  ✓ Mounted $dst"
+        else
+            info "  ⊚ Already mounted: $dst"
+        fi
+    }
+    
+    mount_if_needed proc "$chroot_dir/proc" proc
+    mount_if_needed sys "$chroot_dir/sys" sysfs
+    mount_if_needed dev "$chroot_dir/dev" devtmpfs
+    mount_if_needed devpts "$chroot_dir/dev/pts" devpts "gid=5,mode=620"
+    mount_if_needed tmpfs "$chroot_dir/dev/shm" tmpfs
+    mount_if_needed run "$chroot_dir/run" tmpfs
+    
+    # Copy resolv.conf for DNS
+    if [ -f /etc/resolv.conf ]; then
+        cp -L /etc/resolv.conf "$chroot_dir/etc/" 2>/dev/null || true
+        info "  ✓ Copied resolv.conf"
+    fi
+    
+    # Copy astral binary into chroot if it exists
+    if [ -x /usr/bin/astral ]; then
+        mkdir -p "$chroot_dir/usr/bin"
+        cp /usr/bin/astral "$chroot_dir/usr/bin/" 2>/dev/null || true
+        info "  ✓ Copied astral binary"
+    fi
+    
+    info ""
+    info "╭────────────────────────────────────────────────────────────────╮"
+    info "│                 Entering Chroot Environment                    │"
+    info "├────────────────────────────────────────────────────────────────┤"
+    info "│  • You are now in: $chroot_dir"
+    info "│  • Type 'exit' to leave the chroot                             │"
+    info "│  • Astral commands will affect the chroot, not your host       │"
+    info "╰────────────────────────────────────────────────────────────────╯"
+    info ""
+    
+    # Setup cleanup trap
+    cleanup_chroot() {
+        info ""
+        info "Cleaning up chroot mounts..."
+        
+        umount -l "$chroot_dir/run" 2>/dev/null || true
+        umount -l "$chroot_dir/dev/shm" 2>/dev/null || true
+        umount -l "$chroot_dir/dev/pts" 2>/dev/null || true
+        umount -l "$chroot_dir/dev" 2>/dev/null || true
+        umount -l "$chroot_dir/sys" 2>/dev/null || true
+        umount -l "$chroot_dir/proc" 2>/dev/null || true
+        
+        info "✓ Chroot cleanup complete"
+    }
+    
+    trap cleanup_chroot EXIT INT TERM
+    
+    # Enter chroot
+    # Try different shells in order of preference
+    if [ -x "$chroot_dir/bin/bash" ]; then
+        chroot "$chroot_dir" /bin/bash -l
+    elif [ -x "$chroot_dir/bin/sh" ]; then
+        chroot "$chroot_dir" /bin/sh -l
+    else
+        err "No shell found in chroot environment"
+    fi
+    
+    # Cleanup happens via trap
 }
 
 # Never gonna use ts
@@ -2796,7 +2906,7 @@ list_installed() {
         pkg_count=$(printf '%s\n' "$pkgs" | wc -l)
         
         # Category header
-        printf "${BLUE}┌ %s (%s packages)${NC}\n" "$category" "$pkg_count"
+        printf "${BLUE}╭ %s (%s packages)${NC}\n" "$category" "$pkg_count"
         
         current=0
         printf '%s\n' "$pkgs" | while IFS= read -r pkg_path; do
