@@ -1,346 +1,416 @@
-# astral-recipegen Documentation
+# Astral `.stars` Format Specification v3
 
-> *"Because manually writing boilerplate is for people with time to spare"*
+> *"Now with 100% more dependency separation!"*
 
-Version: 2.0.0  
-Last Updated: January 2026  
+Version: 3.0  
+Last Updated: 8 January 2026  
 For: Astral Package Manager
+
+---
+
+## Quick Reference
+
+**Too lazy to read?** Use [astral-recipegen](https://github.com/Astaraxia-Linux/Astral/blob/main/astral-recipegen):
+
+```bash
+astral-recipegen interactive v3
+```
+
+Done. You're welcome.
 
 ---
 
 ## Table of Contents
 
 1. [Introduction](#introduction)
-2. [Installation](#installation)
-3. [Quick Start](#quick-start)
-4. [Commands](#commands)
-5. [Recipe Formats](#recipe-formats)
-6. [Advanced Usage](#advanced-usage)
+2. [Format Versions](#format-versions)
+3. [v3 Format Specification](#v3-format-specification)
+4. [v2 Format (Legacy)](#v2-format-legacy)
+5. [v1 Format (Deprecated)](#v1-format-deprecated)
+6. [Migration Guide](#migration-guide)
 7. [Examples](#examples)
-8. [Troubleshooting](#troubleshooting)
+8. [Best Practices](#best-practices)
 
 ---
 
 ## Introduction
 
-### What is astral-recipegen?
+### What is .stars Format?
 
-`astral-recipegen` is a recipe generator tool for Astral package manager. It automates the tedious process of creating `.stars` recipe files by:
+The `.stars` format is a structured, type-safe way to define package recipes for Astral package manager. After a sleepless night and 2 shots of espresso, the Astaraxia devs made this possible.
 
-- **Auto-detecting** build systems
-- **Generating** checksums automatically
-- **Converting** between recipe formats (v1, v2, v3)
-- **Migrating** directory-based recipes to `.stars`
-- **Supporting** Git repositories
+### Why Three Formats?
 
-Think of it as a recipe wizard. Except instead of making cookies, it makes package recipes. And instead of delicious treats, you get... more software to compile.
+Good question. Here's the timeline:
+- **v1**: Created in a caffeine-induced haze
+- **v2**: "Let's make it better!" (narrator: they did)
+- **v3**: "But what about separating build and runtime deps?" (perfection achieved)
 
-### Why Use It?
-
-- **Save time**: No more copy-pasting boilerplate
-- **Reduce errors**: Auto-generated checksums and dependencies
-- **Stay consistent**: Templates ensure proper format
-- **Easy migration**: Convert old recipes to new formats
-- **Git support**: Generate recipes directly from repositories
+We support all three because breaking backwards compatibility is mean.
 
 ---
 
-## Installation
+## Format Versions
 
-### Prerequisites
+### Version Detection
 
-```bash
-# Required
-sh (POSIX-compliant shell)
-curl (for downloading sources)
-sha256sum (for checksums)
-
-# Optional but recommended
-git (for Git repository support)
-```
-
-### Install
+Astral automatically detects the format version:
 
 ```bash
-# Download
-curl -O https://raw.githubusercontent.com/Astaraxia-Linux/Astral/main/astral-recipegen
+# v3: Has version marker
+$PKG.Version = "3"
 
-# Make executable
-chmod +x astral-recipegen
+# v2: Uses $PKG.* declarations
+$PKG.Metadata: { ... }
 
-# Install system-wide
-sudo mv astral-recipegen /usr/bin/
-
-# Test
-astral-recipegen --version
-```
-
----
-
-## Quick Start
-
-### Generate a Recipe in 30 Seconds
-
-```bash
-# Interactive mode (easiest)
-astral-recipegen interactive v3
-
-# Follow the prompts:
-# - Package name: nano
-# - Category: app-editors
-# - Version: 8.2
-# - Description: Text editor
-# - Build system: autotools
-# - Dependencies: ncurses
-```
-
-**Output**: `nano.stars` ready to use!
-
-### Auto-Detect from URL
-
-```bash
-astral-recipegen auto nano https://nano.org/dist/nano-8.2.tar.xz
-```
-
-This will:
-1. Download the source
-2. Detect it uses autotools
-3. Extract version (8.2)
-4. Generate SHA256 checksum
-5. Create a working recipe
-
-**Magic!** ✨
-
----
-
-## Commands
-
-### `interactive [version]`
-
-Interactive wizard for creating recipes.
-
-```bash
-# Generate v3 recipe (recommended)
-astral-recipegen interactive v3
-
-# Generate v2 recipe
-astral-recipegen interactive v2
-
-# Generate v1 recipe (legacy)
-astral-recipegen interactive v1
-```
-
-**When to use**: You're creating a recipe from scratch and want to be guided through the process.
-
----
-
-### `auto <name> <url> [version]`
-
-Auto-detect build system and generate recipe from source URL.
-
-```bash
-# Auto-detect everything
-astral-recipegen auto nano https://nano.org/dist/nano-8.2.tar.xz
-
-# Specify output format
-astral-recipegen auto vim https://github.com/vim/vim/archive/v9.0.tar.gz v3
-
-# Custom output location
-astral-recipegen auto gcc https://ftp.gnu.org/gnu/gcc/gcc-13.2.0/gcc-13.2.0.tar.xz -o gcc.stars
-```
-
-**Detects**:
-- Autotools (configure, configure.ac)
-- CMake (CMakeLists.txt)
-- Meson (meson.build)
-- Python (setup.py, pyproject.toml)
-- Plain Makefile
-
-**When to use**: You have a source tarball and want a recipe generated automatically.
-
----
-
-### `git <name> <url> [branch] [version]`
-
-Generate recipe from Git repository.
-
-```bash
-# Clone and generate
-astral-recipegen git neovim https://github.com/neovim/neovim.git
-
-# Specify branch
-astral-recipegen git dwm https://git.suckless.org/dwm stable
-
-# Specify format
-astral-recipegen git myproject https://github.com/user/repo main v3
-```
-
-**Detects Build Systems**:
-- Autotools
-- CMake
-- Meson
-- Python (setup.py, pyproject.toml)
-- **Cargo** (Rust)
-- **Go** (go.mod)
-- **NPM** (package.json)
-- Plain Makefile
-
-**Git Source Format**:
-```
-git+https://github.com/user/repo.git#branch=main
-git+https://github.com/user/repo.git#commit=abc123
-```
-
-**When to use**: Package is actively developed on Git and you want the latest code.
-
----
-
-### `template <type> [version]`
-
-Generate empty template for specific build system.
-
-```bash
-# CMake template (v3 format)
-astral-recipegen template cmake v3 -o mypackage.stars
-
-# Autotools template (v2 format)
-astral-recipegen template autotools v2
-
-# Python template
-astral-recipegen template python v3
-```
-
-**Available Types**:
-- `autotools` - GNU Autotools
-- `cmake` - CMake
-- `meson` - Meson
-- `python` - Python packages
-- `make` - Plain Makefile
-
-**When to use**: You want to manually fill in details but need the structure.
-
----
-
-### `dir-to-stars <directory> [version]`
-
-Convert directory-based recipe to `.stars` file.
-
-```bash
-# Convert to v3 format
-astral-recipegen dir-to-stars /usr/src/astral/recipes/app-editors/nano
-
-# Convert to v2 format
-astral-recipegen dir-to-stars /usr/src/astral/recipes/sys-libs/glibc v2
-
-# Custom output
-astral-recipegen dir-to-stars /path/to/recipe -o output.stars
-```
-
-**Reads**:
-- `version` file
-- `depends`, `bdepends`, `rdepends` files
-- `build`, `package` scripts
-- `sources`, `checksums` files
-- `info` file
-
-**When to use**: Migrating old directory recipes to modern `.stars` format.
-
----
-
-### `convert <recipe> <version>`
-
-Convert recipe between formats.
-
-```bash
-# Convert v2 to v3
-astral-recipegen convert mypackage.stars v3
-
-# Convert v1 to v2
-astral-recipegen convert old-recipe.stars v2
-
-# Convert directory to v3
-astral-recipegen convert /path/to/recipe-dir v3
-```
-
-**Smart Features**:
-- Auto-splits dependencies (build vs runtime)
-- Preserves all metadata
-- Keeps scripts intact
-- Updates syntax
-
-**When to use**: Updating existing recipes to newer formats.
-
----
-
-### `migrate <recipe>`
-
-Migrate recipe to latest version (v3).
-
-```bash
-# Migrate to v3 (default)
-astral-recipegen migrate mypackage.stars
-
-# Same as convert but always targets v3
-astral-recipegen migrate old-recipe.stars
-```
-
-**When to use**: Quick upgrade to the latest format.
-
----
-
-### `from-pkgbuild <file> [version]`
-
-Convert Arch Linux PKGBUILD to `.stars` (experimental).
-
-```bash
-# Convert to v3
-astral-recipegen from-pkgbuild /path/to/PKGBUILD v3
-
-# Convert to v2
-astral-recipegen from-pkgbuild PKGBUILD v2
-```
-
-**Extracts**:
-- `pkgname`, `pkgver`, `pkgdesc`
-- `depends`, `makedepends`
-- `source`, `sha256sums`
-
-**Note**: Build/package functions are **not** converted automatically. You'll need to review and adapt them manually.
-
-**When to use**: Porting Arch packages to Astral (proceed with caution).
-
----
-
-## Recipe Formats
-
-### v1 - Legacy Format
-
-```bash
-VERSION="1.0.0"
-DESCRIPTION="Package description"
-
-@DEPENDS
-gcc
-make
-
+# v1: Uses @SECTION markers
 @BUILD
-./configure
-make
-
-@PACKAGE
-make DESTDIR="$PKGDIR" install
 ```
 
-**Status**: Deprecated but still supported.
+### Which Should I Use?
+
+| Format | Status | Use When |
+|--------|--------|----------|
+| v3 | ✅ Recommended | Always (if starting fresh) |
+| v2 | ⚠️ Supported | Existing recipes, gradual migration |
+| v1 | 🗿 Deprecated | Maintaining ancient recipes |
+
+**TL;DR**: Use v3. Just do it.
 
 ---
 
-### v2 - Current Format
+## v3 Format Specification
+
+### Structure Overview
+
+```bash
+$PKG.Version = "3"                  # Format version marker
+
+$PKG.Metadata: { ... };             # Package metadata
+$PKG.Depend.BDepends: { ... };      # Build dependencies
+$PKG.Depend.RDepends: { ... };      # Runtime dependencies
+$PKG.Depend.Optional: { ... };      # Optional dependencies
+$PKG.Sources: { ... };              # Source URLs
+$PKG.Checksums: { ... };            # File checksums
+$PKG.Build: { ... };                # Build instructions
+$PKG.Package: { ... };              # Installation instructions
+$PKG.PostInstall: { ... };          # Post-install hooks
+$PKG.PostRemove: { ... };           # Post-remove hooks
+```
+
+---
+
+### 1. Version Marker
+
+**Required**: Yes (for v3)  
+**Format**: `$PKG.Version = "3"`
+
+```bash
+$PKG.Version = "3"
+```
+
+This tells Astral "hey, I'm using the fancy new format with separated dependencies!"
+
+---
+
+### 2. Metadata Section
+
+**Required**: Yes  
+**Format**: `$PKG.Metadata: { KEY = "VALUE" };`
+
+```bash
+$PKG.Metadata: {
+    Version = "1.2.3"
+    Description = "A cool package that does cool things"
+    Homepage = "https://example.com"
+    Category = "app-editors"
+    License = "GPL-3.0"
+    Maintainer = "Your Name <email@example.com>"
+};
+```
+
+**Available Keys**:
+- `Version` (required): Package version (e.g., "1.2.3")
+- `Description` (optional): One-line description
+- `Homepage` (optional): Project homepage URL
+- `Category` (optional): Package category (e.g., sys-libs, dev-util)
+- `License` (optional): Software license (e.g., GPL-3.0, MIT)
+- `Maintainer` (optional): Recipe maintainer info
+
+**Note**: Keys are now capitalized in v3 (unlike v2's ALL_CAPS).
+
+---
+
+### 3. Build Dependencies (BDepends)
+
+**Required**: No  
+**Format**: `$PKG.Depend.BDepends: { dependencies };`
+
+Build-time dependencies are **removed after building**. Perfect for compilers and build tools.
+
+```bash
+$PKG.Depend.BDepends: {
+    gcc >= 11.0
+    make
+    cmake >= 3.20
+    pkg-config
+    autoconf
+    automake
+};
+```
+
+**What Goes Here**:
+- Compilers (gcc, clang, rustc)
+- Build systems (make, cmake, meson, ninja)
+- Build tools (autoconf, automake, libtool)
+- Code generators (bison, flex)
+
+**Version Constraints**:
+```bash
+gcc >= 11.0      # Minimum version
+python = 3.11    # Exact version
+cmake <= 3.25    # Maximum version
+make             # Any version
+```
+
+**Operators**: `=`, `>=`, `<=`, `>`, `<`
+
+---
+
+### 4. Runtime Dependencies (RDepends)
+
+**Required**: No  
+**Format**: `$PKG.Depend.RDepends: { dependencies };`
+
+Runtime dependencies **stay forever**. These are what your package needs to actually run.
+
+```bash
+$PKG.Depend.RDepends: {
+    glibc >= 2.35
+    ncurses >= 6.0
+    readline
+    openssl >= 3.0
+};
+```
+
+**What Goes Here**:
+- Libraries (ncurses, readline, openssl)
+- Runtime interpreters (python, perl)
+- Required utilities
+- Dynamic linker dependencies
+
+---
+
+### 5. Optional Dependencies
+
+**Required**: No  
+**Format**: `$PKG.Depend.Optional: { dependencies };`
+
+Optional features. User can skip these during installation.
+
+```bash
+$PKG.Depend.Optional: {
+    bash-completion
+    man-db
+    documentation
+};
+```
+
+**Use Cases**:
+- Shell completions
+- Documentation packages
+- Extra features
+- Recommended but not required packages
+
+---
+
+### 6. Sources Section
+
+**Required**: Yes (if downloading files)  
+**Format**: `$PKG.Sources: { urls = "..." };`
+
+```bash
+$PKG.Sources: {
+    urls = "https://example.com/package-1.2.3.tar.gz"
+};
+```
+
+**Multiple Sources**:
+```bash
+$PKG.Sources: {
+    urls = "https://example.com/source.tar.gz"
+    urls = "https://example.com/patch-001.patch"
+    urls = "https://mirror.com/source.tar.gz"
+};
+```
+
+**Git Sources**:
+```bash
+$PKG.Sources: {
+    urls = "git+https://github.com/user/repo.git#branch=main"
+};
+```
+
+**Git Syntax**:
+- `git+<url>#branch=<name>` - Clone specific branch
+- `git+<url>#commit=<hash>` - Clone specific commit
+- `git+<url>#tag=<tag>` - Clone specific tag
+
+---
+
+### 7. Checksums Section
+
+**Required**: No (but highly recommended)  
+**Format**: `$PKG.Checksums: { algorithm:hash filename };`
+
+```bash
+$PKG.Checksums: {
+    sha256:fb53c30b58a81fe0b3b4e64aedb9a53311ddda301ec9c1c2b42d659e50f5e13a package-1.2.3.tar.gz
+};
+```
+
+**Supported Algorithms**:
+- `sha256` (recommended)
+- `sha512` (paranoid level)
+- `md5` (please don't, it's 2026)
+
+**Multiple Files**:
+```bash
+$PKG.Checksums: {
+    sha256:abc123... source.tar.gz
+    sha256:def456... patch-001.patch
+};
+```
+
+**Git Sources**: No checksums needed (Git handles integrity).
+
+---
+
+### 8. Build Section
+
+**Required**: Yes  
+**Format**: `$PKG.Build: { script };`
+
+```bash
+$PKG.Build: {
+    cd package-1.2.3
+    ./configure --prefix=/usr --sysconfdir=/etc
+    make -j$(nproc)
+};
+```
+
+**Architecture-Specific Builds**:
+```bash
+$PKG.Build [IF arch=x86_64]: {
+    ./configure --prefix=/usr --enable-sse4 --enable-avx2
+    make -j$(nproc)
+};
+
+$PKG.Build [IF arch=aarch64]: {
+    ./configure --prefix=/usr --enable-neon
+    make -j$(nproc)
+};
+
+$PKG.Build [IF arch=riscv64]: {
+    ./configure --prefix=/usr --disable-asm
+    make
+};
+```
+
+**Available Conditions**:
+- `[IF arch=x86_64]` - Intel/AMD 64-bit
+- `[IF arch=aarch64]` - ARM 64-bit
+- `[IF arch=riscv64]` - RISC-V 64-bit
+- `[IF arch=i686]` - Intel/AMD 32-bit (if anyone still uses this)
+
+**Environment Variables**:
+- `$PKGDIR` or `$DESTDIR`: Installation staging directory
+- `$CFLAGS`, `$CXXFLAGS`, `$LDFLAGS`: Compiler flags
+- `$MAKEFLAGS`: Make parallelism (from make.conf)
+
+---
+
+### 9. Package Section
+
+**Required**: No (but highly recommended)  
+**Format**: `$PKG.Package: { script };`
+
+```bash
+$PKG.Package: {
+    cd package-1.2.3
+    make DESTDIR="$PKGDIR" install
+    
+    # Install additional files
+    install -Dm644 README.md "$PKGDIR/usr/share/doc/$PKG/README"
+    install -Dm644 LICENSE "$PKGDIR/usr/share/licenses/$PKG/LICENSE"
+    
+    # Create symlinks
+    ln -sf package "$PKGDIR/usr/bin/pkg"
+};
+```
+
+**Purpose**: Install built files into `$PKGDIR` (staging directory).
+
+**Important**: Always use `$PKGDIR`, never install directly to `/usr`!
+
+---
+
+### 10. Post-Install Section
+
+**Required**: No  
+**Format**: `$PKG.PostInstall: { script };`
+
+```bash
+$PKG.PostInstall: {
+    # Update system caches
+    ldconfig
+    update-desktop-database
+    
+    # Generate files
+    glib-compile-schemas /usr/share/glib-2.0/schemas
+    
+    echo "Package installed successfully!"
+    echo "Run 'man package' for help"
+};
+```
+
+**Purpose**: System updates after installation.
+
+**Common Tasks**:
+- Update `ldconfig` cache
+- Compile schemas
+- Update icon/mime databases
+- Print helpful messages
+
+---
+
+### 11. Post-Remove Section
+
+**Required**: No  
+**Format**: `$PKG.PostRemove: { script };`
+
+```bash
+$PKG.PostRemove: {
+    echo "Package removed."
+    echo "Configuration files remain in /etc/"
+};
+```
+
+**Purpose**: Cleanup after package removal.
+
+---
+
+## v2 Format (Legacy)
+
+### Overview
+
+v2 uses `$PKG.*` syntax but doesn't separate build/runtime dependencies.
 
 ```bash
 $PKG.Metadata: {
     VERSION = "1.0.0"
     DESCRIPTION = "Package description"
+    HOMEPAGE = "https://example.com"
     CATEGORY = "app-misc"
 };
 
@@ -348,7 +418,17 @@ $PKG.Depend {
     $PKG.Depend.Depends {
         gcc
         make
+        ncurses
+        readline
     };
+};
+
+$PKG.Sources {
+    urls = "https://example.com/source.tar.gz"
+};
+
+$PKG.Checksums {
+    sha256:abc123... source.tar.gz
 };
 
 $PKG.Build {
@@ -361,19 +441,78 @@ $PKG.Package {
 };
 ```
 
-**Status**: Current standard.
+**Key Differences from v3**:
+- No version marker
+- `ALL_CAPS` metadata keys
+- Combined dependencies in `Depends`
+- No Optional dependencies
+
+**Status**: Still supported, use for existing recipes.
 
 ---
 
-### v3 - Modern Format (Recommended)
+## v1 Format (Deprecated)
 
+### Overview
+
+The original format. Simple, but limited.
+
+```bash
+VERSION="1.0.0"
+DESCRIPTION="Package description"
+HOMEPAGE="https://example.com"
+
+@DEPENDS
+gcc
+make
+ncurses
+
+@SOURCES
+https://example.com/source.tar.gz
+
+@CHECKSUMS
+sha256:abc123... source.tar.gz
+
+@BUILD
+./configure --prefix=/usr
+make -j$(nproc)
+
+@PACKAGE
+make DESTDIR="$PKGDIR" install
+
+@POST_INSTALL
+echo "Installed!"
+```
+
+**Status**: Deprecated. Migrate to v3 using `astral-recipegen migrate`.
+
+---
+
+## Migration Guide
+
+### v1 → v3
+
+```bash
+astral-recipegen migrate old-recipe.stars v3
+```
+
+**Manual Migration**:
+
+**Before (v1)**:
+```bash
+VERSION="1.2.3"
+@DEPENDS
+gcc
+make
+ncurses
+```
+
+**After (v3)**:
 ```bash
 $PKG.Version = "3"
 
 $PKG.Metadata: {
-    Version = "1.0.0"
-    Description = "Package description"
-    Category = "app-misc"
+    Version = "1.2.3"
 };
 
 $PKG.Depend.BDepends: {
@@ -383,139 +522,146 @@ $PKG.Depend.BDepends: {
 
 $PKG.Depend.RDepends: {
     ncurses
-    readline
 };
-
-$PKG.Sources: {
-    urls = "https://example.com/source.tar.gz"
-};
-
-$PKG.Checksums: {
-    sha256:abc123... source.tar.gz
-};
-
-$PKG.Build: {
-    ./configure --prefix=/usr
-    make -j$(nproc)
-};
-
-$PKG.Package: {
-    make DESTDIR="$PKGDIR" install
-};
-```
-
-**Key Feature**: Separated build-time and runtime dependencies!
-
-**Status**: Future-proof, recommended for all new recipes.
-
----
-
-## Advanced Usage
-
-### Smart Dependency Detection
-
-When migrating to v3, `astral-recipegen` attempts to intelligently split dependencies:
-
-**Build Tools** (→ BDepends):
-- gcc, g++, clang
-- make, cmake, meson, ninja
-- autoconf, automake, libtool
-- pkg-config, bison, flex
-
-**Everything Else** (→ RDepends):
-- Libraries (ncurses, readline, openssl)
-- Runtime utilities
-- Interpreters (python, perl)
-
-```bash
-# Auto-split dependencies
-astral-recipegen migrate old-recipe.stars v3
 ```
 
 ---
 
-### Custom Output Locations
+### v2 → v3
 
 ```bash
-# Specify output file
-astral-recipegen auto nano https://... -o ~/recipes/nano.stars
+astral-recipegen migrate recipe.stars v3
+```
 
-# Specify recipe directory
-astral-recipegen -d /custom/recipes interactive v3
+**Manual Migration**:
+
+**Before (v2)**:
+```bash
+$PKG.Depend {
+    $PKG.Depend.Depends {
+        gcc
+        make
+        ncurses
+    };
+};
+```
+
+**After (v3)**:
+```bash
+$PKG.Depend.BDepends: {
+    gcc
+    make
+};
+
+$PKG.Depend.RDepends: {
+    ncurses
+};
 ```
 
 ---
 
-### Format Selection
+### Directory Recipe → v3
 
 ```bash
-# Default format (v3)
-astral-recipegen interactive
-
-# Force v2
-astral-recipegen -f v2 interactive
-
-# Per-command format
-astral-recipegen template cmake v2
+astral-recipegen dir-to-stars /path/to/recipe v3
 ```
 
----
-
-### Batch Conversion
-
-```bash
-# Convert all recipes in directory
-for recipe in /usr/src/astral/recipes/*/*.stars; do
-    astral-recipegen migrate "$recipe"
-done
-
-# Convert directory recipes
-for dir in /usr/src/astral/recipes/*/*/; do
-    astral-recipegen dir-to-stars "$dir"
-done
-```
+Converts directory-based recipes (with separate `build`, `depends` files) to `.stars` format.
 
 ---
 
 ## Examples
 
-### Example 1: Create Recipe from Scratch
+### Example 1: Simple Autotools Package
 
 ```bash
-$ astral-recipegen interactive v3
+$PKG.Version = "3"
 
-Package name: htop
-Category (e.g., app-editors, sys-apps): sys-process
-Version: 3.3.0
-Description: Interactive process viewer
-Homepage: https://htop.dev
-Source URL: https://github.com/htop-dev/htop/archive/3.3.0.tar.gz
-Build system (autotools/cmake/meson/make): autotools
-Build dependencies (space-separated): gcc make autoconf automake
-Runtime dependencies (space-separated): ncurses
-Optional dependencies (space-separated): 
+$PKG.Metadata: {
+    Version = "2.7.6"
+    Description = "GNU patch utility"
+    Homepage = "https://savannah.gnu.org/projects/patch/"
+    Category = "sys-devel"
+    License = "GPL-3.0"
+};
 
-✓ Recipe generated: /usr/src/astral/recipes/sys-process/htop.stars
+$PKG.Depend.BDepends: {
+    gcc
+    make
+};
+
+$PKG.Depend.RDepends: {
+    glibc
+};
+
+$PKG.Sources: {
+    urls = "https://ftp.gnu.org/gnu/patch/patch-2.7.6.tar.xz"
+};
+
+$PKG.Checksums: {
+    sha256:ac610bda97abe0d9f6b7c963255a11dcb196c25e337c61f94e4778d632f1d8fd patch-2.7.6.tar.xz
+};
+
+$PKG.Build: {
+    cd patch-2.7.6
+    ./configure --prefix=/usr
+    make -j$(nproc)
+};
+
+$PKG.Package: {
+    cd patch-2.7.6
+    make DESTDIR="$PKGDIR" install
+};
 ```
 
 ---
 
-### Example 2: Auto-Generate from URL
+### Example 2: CMake Package with Optional Deps
 
 ```bash
-$ astral-recipegen auto nano https://nano.org/dist/nano-8.2.tar.xz
+$PKG.Version = "3"
 
-Downloading source: nano-8.2.tar.xz
-Extracting archive...
-✓ Detected: GNU Autotools
-  Detected version: 8.2
-  Checksum: fb53c30b58a81fe0b3b4e64aedb9a53311ddda301ec9c1c2b42d659e50f5e13a
+$PKG.Metadata: {
+    Version = "3.28.1"
+    Description = "Cross-platform build system"
+    Homepage = "https://cmake.org"
+    Category = "dev-util"
+};
 
-Category (default: app-misc): app-editors
-Description: GNU nano text editor
-Homepage URL: https://nano-editor.org
+$PKG.Depend.BDepends: {
+    gcc
+    make
+};
 
-✓ Recipe generated: /usr/src/astral/recipes/app-editors/nano.stars
+$PKG.Depend.RDepends: {
+    glibc
+    ncurses
+    curl
+};
+
+$PKG.Depend.Optional: {
+    qt5
+    sphinx
+};
+
+$PKG.Sources: {
+    urls = "https://cmake.org/files/v3.28/cmake-3.28.1.tar.gz"
+};
+
+$PKG.Checksums: {
+    sha256:15e94f83e647f7d620a140a7a5da76349fc47a1bfed66d0f5cdee8e7344079ad cmake-3.28.1.tar.gz
+};
+
+$PKG.Build: {
+    cd cmake-3.28.1
+    ./bootstrap --prefix=/usr --parallel=$(nproc)
+    make -j$(nproc)
+};
+
+$PKG.Package: {
+    cd cmake-3.28.1
+    make DESTDIR="$PKGDIR" install
+};
 ```
 
 ---
@@ -523,209 +669,266 @@ Homepage URL: https://nano-editor.org
 ### Example 3: Git Repository
 
 ```bash
-$ astral-recipegen git neovim https://github.com/neovim/neovim.git
+$PKG.Version = "3"
 
-Cloning repository...
-✓ Cloned successfully
-  Detected version: v0.10.0
-  ✓ CMake
+$PKG.Metadata: {
+    Version = "0.10.0"
+    Description = "Hyperextensible Vim-based text editor"
+    Homepage = "https://neovim.io"
+    Category = "app-editors"
+};
 
-Category (default: app-misc): app-editors
-Description: Vim-fork focused on extensibility
-Homepage URL (default: https://github.com/neovim/neovim.git): https://neovim.io
+$PKG.Depend.BDepends: {
+    git
+    gcc
+    cmake
+    ninja
+};
 
-Build dependencies (press Enter for auto): 
-Runtime dependencies: 
+$PKG.Depend.RDepends: {
+    glibc
+    libtermkey
+    libuv
+    msgpack-c
+};
 
-✓ Git recipe generated: /usr/src/astral/recipes/app-editors/neovim.stars
+$PKG.Sources: {
+    urls = "git+https://github.com/neovim/neovim.git#tag=v0.10.0"
+};
 
-Note: Git sources are cloned during build.
+$PKG.Checksums: {
+    # Git sources don't need checksums
+};
+
+$PKG.Build: {
+    cd neovim
+    mkdir -p build
+    cd build
+    cmake .. -GNinja -DCMAKE_INSTALL_PREFIX=/usr
+    ninja
+};
+
+$PKG.Package: {
+    cd neovim/build
+    DESTDIR="$PKGDIR" ninja install
+};
 ```
 
 ---
 
-### Example 4: Convert Directory Recipe
+### Example 4: Architecture-Specific
 
 ```bash
-$ astral-recipegen dir-to-stars /usr/src/astral/recipes/sys-libs/glibc v3
+$PKG.Version = "3"
 
-Converting Directory Recipe to .stars
+$PKG.Metadata: {
+    Version = "13.2.0"
+    Description = "GNU Compiler Collection"
+    Homepage = "https://gcc.gnu.org"
+    Category = "sys-devel"
+};
 
-  Source:  /usr/src/astral/recipes/sys-libs/glibc
-  Package: glibc
-  Format:  v3
+$PKG.Depend.BDepends: {
+    make
+    binutils
+    gmp
+    mpfr
+    mpc
+};
 
-✓ Converted to v3: /usr/src/astral/recipes/sys-libs/glibc.stars
+$PKG.Build [IF arch=x86_64]: {
+    cd gcc-13.2.0
+    ./configure \\
+        --prefix=/usr \\
+        --enable-languages=c,c++ \\
+        --enable-shared \\
+        --enable-threads=posix \\
+        --enable-multiarch \\
+        --enable-cet
+    make -j$(nproc)
+};
+
+$PKG.Build [IF arch=aarch64]: {
+    cd gcc-13.2.0
+    ./configure \\
+        --prefix=/usr \\
+        --enable-languages=c,c++ \\
+        --enable-shared \\
+        --enable-threads=posix \\
+        --disable-multiarch
+    make -j$(nproc)
+};
+
+$PKG.Package: {
+    cd gcc-13.2.0
+    make DESTDIR="$PKGDIR" install
+    
+    # Remove conflicting files
+    rm -f "$PKGDIR/usr/lib/libstdc++.so.6"
+};
 ```
 
 ---
 
-### Example 5: Migrate All Recipes
+## Best Practices
+
+### 1. Always Use v3 for New Recipes
+
+Just do it. Future you will thank present you.
+
+### 2. Separate Build and Runtime Deps
 
 ```bash
-# Create backup first
-cp -r /usr/src/astral/recipes /usr/src/astral/recipes.backup
+# Good
+$PKG.Depend.BDepends: {
+    gcc
+    make
+};
 
-# Migrate all v2 recipes to v3
-find /usr/src/astral/recipes -name "*.stars" | while read recipe; do
-    echo "Migrating: $recipe"
-    astral-recipegen migrate "$recipe" v3
-done
+$PKG.Depend.RDepends: {
+    ncurses
+};
+
+# Bad (v2 style in v3)
+$PKG.Depend.Depends: {
+    gcc
+    make
+    ncurses
+};
+```
+
+### 3. Include Checksums
+
+```bash
+# Good
+$PKG.Checksums: {
+    sha256:abc123... source.tar.gz
+};
+
+# Bad (no checksum)
+$PKG.Checksums: {
+    # TODO: Add checksum
+};
+```
+
+### 4. Use Version Constraints When Needed
+
+```bash
+# Good (when compatibility matters)
+$PKG.Depend.RDepends: {
+    python >= 3.10
+    openssl >= 3.0
+};
+
+# Acceptable (when any version works)
+$PKG.Depend.RDepends: {
+    zlib
+};
+```
+
+### 5. Never Install Directly to /
+
+```bash
+# Good
+$PKG.Package: {
+    make DESTDIR="$PKGDIR" install
+};
+
+# Bad (will break your system)
+$PKG.Package: {
+    make install
+};
+```
+
+### 6. Keep Build Scripts Simple
+
+```bash
+# Good
+$PKG.Build: {
+    cd package-1.2.3
+    ./configure --prefix=/usr
+    make -j$(nproc)
+};
+
+# Bad (complex logic belongs upstream)
+$PKG.Build: {
+    if [ -f configure ]; then
+        ./configure
+    else
+        cmake .
+    fi
+    # ... 50 more lines of bash spaghetti
+};
 ```
 
 ---
 
 ## Troubleshooting
 
-### "git is not installed"
+### "parse_metadata_block_v3: command not found"
 
-Git support requires `git` to be installed.
+You're missing the v3 parser functions. See [astral-v3-parser-fix](astral-v3-parser-fix) and add the missing functions to your astral script.
 
-**Fix**:
+### Syntax Errors
+
+Common mistakes:
+
 ```bash
-sudo astral -S dev-vcs/git
-# or
-sudo apt install git  # on Debian/Ubuntu
+# Wrong: Missing quotes
+Version = 1.0.0
+
+# Correct
+Version = "1.0.0"
+
+# Wrong: Forgot closing brace
+$PKG.Build: {
+    make
+
+# Correct
+$PKG.Build: {
+    make
+};
 ```
 
----
+### Recipe Not Detected as v3
 
-### "Failed to download source"
+Make sure the first line is:
 
-Network issues or invalid URL.
-
-**Fix**:
-1. Check internet connection
-2. Verify URL is correct
-3. Try alternative mirror
-
----
-
-### "Could not detect build system"
-
-Source doesn't have recognizable build files.
-
-**Fix**:
 ```bash
-# Use template and fill manually
-astral-recipegen template make v3 -o mypackage.stars
-
-# Or use interactive mode
-astral-recipegen interactive v3
+$PKG.Version = "3"
 ```
 
----
+### Dependencies Still Combined
 
-### "Unknown archive format"
+You're using v2 syntax in a v3 file:
 
-Unsupported archive type.
-
-**Supported**:
-- `.tar.gz`, `.tgz`
-- `.tar.bz2`, `.tbz`
-- `.tar.xz`, `.txz`
-- `.zip`
-
-**Fix**: Extract manually and use `dir-to-stars` if you have a recipe directory.
-
----
-
-### Output File Already Exists
-
-**Fix**:
 ```bash
-# Force overwrite with -o
-astral-recipegen auto pkg https://... -o existing.stars
+# Wrong (v2 style)
+$PKG.Depend {
+    $PKG.Depend.Depends {
+        gcc
+    };
+};
 
-# Or rename output
-astral-recipegen auto pkg https://... -o pkg-new.stars
+# Correct (v3 style)
+$PKG.Depend.BDepends: {
+    gcc
+};
 ```
-
----
-
-## Command Reference
-
-### Global Options
-
-```
--o, --output <file>      Output file
--d, --dir <dir>          Recipe directory (default: /usr/src/astral/recipes)
--f, --format <v1|v2|v3>  Output format version (default: v3)
--v, --version            Show version
--h, --help               Show help
-```
-
-### Commands Summary
-
-| Command | Purpose | Usage |
-|---------|---------|-------|
-| `interactive` | Guided recipe creation | `interactive [v1\|v2\|v3]` |
-| `auto` | Auto-detect from URL | `auto <name> <url> [version]` |
-| `git` | Generate from Git repo | `git <name> <url> [branch] [version]` |
-| `template` | Generate template | `template <type> [version]` |
-| `dir-to-stars` | Convert directory recipe | `dir-to-stars <dir> [version]` |
-| `convert` | Convert between formats | `convert <recipe> <version>` |
-| `migrate` | Migrate to latest (v3) | `migrate <recipe>` |
-| `from-pkgbuild` | Convert PKGBUILD | `from-pkgbuild <file> [version]` |
-
----
-
-## Best Practices
-
-1. **Always use v3 format** for new recipes
-2. **Test generated recipes** before committing
-3. **Review auto-detected dependencies** (might miss some)
-4. **Add descriptions** that are actually helpful
-5. **Use Git recipes** for development packages
-6. **Backup before batch migration** (seriously)
-
----
-
-## Contributing
-
-Found a bug? Have a feature request?
-
-- **Repository**: https://github.com/Astaraxia-Linux/Astral
-- **Issues**: Submit a bug report
-- **Pull Requests**: Contributions welcome!
-
----
-
-## FAQ
-
-### Can I use this without Astral?
-
-Technically yes, but why would you? The generated `.stars` files are specifically for Astral.
-
-### Does it support [insert build system here]?
-
-Check the auto-detection list. If not, use `template make` and adapt manually.
-
-### Can it convert my Gentoo ebuilds?
-
-No, but you can try `from-pkgbuild` as a starting point and adapt from there. Good luck.
-
-### Why three formats?
-
-Legacy reasons. We couldn't break backwards compatibility. v3 is the future, use that.
-
-### Is the dependency detection perfect?
-
-No. It's smart, but not psychic. Always review the generated dependencies.
 
 ---
 
 ## See Also
 
 - [Astral Documentation](README.md)
-- [.stars Format Specification](STARS_FORMAT.md)
+- [astral-recipegen Documentation](RECIPEGEN.md)
 - [Contributing Guide](CONTRIBUTING.md)
 
 ---
 
 **Last updated**: January 2026  
-**Version**: 2.0.0  
-**Maintained by**: One Maniac
+**Version**: 3.0  
+**Status**: Official Specification
 
-> *"Generating recipes so you don't have to"*  
-> — astral-recipegen, probably
+> *"Three formats enter, one format leaves"*  
+> — Mad Max: Dependency Road
