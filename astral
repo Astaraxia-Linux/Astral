@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v3.1.2.0 Main - minimal POSIX package manager for Astaraxia
+# Astral v3.3.0.0 Main - minimal POSIX package manager for Astaraxia
 # Patched the patched
-# V: 3 - Major . 1 - Minor . 2 - Patches . 0 - hotfixes
+# V: 3 - Major . 3 - Minor . 0 - Patches . 0 - hotfixes
 
-version="3.1.2.0 Main"
+version="3.3.0.0 Main"
 
 # Set strict execution environment, meow~
 set -eu
@@ -167,6 +167,7 @@ CCACHE_COMPRESSLEVEL="6"
 # Features
 FEATURES="ccache parallel-make strip"
 BINPKG_ENABLED="no"
+ASTRAL_MAX_PARALLEL=4
 
 # Binary stripping
 STRIP_BINARIES="yes"     # Strip executables
@@ -316,9 +317,9 @@ check_script_safety() {
     [ ! -f "$script_file" ] && return 0
 
     cat >&2 <<SAFETY_WARNING
-═══════════════════════════════════════════════════════════════
+───────────────────────────────────────────────────────────────
 ⚠️  SAFETY CHECK: $pkg_name
-═══════════════════════════════════════════════════════════════
+───────────────────────────────────────────────────────────────
 WARNING: These checks provide BASIC protection only.
 They can be bypassed by determined attackers.
 
@@ -326,7 +327,7 @@ DO NOT run untrusted packages without review.
 Astral is NOT a security sandbox.
 
 YOU HAVE BEEN WARNED
-═══════════════════════════════════════════════════════════════
+───────────────────────────────────────────────────────────────
 SAFETY_WARNING
 
     info "Running safety checks on '$pkg_name'..."
@@ -382,9 +383,9 @@ check_file_conflicts_advanced() {
     conflict_file="$TMPDIR/conflicts.$$"
     collision_file="$TMPDIR/collisions.$$"
 
-    info "╔════════════════════════════════════════════════════════════════╗"
-    info "║                      Collision Detection                       ║"
-    info "╚════════════════════════════════════════════════════════════════╝"
+    info "╭────────────────────────────────────────────────────────────────╮"
+    info "│                      Collision Detection                       │"
+    info "╰────────────────────────────────────────────────────────────────╯"
     info ""
     info "Checking for file conflicts and collisions..."
 
@@ -429,9 +430,9 @@ check_file_conflicts_advanced() {
 
     # Display conflicts
     if [ "$conflicts" -gt 0 ]; then
-        warn "╔════════════════════════════════════════════════════════════════╗"
-        warn "║                   FILE CONFLICTS DETECTED                      ║"
-        warn "╚════════════════════════════════════════════════════════════════╝"
+        warn "╭────────────────────────────────────────────────────────────────╮"
+        warn "│                   FILE CONFLICTS DETECTED                      │"
+        warn "╰────────────────────────────────────────────────────────────────╯"
         warn ""
         warn "The following files are owned by other packages (DIFFERENT content):"
         warn ""
@@ -711,33 +712,33 @@ USAGE
 # Never gonna use ts
 multiflagss() { 
 cat <<'USAGE_MULTI'
-╔════════════════════════════════════════════════════════════╗
-║          Astral Multi-Flag Command Reference               ║
-╠════════════════════════════════════════════════════════════╣
-║ Combine single-letter flags for quick operations           ║
-╠════════════════════════════════════════════════════════════╣
-║ Flag │ Operation                                           ║
-╠══════╪═════════════════════════════════════════════════════╣
-║  U   │ Update repository indexes                           ║
-║  A   │ Upgrade all packages                                ║
-║  C   │ Clean cache (remove uninstalled recipes)            ║
-║  I   │ Rebuild file ownership index                        ║
-║  D   │ Check dependencies                                  ║
-║  W   │ List world set                                      ║
-║  c   │ Show ccache statistics                              ║
-║  v   │ Enable verbose mode                                 ║
-╠══════╧═════════════════════════════════════════════════════╣
-║ Examples:                                                  ║
-║                                                            ║
-║  astral -UA      # Update repos + Upgrade all              ║
-║  astral -UACc    # Update + Upgrade + Clean + ccache stats ║
-║  astral -UIC     # Update + Rebuild index + Clean          ║
-║  astral -WD      # Show world + Check deps                 ║
-║  astral -vUA     # Verbose Update + Upgrade                ║
-╠════════════════════════════════════════════════════════════╣
-║ Requires arguments (use separately):                       ║
-║  -S, -C, -R, -I, -s, --info, etc.                          ║
-╚════════════════════════════════════════════════════════════╝
+╭────────────────────────────────────────────────────────────╮
+│          Astral Multi-Flag Command Reference               │
+├────────────────────────────────────────────────────────────┤
+│ Combine single-letter flags for quick operations           │
+├────────────────────────────────────────────────────────────┤
+│ Flag │ Operation                                           │
+├──────╪─────────────────────────────────────────────────────┤
+│  U   │ Update repository indexes                           │
+│  A   │ Upgrade all packages                                │
+│  C   │ Clean cache (remove uninstalled recipes)            │
+│  I   │ Rebuild file ownership index                        │
+│  D   │ Check dependencies                                  │
+│  W   │ List world set                                      │
+│  c   │ Show ccache statistics                              │
+│  v   │ Enable verbose mode                                 │
+├──────╧─────────────────────────────────────────────────────┤
+│ Examples:                                                  │
+│                                                            │
+│  astral -UA      # Update repos + Upgrade all              │
+│  astral -UACc    # Update + Upgrade + Clean + ccache stats │
+│  astral -UIC     # Update + Rebuild index + Clean          │
+│  astral -WD      # Show world + Check deps                 │
+│  astral -vUA     # Verbose Update + Upgrade                │
+├────────────────────────────────────────────────────────────┤
+│ Requires arguments (use separately):                       │
+│  -S, -C, -R, -I, -s, --info, etc.                          │
+╰────────────────────────────────────────────────────────────╯
 USAGE_MULTI
 }
 
@@ -1168,22 +1169,194 @@ expand_stars_recipe() {
     stars_file="$1"
     temp_dir="$2"
     pkg_name="${3:-$(basename "$stars_file" .stars)}"
-
+    
     mkdir -p "$temp_dir"
-
     info "  → Expanding .stars recipe..."
-
-    # Store original recipe path for later reference
+    
+    # Store original path
     printf '%s\n' "$stars_file" > "$temp_dir/.astral_original_recipe"
-
-    # Detect format version by checking first 20 lines
-    if head -n 20 "$stars_file" | grep -qE '^\$PKG\.'; then
+    
+    # Detect format version
+    if head -n 3 "$stars_file" | grep -qE '^\$PKG\.Version[[:space:]]*=[[:space:]]*"3"'; then
+        info "  → Detected v3 format (separated dependencies)"
+        parse_stars_v3 "$stars_file" "$temp_dir"
+    elif head -n 20 "$stars_file" | grep -qE '^\$PKG\.'; then
         info "  → Detected v2 format (\$PKG.* syntax)"
         parse_stars_v2 "$stars_file" "$temp_dir"
     else
         info "  → Detected v1 format (@SECTION syntax)"
         parse_stars_v1 "$stars_file" "$temp_dir"
     fi
+}
+
+# === V3
+
+parse_stars_v3() {
+    stars_file="$1"
+    temp_dir="$2"
+    
+    current_section=""
+    current_subsection=""
+    in_block=0
+    block_content=""
+    
+    while IFS= read -r line || [ -n "$line" ]; do
+        line=$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        
+        if [ $in_block -eq 0 ]; then
+            [ -z "$line" ] && continue
+            case "$line" in \#*) continue ;; esac
+        fi
+        
+        # Section detection
+        case "$line" in
+            \$PKG.Version*)
+                # Skip version marker
+                continue
+                ;;
+                
+            \$PKG.Metadata:*)
+                current_section="metadata"
+                in_block=1
+                block_content=""
+                continue
+                ;;
+                
+            \$PKG.Depend.BDepends:*)
+                current_section="bdepends"
+                in_block=1
+                block_content=""
+                info "    → BDepends"
+                continue
+                ;;
+                
+            \$PKG.Depend.RDepends:*)
+                current_section="rdepends"
+                in_block=1
+                block_content=""
+                info "    → RDepends"
+                continue
+                ;;
+                
+            \$PKG.Depend.Depends:*)
+                current_section="depends"
+                in_block=1
+                block_content=""
+                info "    → Depends (legacy)"
+                continue
+                ;;
+                
+            \$PKG.Depend.Optional:*)
+                current_section="optional"
+                in_block=1
+                block_content=""
+                info "    → Optional"
+                continue
+                ;;
+                
+            \$PKG.Sources:*)
+                current_section="sources"
+                in_block=1
+                block_content=""
+                info "    → Sources"
+                continue
+                ;;
+                
+            \$PKG.Checksums:*)
+                current_section="checksums"
+                in_block=1
+                block_content=""
+                info "    → Checksums"
+                continue
+                ;;
+                
+            \$PKG.Build*)
+                current_section="build"
+                in_block=1
+                block_content=""
+                info "    → Build"
+                continue
+                ;;
+                
+            \$PKG.Package:*)
+                current_section="package"
+                in_block=1
+                block_content=""
+                info "    → Package"
+                continue
+                ;;
+                
+            \$PKG.PostInstall:*)
+                current_section="post_install"
+                in_block=1
+                block_content=""
+                info "    → PostInstall"
+                continue
+                ;;
+                
+            \$PKG.PostRemove:*)
+                current_section="post_remove"
+                in_block=1
+                block_content=""
+                info "    → PostRemove"
+                continue
+                ;;
+        esac
+        
+        # Block closing
+        if [ "$line" = "};" ] || [ "$line" = "}" ]; then
+            in_block=0
+            
+            if [ -n "$current_section" ]; then
+                case "$current_section" in
+                    metadata)
+                        parse_metadata_block_v3 "$block_content" "$temp_dir"
+                        ;;
+                    bdepends|rdepends|depends|optional)
+                        write_deps_file_v3 "$current_section" "$block_content" "$temp_dir"
+                        ;;
+                    sources)
+                        write_sources_section_v3 "$block_content" "$temp_dir"
+                        ;;
+                    checksums)
+                        write_checksums_section_v3 "$block_content" "$temp_dir"
+                        ;;
+                    build|package|post_install|post_remove)
+                        write_script_section_v3 "$current_section" "$block_content" "$temp_dir"
+                        ;;
+                esac
+            fi
+            
+            block_content=""
+            current_section=""
+            continue
+        fi
+        
+        # Accumulate content
+        if [ $in_block -eq 1 ]; then
+            case "$line" in "{") continue ;; esac
+            
+            if [ -z "$block_content" ]; then
+                block_content="$line"
+            else
+                block_content="$block_content
+$line"
+            fi
+        fi
+        
+    done < "$stars_file"
+}
+
+# Helper: Write dependency files
+write_deps_file_v3() {
+    section="$1"
+    content="$2"
+    temp_dir="$3"
+    
+    printf '%s\n' "$content" | while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        printf '%s\n' "$line"
+    done > "$temp_dir/$section"
 }
 
 # === V2 yeah
@@ -1728,10 +1901,25 @@ verify_checksums_and_extract() {
     done < "$sources_file"
 }
 
+check_if_user_skipped() {
+    local pkg_to_check="$1"
+    
+    # Check if package is in skip list
+    if [ -n "$ASTRAL_SKIP_PACKAGES" ] && [ -f "$ASTRAL_SKIP_PACKAGES" ]; then
+        if grep -qxF "$pkg_to_check" "$ASTRAL_SKIP_PACKAGES" 2>/dev/null; then
+            info "[$pkg_to_check] Skipped by user selection"
+            return 0  # Return success to indicate skip
+        fi
+    fi
+    
+    return 1  # Not skipped
+}
+
 # --- BUILD / SYNC ---
 sync_pkg_recursive() {
     LOG="/var/log/astral_sync_$$.log"
     info "View astral logs in $LOG"
+    
     # Log entry with all parameters
     {
         echo "==== ENTER sync_pkg_recursive ===="
@@ -1755,7 +1943,7 @@ sync_pkg_recursive() {
     CALL_REPO="${4:-$REPO_CONTEXT}"
 
     if [ "$CALL_EXPLICIT" -eq 1 ] && [ "${SKIP_CONFIRMATION:-0}" -eq 0 ]; then
-        preview_and_confirm_install "$CALL_PKG" 0
+        interactive_dep_menu "$CALL_PKG" 0
     fi
 
     echo "Saved to local vars:" >> "$LOG"
@@ -1767,6 +1955,10 @@ sync_pkg_recursive() {
     CALL_PKG_CLEAN=$(sanitize_pkg_name "$CALL_PKG")
     echo "After sanitize: CALL_PKG_CLEAN='$CALL_PKG_CLEAN'" >> "$LOG"
     echo "" >> "$LOG"
+    
+    if check_if_user_skipped "$CALL_PKG_CLEAN"; then
+        return 0
+    fi
     
     # Circular dependency check
     case " $VISITED_PACKAGES " in
@@ -1954,13 +2146,13 @@ sync_pkg_asura() {
         err "USER_RECIPE_RAW_URL not configured in $CONFIG_FILE. Cannot sync from ASURA."
     fi
 
-    info "╔═══════════════════════════════════════════════════════════════════╗"
-    info "║ ASURA: Astaraxia User Repository For all (Community Overlay)      ║"
-    info "╠═══════════════════════════════════════════════════════════════════╣"
-    info "║ Package:      $_pkg (from ASURA)                                  ║"
-    info "║ Dependencies: Fetched from AOHARU (official, trusted)             ║"
-    info "║ Security:     ASURA packages are user-contributed.                ║"
-    info "╚═══════════════════════════════════════════════════════════════════╝"
+    info "╭───────────────────────────────────────────────────────────────────╮"
+    info "│ ASURA: Astaraxia User Repository For all (Community Overlay)      │"
+    info "├───────────────────────────────────────────────────────────────────┤"
+    info "│ Package:      $_pkg (from ASURA)                                  │"
+    info "│ Dependencies: Fetched from AOHARU (official, trusted)             │"
+    info "│ Security:     ASURA packages are user-contributed.                │"
+    info "╰───────────────────────────────────────────────────────────────────╯"
     warn "Review package before installing: astral --inspect $_pkg"
 
     # Set ASURA context for the main package only
@@ -2572,29 +2764,62 @@ list_installed() {
         info "No packages currently installed."
         return 0
     fi
-    info "--- Installed Packages ---"
-    last_category=""
+    
+    info "╭────────────────────╮"
+    info "│ Installed Packages │"
+    info "╰────────────────────╯"
+    info ""
+    
+    # Group packages by category
+    temp_list="$TMPDIR/astral-list-$$"
     find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null |
-    sed "s|^${DB_DIR}/||" | sed 's|/version$||' | sort |
-    while IFS= read -r pkg_path; do
-        pkg_name=$(basename "$pkg_path")
-        category=$(dirname "$pkg_path")
-        pkg_ver=""
-        if [ "$category" = "." ] || [ -z "$category" ] || [ "$category" = "/" ]; then
+    sed "s|^${DB_DIR}/||" | sed 's|/version$||' | sort > "$temp_list"
+    
+    # Get unique categories
+    categories=$(cut -d'/' -f1 "$temp_list" | sort -u)
+    
+    for category in $categories; do
+        # Handle root-level packages
+        if [ "$category" = "." ] || [ -z "$category" ]; then
             category="Uncategorized"
         fi
-        if [ "$category" != "$last_category" ]; then
-            printf '%s\n' "$category"
-            last_category="$category"
+        
+        # Get packages in this category
+        if [ "$category" = "Uncategorized" ]; then
+            pkgs=$(grep -v '/' "$temp_list" || true)
+        else
+            pkgs=$(grep "^${category}/" "$temp_list" || true)
         fi
-        if [ -f "$DB_DIR/$pkg_path/version" ]; then
-             pkg_ver=$(cat "$DB_DIR/$pkg_path/version")
-        fi
-        printf "|- %-15s (v%s)\n" "$pkg_name" "$pkg_ver"
+        
+        [ -z "$pkgs" ] && continue
+        
+        pkg_count=$(printf '%s\n' "$pkgs" | wc -l)
+        
+        # Category header
+        printf "${BLUE}┌ %s (%s packages)${NC}\n" "$category" "$pkg_count"
+        
+        current=0
+        printf '%s\n' "$pkgs" | while IFS= read -r pkg_path; do
+            current=$((current + 1))
+            pkg_name=$(basename "$pkg_path")
+            pkg_ver=$(cat "$DB_DIR/$pkg_path/version" 2>/dev/null || echo "unknown")
+            
+            # Determine if last package in category
+            if [ $current -eq $pkg_count ]; then
+                printf "${GREEN}└──${NC} %-30s ${YELLOW}v%s${NC}\n" "$pkg_name" "$pkg_ver"
+            else
+                printf "${GREEN}├──${NC} %-30s ${YELLOW}v%s${NC}\n" "$pkg_name" "$pkg_ver"
+            fi
+        done
+        printf "\n"
     done
-    printf '\n'
+    
+    rm -f "$temp_list"
+    
+    total=$(find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null | wc -l)
+    info "╭─╮"
+    info "╰─┴─ Total: $total packages installed"
 }
-# Add after list_installed() function
 
 check_deps_tree() {
     pkg="$1"
@@ -2880,9 +3105,9 @@ load_build_state() {
 resume_build() {
     pkg="$1"
     
-    info "╔════════════════════════════════════════════════════════════════╗"
-    info "║                    Resuming Build: $pkg"
-    info "╚════════════════════════════════════════════════════════════════╝"
+    info "╭──────────────────────╮"
+    info "│ Resuming Build: $pkg  "
+    info "╰──────────────────────╯"
     info ""
     
     # Find build directory
@@ -2959,9 +3184,9 @@ detect_ghost_files() {
     ghost_files=$(comm -13 "$before_snapshot" "$after_snapshot" | awk '{print $2}')
     
     if [ -n "$ghost_files" ]; then
-        warn "╔════════════════════════════════════════════════════════════════╗"
-        warn "║  GHOST FILES DETECTED: Files modified outside \$PKGDIR!        ║"
-        warn "╚════════════════════════════════════════════════════════════════╝"
+        warn "╭────────────────────────────────────────────────────────╮"
+        warn "│ GHOST FILES DETECTED: Files modified outside \$PKGDIR! "
+        warn "╰────────────────────────────────────────────────────────╯"
         warn ""
         warn "Package '$pkg' modified files directly on the system:"
         warn ""
@@ -3004,9 +3229,9 @@ strip_binaries() {
         return 0
     fi
     
-    info "╔════════════════════════════════════════════════════════════════╗"
-    info "║                 Stripping Debug Symbols                       ║"
-    info "╚════════════════════════════════════════════════════════════════╝"
+    info "╭─────────────────────────╮"
+    info "│ Stripping Debug Symbols │"
+    info "╰─────────────────────────╯"
     info ""
     
     stripped_count=0
@@ -3140,165 +3365,292 @@ clear_ccache() {
     info "ccache cleared"
 }
 
-preview_and_confirm_install() {
+interactive_dep_menu() {
     pkg="$1"
     skip_confirmation="${2:-0}"
 
-    info "╔════════════════════════════════════════════════════════════════╗"
-    info "║              Installation Preview: $pkg"
-    info "╚════════════════════════════════════════════════════════════════╝"
+    info "╭──────────────────────────────────╮"
+    info "│ Interactive Dependency Selection │"
+    info "╰──────────────────────────────────╯"
     info ""
-    info "Computing dependency tree..."
+    info "Analyzing dependency tree for: $pkg"
     info ""
 
-    # Collect dependencies recursively with tree structure
+    # Temporary files for tree and selection data
     temp_tree="$TMPDIR/astral-tree-$$"
+    temp_data="$TMPDIR/astral-data-$$"
+    temp_skip="$TMPDIR/astral-skip-$$"
+    
     > "$temp_tree"
+    > "$temp_data"
+    > "$temp_skip"
     
-    new_packages=""
-    new_count=0
+    dep_counter=0
     
-    # Recursive function to build tree
-    build_dep_tree() {
-        local p="$1"
+    # Build interactive dependency tree
+    build_interactive_tree() {
+        local pkg_name="$1"
         local indent="$2"
         local is_last="${3:-0}"
-        local visited_list="$4"
+        local visited="$4"
+        local dep_type="${5:-required}"
         
-        # Check if already visited (circular dep check)
-        case " $visited_list " in
-            *" $p "*) 
-                printf '%s%s %s [CIRCULAR]\n' "$indent" "$([ $is_last -eq 1 ] && echo '└─' || echo '├─')" "$p" >> "$temp_tree"
+        # Circular dependency check
+        case " $visited " in
+            *" $pkg_name "*)
+                local branch="$([ $is_last -eq 1 ] && echo ' └─' || echo ' ├─')"
+                printf '%s%s [CIRCULAR] %s\n' "$indent" "$branch" "$pkg_name" >> "$temp_tree"
                 return 0
                 ;;
         esac
         
-        visited_list="$visited_list $p"
+        visited="$visited $pkg_name"
         
-        # Determine status
+        # Get package status
         local status_icon=""
-        local status_text=""
-        local category=""
+        local status_symbol=""
+        local pkg_ver="unknown"
+        local can_skip=0
+        local is_optional=0
+        local item_id=0
         
-        # Try to get category from recipe
-        local rpath=$(recipe_path "$p" 2>/dev/null || echo "")
-        if [ -n "$rpath" ]; then
-            category=$(printf '%s' "$rpath" | sed "s|^${RECIPES_DIR}/||" | cut -d'/' -f1)
-            [ "$category" = "$p" ] && category=""
-        fi
-        
-        if is_pkg_installed "$p"; then
-            ver=$(get_installed_ver "$p")
-            status_icon="[✓]"
-            status_text="already installed"
-        elif check_host_dependency "$p"; then
-            status_icon="[H]"
-            status_text="provided by host"
-        else
-            status_icon="[+]"
-            status_text="to be installed"
-            new_packages="$new_packages $p"
-            new_count=$((new_count + 1))
+        # Check installation status
+        if is_pkg_installed "$pkg_name"; then
+            pkg_ver=$(get_installed_ver "$pkg_name")
+            status_icon="[✓✓]"
+            status_symbol="✓✓"
+        elif check_host_dependency "$pkg_name"; then
+            status_icon="[ ✓  ]"
+            status_symbol="✓ "
+            can_skip=1
             
-            # Get version from recipe
+            local rpath=$(recipe_path "$pkg_name" 2>/dev/null || echo "")
             if [ -n "$rpath" ]; then
-                ver=$(cat "$rpath/version" 2>/dev/null || echo "unknown")
+                pkg_ver=$(cat "$rpath/version" 2>/dev/null || echo "host")
             else
-                ver="unknown"
+                pkg_ver="host"
+            fi
+        else
+            status_icon="[  ]"
+            status_symbol="  "
+            
+            local rpath=$(recipe_path "$pkg_name" 2>/dev/null || echo "")
+            if [ -n "$rpath" ]; then
+                pkg_ver=$(cat "$rpath/version" 2>/dev/null || echo "unknown")
             fi
         fi
         
-        # Format package line
-        local pkg_display="$p"
-        [ -n "$category" ] && pkg_display="$category/$p"
+        # Check if optional
+        if [ "$dep_type" = "optional" ]; then
+            is_optional=1
+            status_icon="[OPT]"
+            status_symbol="OPT"
+            can_skip=1
+        fi
         
-        local branch="$([ $is_last -eq 1 ] && echo '└─' || echo '├─')"
-        printf '%s%s %s %-30s %s (v%s)\n' \
-            "$indent" "$branch" "$status_icon" "$pkg_display" "$status_text" "$ver" >> "$temp_tree"
+        # Create selectable item if can be skipped
+        if [ $can_skip -eq 1 ] || [ $is_optional -eq 1 ]; then
+            dep_counter=$((dep_counter + 1))
+            item_id=$dep_counter
+            
+            printf '%d|%s|%s|%s|%d|%d\n' "$item_id" "$pkg_name" "$pkg_ver" "$dep_type" "$is_optional" "$can_skip" >> "$temp_data"
+        fi
+        
+        # Build tree line
+        local branch="$([ $is_last -eq 1 ] && echo ' └─' || echo ' ├─')"
+        local connector="$([ $is_last -eq 1 ] && echo '     ' || echo '│  ')"
+        
+        local item_label=""
+        if [ $item_id -gt 0 ]; then
+            item_label="[$item_id] "
+        fi
+        
+        local opt_label=""
+        if [ $is_optional -eq 1 ]; then
+            opt_label=" [OPTIONAL]"
+        fi
+        
+        printf '%s%s %s%s %s ─ %s%s\n' "$indent" "$branch" "$item_label" "$status_icon" "$pkg_name" "$pkg_ver" "$opt_label" >> "$temp_tree"
         
         # Get dependencies
-        deps=$(get_pkg_deps "$p" 2>/dev/null || true)
-        if [ -n "$deps" ]; then
+        local rpath=$(recipe_path "$pkg_name" 2>/dev/null || echo "")
+        if [ -n "$rpath" ]; then
+            if [ -f "$rpath" ]; then
+                case "$rpath" in
+                    *.stars)
+                        local temp_expand="$TMPDIR/astral-expand-$pkg_name-$$"
+                        expand_stars_recipe "$rpath" "$temp_expand" "$pkg_name" 2>/dev/null || true
+                        rpath="$temp_expand"
+                        ;;
+                esac
+            fi
+            
+            local required_deps="" build_deps="" runtime_deps="" optional_deps=""
+            
+            if [ -f "$rpath/depends" ]; then
+                required_deps=$(grep -v '^#' "$rpath/depends" 2>/dev/null | grep -v '^$' | awk '{print $1}' || true)
+            fi
+            
+            if [ -f "$rpath/bdepends" ]; then
+                build_deps=$(grep -v '^#' "$rpath/bdepends" 2>/dev/null | grep -v '^$' | awk '{print $1}' || true)
+            fi
+            
+            if [ -f "$rpath/rdepends" ]; then
+                runtime_deps=$(grep -v '^#' "$rpath/rdepends" 2>/dev/null | grep -v '^$' | awk '{print $1}' || true)
+            fi
+            
+            if [ -f "$rpath/optional" ]; then
+                optional_deps=$(grep -v '^#' "$rpath/optional" 2>/dev/null | grep -v '^$' | awk '{print $1}' || true)
+            fi
+            
+            local all_deps="$required_deps $build_deps $runtime_deps"
             local dep_list=""
             local dep_count=0
             
-            # Count deps
-            for d in $deps; do
+            for d in $all_deps; do
                 d=$(printf '%s' "$d" | tr -d '[:space:]')
                 [ -z "$d" ] && continue
-                dep_list="$dep_list $d"
+                dep_list="$dep_list required:$d"
                 dep_count=$((dep_count + 1))
             done
             
-            # Process each dependency
-            local current=0
-            for dep in $dep_list; do
-                current=$((current + 1))
-                local new_indent="$indent$([ $is_last -eq 1 ] && echo '    ' || echo '│   ')"
-                local dep_is_last=0
-                [ $current -eq $dep_count ] && dep_is_last=1
-                
-                build_dep_tree "$dep" "$new_indent" "$dep_is_last" "$visited_list"
+            for d in $optional_deps; do
+                d=$(printf '%s' "$d" | tr -d '[:space:]')
+                [ -z "$d" ] && continue
+                dep_list="$dep_list optional:$d"
+                dep_count=$((dep_count + 1))
             done
+            
+            if [ $dep_count -gt 0 ]; then
+                local current=0
+                for dep_entry in $dep_list; do
+                    current=$((current + 1))
+                    
+                    local dtype=$(printf '%s' "$dep_entry" | cut -d':' -f1)
+                    local dname=$(printf '%s' "$dep_entry" | cut -d':' -f2)
+                    
+                    local new_indent="$indent$connector"
+                    local dep_is_last=0
+                    [ $current -eq $dep_count ] && dep_is_last=1
+                    
+                    build_interactive_tree "$dname" "$new_indent" "$dep_is_last" "$visited" "$dtype"
+                done
+            fi
         fi
     }
     
-    # Build the tree
-    build_dep_tree "$pkg" "" 1 ""
+    build_interactive_tree "$pkg" "" 1 "" "required"
     
-    # Display the tree
     cat "$temp_tree"
-    rm -f "$temp_tree"
-    
     info ""
-    info "╔════════════════════════════════════════════════════════════════╗"
-    info "║                         Summary                                ║"
-    info "╠════════════════════════════════════════════════════════════════╣"
-    printf "${NC}║  Packages to install: %-38s║\n" "$new_count"
-    printf "${NC}║  Total size (approx): %-38s║\n" "Unknown"
-    info "╚════════════════════════════════════════════════════════════════╝"
     
-    if [ $new_count -eq 0 ]; then
+    if [ -s "$temp_data" ]; then
+        info "╭────────────────────────────────────────────────────────────────╮"
+        info "│              Dependency Selection Menu                         │"
+        info "├────────────────────────────────────────────────────────────────┤"
+        info "│ Status Legend:                                                 │"
+        printf "│  ${GREEN}[✓✓]${NC} - Already installed (cannot skip)                        │"
         info ""
-        info "✓ All dependencies already satisfied. Nothing to install."
-        return 0
+        printf "│  ${YELLOW}[✓ ]${NC} - Available on host (can be skipped)                     │"
+        info ""
+        printf "│  ${RED}[  ]${NC} - Will be installed (required)                           │"
+        info ""
+        printf "│  ${BLUE}[OPT]${NC} - Optional dependency (can be skipped)                  │"
+        info ""
+        info "├────────────────────────────────────────────────────────────────┤"
+        info "│ Actions:                                                       │"
+        info "│  • Enter numbers to SKIP packages (e.g., '1 3 5')              │"
+        info "│  • Enter 'a' or 'all' to install everything                    │"
+        info "│  • Press Enter to continue with current selection              │"
+        info "╰────────────────────────────────────────────────────────────────╯"
+        info ""
+        
+        printf "${YELLOW}Selectable Dependencies:${NC}"
+        info ""
+        while IFS='|' read -r id name ver dtype is_opt can_skip; do
+            local status_label=""
+            if [ "$is_opt" -eq 1 ]; then
+                status_label="[OPTIONAL]"
+            elif [ "$can_skip" -eq 1 ]; then
+                status_label="[CAN SKIP]"
+            fi
+            printf '[%2d ] %-25s v%-10s %s\n' "$id" "$name" "$ver" "$status_label"
+        done < "$temp_data"
+        
+        info ""
+        
+        if [ "$skip_confirmation" -eq 0 ]; then
+            printf "${BLUE}Enter numbers to SKIP (or press Enter to install all): ${NC}"
+            read -r user_input
+            
+            case "$user_input" in
+                "")
+                    info "Installing all dependencies"
+                    ;;
+                *)
+                    for skip_id in $user_input; do
+                        skip_pkg=$(awk -F'|' -v id="$skip_id" '$1 == id {print $2}' "$temp_data")
+                        if [ -n "$skip_pkg" ]; then
+                            printf '%s\n' "$skip_pkg" >> "$temp_skip"
+                            info "  → Will skip: $skip_pkg"
+                        fi
+                    done
+                    ;;
+            esac
+        fi
+    fi
+    
+    new_count=0
+    skip_count=0
+    
+    if [ -s "$temp_data" ]; then
+        while IFS='|' read -r id name ver dtype is_opt can_skip; do
+            if [ -s "$temp_skip" ] && grep -qxF "$name" "$temp_skip"; then
+                skip_count=$((skip_count + 1))
+            else
+                if ! is_pkg_installed "$name" && ! check_host_dependency "$name"; then
+                    new_count=$((new_count + 1))
+                fi
+            fi
+        done < "$temp_data"
+    fi
+    
+    if ! is_pkg_installed "$pkg"; then
+        new_count=$((new_count + 1))
     fi
     
     info ""
-    info "New packages to be installed:"
-    for p in $new_packages; do
-        # Get category if available
-        local rpath=$(recipe_path "$p" 2>/dev/null || echo "")
-        local pkg_display="$p"
-        if [ -n "$rpath" ]; then
-            local category=$(printf '%s' "$rpath" | sed "s|^${RECIPES_DIR}/||" | cut -d'/' -f1)
-            [ "$category" != "$p" ] && pkg_display="$category/$p"
-        fi
-        info "  • $pkg_display"
-    done
+    info "╭────────────────────────────────────────────────────────────────╮"
+    info "│                         Summary                                │"
+    info "├────────────────────────────────────────────────────────────────┤"
+    printf "│  Packages to install: %-37s│\n" "$new_count"
+    printf "│  Dependencies to skip: %-36s│\n" "$skip_count"
+    info "╰────────────────────────────────────────────────────────────────╯"
     
-    # Skip confirmation if requested (for --yes flag)
+    export ASTRAL_SKIP_PACKAGES="$temp_skip"
+    
+    rm -f "$temp_tree" "$temp_data"
+    
     if [ "$skip_confirmation" -eq 1 ]; then
         info ""
         info "Auto-confirming installation (--yes flag)"
         return 0
     fi
     
-    # Confirmation prompt
     info ""
-    printf "${YELLOW}Proceed with installation? [y/N]: ${NC}"
+    printf "${YELLOW}Proceed with installation? [Y/n]: ${NC}"
     read -r response
     
     case "$response" in
-        [Yy]|[Yy][Ee][Ss])
-            info ""
-            info "✓ Confirmed. Starting installation..."
-            return 0
+        [Nn]|[Nn][Oo])
+            info "✗ Installation cancelled by user"
+            rm -f "$ASTRAL_SKIP_PACKAGES" 2>/dev/null
+            export ASTRAL_SKIP_PACKAGES=""
+            exit 0
             ;;
         *)
-            info ""
-            info "✗ Installation cancelled by user"
-            exit 0
+            info "✓ Starting installation..."
+            return 0
             ;;
     esac
 }
@@ -3343,7 +3695,7 @@ while [ $# -gt 0 ]; do
             shift
             break
             ;;
-        -*) # start of command
+        -*)
             break
             ;;
         *)
@@ -3444,7 +3796,7 @@ case "$1" in
     fi
     ;;
 
-  --list-installed|-ll)
+  --list-installed|-ll|ls)
     list_installed
     ;;
 -D|--Deps)
@@ -3565,6 +3917,11 @@ case "$1" in
  --ccache-clear)
      clear_ccache
      ;;
+
+    --horizion)
+    stages="$2"
+    steps="$3"
+    ;;
 
     -h|-help|--h|--help|-HELP|--HELP|HELP|usage|Usage|USAGE)
     usage

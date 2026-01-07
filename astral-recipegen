@@ -1,0 +1,1141 @@
+#!/bin/sh
+# astral-recipegen - Enhanced recipe generator for Astral package manager
+# Version: 2.0.0
+# Supports: v1 (@SECTION), v2 ($PKG.*), v3 (separated deps)
+
+set -eu
+
+VERSION="2.0.0"
+RECIPES_DIR=${RECIPES_DIR:-/usr/src/astral/recipes}
+TMPDIR=${TMPDIR:-/tmp}
+
+err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+info() { printf '%s\n' "$*"; }
+warn() { printf 'WARNING: %s\n' "$*" >&2; }
+
+show_version() {
+    cat <<EOF
+astral-recipegen v$VERSION
+Multi-version recipe generator for Astral package manager
+Supports: v1 (@SECTION), v2 (\$PKG.*), v3 (separated deps)
+EOF
+    exit 0
+}
+
+usage() {
+    cat <<USAGE
+╔════════════════════════════════════════════════════════════════╗
+║          astral-recipegen - Recipe Generator v$VERSION            ║
+╚════════════════════════════════════════════════════════════════╝
+
+Usage: astral-recipegen [options] <command>
+
+Commands:
+  interactive [v1|v2|v3]   Interactive recipe generator
+  auto <name> <url>        Auto-detect build system and generate
+  template <type> [ver]    Generate template for specific build system
+  convert <recipe> <ver>   Convert recipe to different version
+  migrate <recipe>         Migrate recipe to latest version (v3)
+  dir-to-stars <dir>       Convert directory recipe to .stars
+
+Template Types:
+  autotools                GNU Autotools (./configure && make)
+  cmake                    CMake build system
+  meson                    Meson build system
+  python                   Python packages (setup.py/pyproject.toml)
+  make                     Plain Makefile
+
+Recipe Versions:
+  v1                       @SECTION format (legacy)
+  v2                       \$PKG.* format (current)
+  v3                       Separated BDepends/RDepends (recommended)
+
+Options:
+  -o, --output <file>      Output file (default: auto-generated)
+  -d, --dir <dir>          Recipe directory (default: $RECIPES_DIR)
+  -f, --format <v1|v2|v3>  Output format version (default: v3)
+  -v, --version            Show version
+  -h, --help               Show this help
+
+Examples:
+  # Interactive mode with v3 format (recommended)
+  astral-recipegen interactive v3
+
+  # Auto-detect and generate v3 recipe
+  astral-recipegen auto nano https://nano-editor.org/dist/v8/nano-8.2.tar.xz
+
+  # Convert v2 recipe to v3
+  astral-recipegen convert mypackage.stars v3
+
+  # Migrate directory recipe to v3 .stars
+  astral-recipegen dir-to-stars /usr/src/astral/recipes/app-editors/nano
+
+  # Generate v2 template
+  astral-recipegen template cmake v2 -o mypackage.stars
+USAGE
+    exit 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DETECTION FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+detect_recipe_version() {
+    recipe_file="$1"
+    
+    if [ -f "$recipe_file" ]; then
+        # Check for .stars file
+        if head -n 5 "$recipe_file" | grep -qE '^\$PKG\.Version[[:space:]]*=[[:space:]]*"3"'; then
+            echo "v3"
+        elif head -n 20 "$recipe_file" | grep -qE '^\$PKG\.'; then
+            echo "v2"
+        elif grep -qE '^@[A-Z_]+$' "$recipe_file"; then
+            echo "v1"
+        else
+            echo "unknown"
+        fi
+    elif [ -d "$recipe_file" ]; then
+        # Directory-based recipe
+        echo "directory"
+    else
+        echo "notfound"
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DIRECTORY TO .STARS CONVERTER
+# ═══════════════════════════════════════════════════════════════════════════
+
+convert_directory_to_stars() {
+    dir="$1"
+    output_format="${2:-v3}"
+    
+    [ ! -d "$dir" ] && err "Directory not found: $dir"
+    
+    pkg_name=$(basename "$dir")
+    
+    info "╔════════════════════════════════════════════════════════════════╗"
+    info "║          Converting Directory Recipe to .stars                ║"
+    info "╚════════════════════════════════════════════════════════════════╝"
+    info ""
+    info "  Source:  $dir"
+    info "  Package: $pkg_name"
+    info "  Format:  $output_format"
+    info ""
+    
+    # Read metadata
+    version=$(cat "$dir/version" 2>/dev/null || echo "unknown")
+    description=$(head -n1 "$dir/info" 2>/dev/null || echo "No description")
+    homepage=$(tail -n1 "$dir/info" 2>/dev/null || echo "")
+    
+    # Read dependencies
+    depends=$(cat "$dir/depends" 2>/dev/null || echo "")
+    bdepends=$(cat "$dir/bdepends" 2>/dev/null || echo "")
+    rdepends=$(cat "$dir/rdepends" 2>/dev/null || echo "")
+    optional=$(cat "$dir/optional" 2>/dev/null || echo "")
+    
+    # Read sources
+    sources=$(cat "$dir/sources" 2>/dev/null || echo "")
+    checksums=$(cat "$dir/checksums" 2>/dev/null || echo "")
+    
+    # Read scripts
+    build_script=$(cat "$dir/build" 2>/dev/null || echo "")
+    package_script=$(cat "$dir/package" 2>/dev/null || echo "")
+    post_install=$(cat "$dir/post_install" 2>/dev/null || echo "")
+    post_remove=$(cat "$dir/post_remove" 2>/dev/null || echo "")
+    
+    # Detect category from path
+    category=$(dirname "$dir" | xargs basename)
+    [ "$category" = "recipes" ] && category="app-misc"
+    
+    # Output file
+    if [ -n "$OUTPUT_FILE" ]; then
+        output_file="$OUTPUT_FILE"
+    else
+        output_file="${dir}.stars"
+    fi
+    
+    # Generate based on format
+    case "$output_format" in
+        v3)
+            generate_v3_from_data "$pkg_name" "$version" "$description" "$homepage" \
+                "$category" "$depends" "$bdepends" "$rdepends" "$optional" \
+                "$sources" "$checksums" "$build_script" "$package_script" \
+                "$post_install" "$post_remove" "$output_file"
+            ;;
+        v2)
+            generate_v2_from_data "$pkg_name" "$version" "$description" "$homepage" \
+                "$category" "$depends" "$bdepends" "$rdepends" "$optional" \
+                "$sources" "$checksums" "$build_script" "$package_script" \
+                "$post_install" "$post_remove" "$output_file"
+            ;;
+        v1)
+            generate_v1_from_data "$pkg_name" "$version" "$description" "$homepage" \
+                "$depends" "$sources" "$checksums" "$build_script" "$package_script" \
+                "$post_install" "$post_remove" "$output_file"
+            ;;
+        *)
+            err "Unknown format: $output_format"
+            ;;
+    esac
+    
+    info "✓ Converted to $output_format: $output_file"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MIGRATION FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+migrate_recipe() {
+    input_file="$1"
+    target_version="${2:-v3}"
+    
+    [ ! -f "$input_file" ] && [ ! -d "$input_file" ] && err "Recipe not found: $input_file"
+    
+    current_version=$(detect_recipe_version "$input_file")
+    
+    info "╔════════════════════════════════════════════════════════════════╗"
+    info "║                    Recipe Migration                            ║"
+    info "╚════════════════════════════════════════════════════════════════╝"
+    info ""
+    info "  Source:  $input_file"
+    info "  Current: $current_version"
+    info "  Target:  $target_version"
+    info ""
+    
+    # Handle directory recipes
+    if [ "$current_version" = "directory" ]; then
+        convert_directory_to_stars "$input_file" "$target_version"
+        return 0
+    fi
+    
+    # Parse current recipe
+    temp_dir=$(mktemp -d "$TMPDIR/astral-migrate.XXXXXX")
+    trap "rm -rf '$temp_dir'" EXIT
+    
+    case "$current_version" in
+        v1)
+            parse_v1_recipe "$input_file" "$temp_dir"
+            ;;
+        v2)
+            parse_v2_recipe "$input_file" "$temp_dir"
+            ;;
+        v3)
+            parse_v3_recipe "$input_file" "$temp_dir"
+            ;;
+        *)
+            err "Cannot migrate from unknown format"
+            ;;
+    esac
+    
+    # Read parsed data
+    pkg_name=$(basename "$input_file" .stars)
+    version=$(cat "$temp_dir/version" 2>/dev/null || echo "unknown")
+    description=$(cat "$temp_dir/description" 2>/dev/null || echo "No description")
+    homepage=$(cat "$temp_dir/homepage" 2>/dev/null || echo "")
+    category=$(cat "$temp_dir/category" 2>/dev/null || echo "app-misc")
+    depends=$(cat "$temp_dir/depends" 2>/dev/null || echo "")
+    bdepends=$(cat "$temp_dir/bdepends" 2>/dev/null || echo "")
+    rdepends=$(cat "$temp_dir/rdepends" 2>/dev/null || echo "")
+    optional=$(cat "$temp_dir/optional" 2>/dev/null || echo "")
+    sources=$(cat "$temp_dir/sources" 2>/dev/null || echo "")
+    checksums=$(cat "$temp_dir/checksums" 2>/dev/null || echo "")
+    build_script=$(cat "$temp_dir/build" 2>/dev/null || echo "")
+    package_script=$(cat "$temp_dir/package" 2>/dev/null || echo "")
+    post_install=$(cat "$temp_dir/post_install" 2>/dev/null || echo "")
+    post_remove=$(cat "$temp_dir/post_remove" 2>/dev/null || echo "")
+    
+    # Output file
+    if [ -n "$OUTPUT_FILE" ]; then
+        output_file="$OUTPUT_FILE"
+    else
+        output_file="${input_file%.stars}-${target_version}.stars"
+    fi
+    
+    # Generate target format
+    case "$target_version" in
+        v3)
+            # Smart migration: if bdepends/rdepends empty, try to split depends
+            if [ -z "$bdepends" ] && [ -z "$rdepends" ] && [ -n "$depends" ]; then
+                info "Attempting to split dependencies intelligently..."
+                smart_split_dependencies "$depends" "$temp_dir"
+                bdepends=$(cat "$temp_dir/bdepends" 2>/dev/null || echo "")
+                rdepends=$(cat "$temp_dir/rdepends" 2>/dev/null || echo "")
+            fi
+            
+            generate_v3_from_data "$pkg_name" "$version" "$description" "$homepage" \
+                "$category" "$depends" "$bdepends" "$rdepends" "$optional" \
+                "$sources" "$checksums" "$build_script" "$package_script" \
+                "$post_install" "$post_remove" "$output_file"
+            ;;
+        v2)
+            generate_v2_from_data "$pkg_name" "$version" "$description" "$homepage" \
+                "$category" "$depends" "$bdepends" "$rdepends" "$optional" \
+                "$sources" "$checksums" "$build_script" "$package_script" \
+                "$post_install" "$post_remove" "$output_file"
+            ;;
+        v1)
+            generate_v1_from_data "$pkg_name" "$version" "$description" "$homepage" \
+                "$depends" "$sources" "$checksums" "$build_script" "$package_script" \
+                "$post_install" "$post_remove" "$output_file"
+            ;;
+        *)
+            err "Unknown target version: $target_version"
+            ;;
+    esac
+    
+    info "✓ Migrated to $target_version: $output_file"
+    
+    rm -rf "$temp_dir"
+}
+
+# Smart dependency splitter
+smart_split_dependencies() {
+    deps_list="$1"
+    output_dir="$2"
+    
+    # Common build-time tools
+    build_tools="gcc g++ clang make cmake meson ninja autoconf automake libtool pkg-config bison flex m4 perl python ruby"
+    
+    > "$output_dir/bdepends"
+    > "$output_dir/rdepends"
+    
+    for dep in $deps_list; do
+        is_build=0
+        
+        # Check if it's a known build tool
+        for tool in $build_tools; do
+            if [ "$dep" = "$tool" ]; then
+                is_build=1
+                break
+            fi
+        done
+        
+        if [ $is_build -eq 1 ]; then
+            echo "$dep" >> "$output_dir/bdepends"
+        else
+            echo "$dep" >> "$output_dir/rdepends"
+        fi
+    done
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PARSERS
+# ═══════════════════════════════════════════════════════════════════════════
+
+parse_v1_recipe() {
+    file="$1"
+    output_dir="$2"
+    
+    awk '/^VERSION=/ {gsub(/VERSION=|"/, ""); print}' "$file" > "$output_dir/version"
+    awk '/^DESCRIPTION=/ {gsub(/DESCRIPTION=|"/, ""); print}' "$file" > "$output_dir/description"
+    awk '/^HOMEPAGE=/ {gsub(/HOMEPAGE=|"/, ""); print}' "$file" > "$output_dir/homepage"
+    
+    awk '/^@DEPENDS$/,/^@[A-Z_]+$|^$/ {if (!/^@/) print}' "$file" > "$output_dir/depends"
+    awk '/^@SOURCES$/,/^@[A-Z_]+$|^$/ {if (!/^@/) print}' "$file" > "$output_dir/sources"
+    awk '/^@CHECKSUMS$/,/^@[A-Z_]+$|^$/ {if (!/^@/) print}' "$file" > "$output_dir/checksums"
+    awk '/^@BUILD$/,/^@[A-Z_]+$|^$/ {if (!/^@/) print}' "$file" > "$output_dir/build"
+    awk '/^@PACKAGE$/,/^@[A-Z_]+$|^$/ {if (!/^@/) print}' "$file" > "$output_dir/package"
+}
+
+parse_v2_recipe() {
+    file="$1"
+    output_dir="$2"
+    
+    # Extract metadata
+    awk '/VERSION[[:space:]]*=/ {gsub(/.*VERSION[[:space:]]*=[[:space:]]*"|".*/, ""); print; exit}' "$file" > "$output_dir/version"
+    awk '/DESCRIPTION[[:space:]]*=/ {gsub(/.*DESCRIPTION[[:space:]]*=[[:space:]]*"|".*/, ""); print; exit}' "$file" > "$output_dir/description"
+    awk '/HOMEPAGE[[:space:]]*=/ {gsub(/.*HOMEPAGE[[:space:]]*=[[:space:]]*"|".*/, ""); print; exit}' "$file" > "$output_dir/homepage"
+    awk '/CATEGORY[[:space:]]*=/ {gsub(/.*CATEGORY[[:space:]]*=[[:space:]]*"|".*/, ""); print; exit}' "$file" > "$output_dir/category"
+    
+    # Extract dependencies (simplified parser)
+    awk '/\$PKG\.Depend\.BDepends/,/};/ {if (!/\$PKG|{|}/) print}' "$file" > "$output_dir/bdepends"
+    awk '/\$PKG\.Depend\.RDepends/,/};/ {if (!/\$PKG|{|}/) print}' "$file" > "$output_dir/rdepends"
+    awk '/\$PKG\.Depend\.Depends/,/};/ {if (!/\$PKG|{|}/) print}' "$file" > "$output_dir/depends"
+}
+
+parse_v3_recipe() {
+    parse_v2_recipe "$@"  # v3 uses same structure as v2
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GENERATORS
+# ═══════════════════════════════════════════════════════════════════════════
+
+generate_v3_from_data() {
+    pkg_name="$1"; version="$2"; description="$3"; homepage="$4"
+    category="$5"; depends="$6"; bdepends="$7"; rdepends="$8"; optional="$9"
+    sources="${10}"; checksums="${11}"; build="${12}"; package="${13}"
+    post_install="${14}"; post_remove="${15}"; output_file="${16}"
+    
+    cat > "$output_file" <<EOF
+\$PKG.Version = "3"
+
+\$PKG.Metadata: {
+    Version = "$version"
+    Description = "$description"
+    Homepage = "$homepage"
+    Category = "$category"
+};
+
+\$PKG.Depend.BDepends: {
+EOF
+    
+    if [ -n "$bdepends" ]; then
+        printf '%s\n' "$bdepends" | while read -r dep; do
+            [ -z "$dep" ] && continue
+            echo "    $dep" >> "$output_file"
+        done
+    else
+        echo "    # No build dependencies" >> "$output_file"
+    fi
+    
+    cat >> "$output_file" <<EOF
+};
+
+\$PKG.Depend.RDepends: {
+EOF
+    
+    if [ -n "$rdepends" ]; then
+        printf '%s\n' "$rdepends" | while read -r dep; do
+            [ -z "$dep" ] && continue
+            echo "    $dep" >> "$output_file"
+        done
+    else
+        echo "    # No runtime dependencies" >> "$output_file"
+    fi
+    
+    echo "};" >> "$output_file"
+    
+    if [ -n "$optional" ]; then
+        cat >> "$output_file" <<EOF
+
+\$PKG.Depend.Optional: {
+EOF
+        printf '%s\n' "$optional" | while read -r dep; do
+            [ -z "$dep" ] && continue
+            echo "    $dep" >> "$output_file"
+        done
+        echo "};" >> "$output_file"
+    fi
+    
+    cat >> "$output_file" <<EOF
+
+\$PKG.Sources: {
+EOF
+    
+    if [ -n "$sources" ]; then
+        printf '%s\n' "$sources" | while read -r url; do
+            [ -z "$url" ] && continue
+            echo "    urls = \"$url\"" >> "$output_file"
+        done
+    fi
+    
+    cat >> "$output_file" <<EOF
+};
+
+\$PKG.Checksums: {
+EOF
+    
+    if [ -n "$checksums" ]; then
+        printf '%s\n' "$checksums" >> "$output_file"
+    else
+        echo "    # Add checksums here" >> "$output_file"
+    fi
+    
+    cat >> "$output_file" <<EOF
+};
+
+\$PKG.Build: {
+EOF
+    
+    if [ -n "$build" ]; then
+        printf '%s\n' "$build" >> "$output_file"
+    else
+        echo "    # Add build commands" >> "$output_file"
+    fi
+    
+    cat >> "$output_file" <<EOF
+};
+
+\$PKG.Package: {
+EOF
+    
+    if [ -n "$package" ]; then
+        printf '%s\n' "$package" >> "$output_file"
+    else
+        echo "    # Add install commands" >> "$output_file"
+    fi
+    
+    echo "};" >> "$output_file"
+    
+    if [ -n "$post_install" ]; then
+        cat >> "$output_file" <<EOF
+
+\$PKG.PostInstall: {
+$post_install
+};
+EOF
+    fi
+    
+    if [ -n "$post_remove" ]; then
+        cat >> "$output_file" <<EOF
+
+\$PKG.PostRemove: {
+$post_remove
+};
+EOF
+    fi
+}
+
+generate_v2_from_data() {
+    pkg_name="$1"; version="$2"; description="$3"; homepage="$4"
+    category="$5"; depends="$6"; bdepends="$7"; rdepends="$8"; optional="$9"
+    sources="${10}"; checksums="${11}"; build="${12}"; package="${13}"
+    post_install="${14}"; post_remove="${15}"; output_file="${16}"
+    
+    # Combine depends
+    all_depends="$depends $bdepends $rdepends"
+    
+    cat > "$output_file" <<EOF
+\$PKG.Metadata: {
+    VERSION = "$version"
+    DESCRIPTION = "$description"
+    HOMEPAGE = "$homepage"
+    CATEGORY = "$category"
+};
+
+\$PKG.Depend {
+    \$PKG.Depend.Depends {
+EOF
+    
+    if [ -n "$all_depends" ]; then
+        printf '%s\n' "$all_depends" | tr ' ' '\n' | sort -u | while read -r dep; do
+            [ -z "$dep" ] && continue
+            echo "        $dep" >> "$output_file"
+        done
+    fi
+    
+    cat >> "$output_file" <<EOF
+    };
+};
+
+\$PKG.Sources {
+EOF
+    
+    if [ -n "$sources" ]; then
+        printf '%s\n' "$sources" | while read -r url; do
+            [ -z "$url" ] && continue
+            echo "    urls = \"$url\"" >> "$output_file"
+        done
+    fi
+    
+    cat >> "$output_file" <<EOF
+};
+
+\$PKG.Checksums {
+$checksums
+};
+
+\$PKG.Build {
+$build
+};
+
+\$PKG.Package {
+$package
+};
+EOF
+}
+
+generate_v1_from_data() {
+    pkg_name="$1"; version="$2"; description="$3"; homepage="$4"
+    depends="$5"; sources="$6"; checksums="$7"; build="$8"; package="$9"
+    post_install="${10}"; post_remove="${11}"; output_file="${12}"
+    
+    cat > "$output_file" <<EOF
+VERSION="$version"
+DESCRIPTION="$description"
+HOMEPAGE="$homepage"
+
+@DEPENDS
+$depends
+
+@SOURCES
+$sources
+
+@CHECKSUMS
+$checksums
+
+@BUILD
+$build
+
+@PACKAGE
+$package
+EOF
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# INTERACTIVE GENERATOR (Enhanced)
+# ═══════════════════════════════════════════════════════════════════════════
+
+generate_interactive() {
+    format="${1:-v3}"
+    
+    info "╔════════════════════════════════════════════════════════════════╗"
+    info "║      Astral Recipe Generator (.stars $format format)          ║"
+    info "╚════════════════════════════════════════════════════════════════╝"
+    info ""
+    
+    printf "Package name: "
+    read -r pkg_name
+    [ -z "$pkg_name" ] && err "Package name required"
+    
+    printf "Category (e.g., app-editors, sys-apps): "
+    read -r category
+    [ -z "$category" ] && category="app-misc"
+    
+    printf "Version: "
+    read -r version
+    [ -z "$version" ] && err "Version required"
+    
+    printf "Description: "
+    read -r description
+    
+    printf "Homepage: "
+    read -r homepage
+    
+    printf "Source URL: "
+    read -r source_url
+    
+    printf "Build system (autotools/cmake/meson/make): "
+    read -r build_system
+    [ -z "$build_system" ] && build_system="autotools"
+    
+    if [ "$format" = "v3" ]; then
+        printf "Build dependencies (space-separated): "
+        read -r bdepends
+        
+        printf "Runtime dependencies (space-separated): "
+        read -r rdepends
+        
+        printf "Optional dependencies (space-separated): "
+        read -r optional
+    else
+        printf "Dependencies (space-separated): "
+        read -r depends
+        bdepends=""
+        rdepends=""
+        optional=""
+    fi
+    
+    output_file="${OUTPUT_FILE:-${RECIPES_DIR}/${category}/${pkg_name}.stars}"
+    mkdir -p "$(dirname "$output_file")"
+    
+    # Generate build commands
+    case "$build_system" in
+        autotools)
+            build_cmd="cd ${pkg_name}-${version}
+    ./configure --prefix=/usr
+    make -j\$(nproc)"
+            package_cmd="cd ${pkg_name}-${version}
+    make DESTDIR=\"\$PKGDIR\" install"
+            ;;
+        cmake)
+            build_cmd="cd ${pkg_name}-${version}
+    mkdir -p build && cd build
+    cmake .. -DCMAKE_INSTALL_PREFIX=/usr
+    make -j\$(nproc)"
+            package_cmd="cd ${pkg_name}-${version}/build
+    make DESTDIR=\"\$PKGDIR\" install"
+            ;;
+        *)
+            build_cmd="cd ${pkg_name}-${version}
+    # Add build commands"
+            package_cmd="cd ${pkg_name}-${version}
+    # Add install commands"
+            ;;
+    esac
+    
+    case "$format" in
+        v3)
+            generate_v3_from_data "$pkg_name" "$version" "$description" "$homepage" \
+                "$category" "" "$bdepends" "$rdepends" "$optional" \
+                "$source_url" "" "$build_cmd" "$package_cmd" "" "" "$output_file"
+            ;;
+        v2)
+            generate_v2_from_data "$pkg_name" "$version" "$description" "$homepage" \
+                "$category" "$depends" "" "" "" \
+                "$source_url" "" "$build_cmd" "$package_cmd" "" "" "$output_file"
+            ;;
+        v1)
+            generate_v1_from_data "$pkg_name" "$version" "$description" "$homepage" \
+                "$depends" "$source_url" "" "$build_cmd" "$package_cmd" "" "" "$output_file"
+            ;;
+    esac
+    
+    info "✓ Recipe generated: $output_file"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEMPLATE GENERATOR
+# ═══════════════════════════════════════════════════════════════════════════
+
+generate_template() {
+    build_type="${1:-autotools}"
+    format="${2:-v3}"
+    
+    info "╔════════════════════════════════════════════════════════════════╗"
+    info "║           Generating Template ($build_type, $format)           ║"
+    info "╚════════════════════════════════════════════════════════════════╝"
+    info ""
+    
+    pkg_name="PACKAGE_NAME"
+    version="VERSION"
+    description="Package description"
+    homepage="https://example.com"
+    category="app-misc"
+    source_url="https://example.com/source.tar.gz"
+    
+    case "$build_type" in
+        autotools)
+            build_cmd="cd \${PKG_NAME}-\${VERSION}
+    ./configure --prefix=/usr
+    make -j\$(nproc)"
+            package_cmd="cd \${PKG_NAME}-\${VERSION}
+    make DESTDIR=\"\$PKGDIR\" install"
+            bdeps="gcc make autoconf automake"
+            rdeps="glibc"
+            ;;
+        cmake)
+            build_cmd="cd \${PKG_NAME}-\${VERSION}
+    mkdir -p build && cd build
+    cmake .. \\
+        -DCMAKE_INSTALL_PREFIX=/usr \\
+        -DCMAKE_BUILD_TYPE=Release
+    make -j\$(nproc)"
+            package_cmd="cd \${PKG_NAME}-\${VERSION}/build
+    make DESTDIR=\"\$PKGDIR\" install"
+            bdeps="gcc make cmake"
+            rdeps="glibc"
+            ;;
+        meson)
+            build_cmd="cd \${PKG_NAME}-\${VERSION}
+    meson setup build --prefix=/usr --buildtype=release
+    ninja -C build"
+            package_cmd="cd \${PKG_NAME}-\${VERSION}
+    DESTDIR=\"\$PKGDIR\" ninja -C build install"
+            bdeps="gcc meson ninja"
+            rdeps="glibc"
+            ;;
+        python)
+            build_cmd="cd \${PKG_NAME}-\${VERSION}
+    python3 setup.py build"
+            package_cmd="cd \${PKG_NAME}-\${VERSION}
+    python3 setup.py install --root=\"\$PKGDIR\" --optimize=1"
+            bdeps="python setuptools"
+            rdeps="python"
+            ;;
+        make)
+            build_cmd="cd \${PKG_NAME}-\${VERSION}
+    make -j\$(nproc)"
+            package_cmd="cd \${PKG_NAME}-\${VERSION}
+    make DESTDIR=\"\$PKGDIR\" install"
+            bdeps="gcc make"
+            rdeps="glibc"
+            ;;
+        *)
+            build_cmd="cd \${PKG_NAME}-\${VERSION}
+    # TODO: Add build commands here"
+            package_cmd="cd \${PKG_NAME}-\${VERSION}
+    # TODO: Add installation commands here"
+            bdeps="gcc make"
+            rdeps="glibc"
+            ;;
+    esac
+    
+    output_file="${OUTPUT_FILE:-${build_type}-template.stars}"
+    
+    case "$format" in
+        v3)
+            generate_v3_from_data "$pkg_name" "$version" "$description" "$homepage" \
+                "$category" "" "$bdeps" "$rdeps" "" \
+                "$source_url" "# sha256:CHECKSUM_HERE filename.tar.gz" \
+                "$build_cmd" "$package_cmd" "" "" "$output_file"
+            ;;
+        v2)
+            generate_v2_from_data "$pkg_name" "$version" "$description" "$homepage" \
+                "$category" "$bdeps $rdeps" "" "" "" \
+                "$source_url" "# sha256:CHECKSUM_HERE filename.tar.gz" \
+                "$build_cmd" "$package_cmd" "" "" "$output_file"
+            ;;
+        v1)
+            generate_v1_from_data "$pkg_name" "$version" "$description" "$homepage" \
+                "$bdeps $rdeps" "$source_url" "# sha256:CHECKSUM_HERE filename.tar.gz" \
+                "$build_cmd" "$package_cmd" "" "" "$output_file"
+            ;;
+        *)
+            err "Unknown format: $format"
+            ;;
+    esac
+    
+    info "✓ Template generated: $output_file"
+    info ""
+    info "Edit the template and replace:"
+    info "  - PACKAGE_NAME with actual package name"
+    info "  - VERSION with actual version"
+    info "  - Update description and homepage"
+    info "  - Generate and add checksum"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# AUTO-DETECT GENERATOR (Simplified version without trial build)
+# ═══════════════════════════════════════════════════════════════════════════
+
+generate_auto() {
+    pkg_name="$1"
+    source_url="$2"
+    format="${3:-v3}"
+    
+    info "╔════════════════════════════════════════════════════════════════╗"
+    info "║          Auto-Detecting Build System & Dependencies           ║"
+    info "╚════════════════════════════════════════════════════════════════╝"
+    info ""
+    
+    # Create temp directory
+    temp_dir=$(mktemp -d "$TMPDIR/astral-recipegen.XXXXXX")
+    trap "rm -rf '$temp_dir'" EXIT
+    
+    filename=$(basename "$source_url")
+    
+    info "Downloading source: $filename"
+    if ! curl -fSL "$source_url" -o "$temp_dir/$filename" 2>&1; then
+        err "Failed to download source from $source_url"
+    fi
+    
+    cd "$temp_dir" || exit 1
+    
+    # Extract
+    info "Extracting archive..."
+    case "$filename" in
+        *.tar.gz|*.tgz) tar -xzf "$filename" ;;
+        *.tar.bz2|*.tbz) tar -xjf "$filename" ;;
+        *.tar.xz|*.txz) tar -xJf "$filename" ;;
+        *.zip) unzip -q "$filename" ;;
+        *) err "Unknown archive format: $filename" ;;
+    esac
+    
+    # Find extracted directory
+    extracted_dir=$(find . -maxdepth 1 -type d ! -name . | head -n1)
+    [ -z "$extracted_dir" ] && err "Could not find extracted directory"
+    
+    cd "$extracted_dir" || exit 1
+    
+    # Detect build system
+    build_system="unknown"
+    if [ -f configure.ac ] || [ -f configure.in ] || [ -f configure ]; then
+        build_system="autotools"
+        info "✓ Detected: GNU Autotools"
+    elif [ -f CMakeLists.txt ]; then
+        build_system="cmake"
+        info "✓ Detected: CMake"
+    elif [ -f meson.build ]; then
+        build_system="meson"
+        info "✓ Detected: Meson"
+    elif [ -f setup.py ] || [ -f pyproject.toml ]; then
+        build_system="python"
+        info "✓ Detected: Python package"
+    elif [ -f Makefile ] || [ -f makefile ] || [ -f GNUmakefile ]; then
+        build_system="make"
+        info "✓ Detected: Plain Makefile"
+    else
+        warn "Could not detect build system"
+        build_system="make"
+    fi
+    
+    # Try to extract version
+    version=$(echo "$filename" | sed -E 's/.*-([0-9]+\.[0-9]+(\.[0-9]+)?).*/\1/')
+    [ "$version" = "$filename" ] && version="1.0.0"
+    
+    # Generate checksum
+    cd "$temp_dir" || exit 1
+    checksum=$(sha256sum "$filename" | awk '{print $1}')
+    
+    info ""
+    info "╔════════════════════════════════════════════════════════════════╗"
+    info "║                    Detection Summary                           ║"
+    info "╚════════════════════════════════════════════════════════════════╝"
+    info ""
+    info "  Name:         $pkg_name"
+    info "  Version:      $version"
+    info "  Build system: $build_system"
+    info "  Checksum:     $checksum"
+    info ""
+    
+    # Prompt for additional info
+    exec </dev/tty
+    
+    printf "Category (default: app-misc): "
+    read -r category
+    [ -z "$category" ] && category="app-misc"
+    
+    printf "Description: "
+    read -r description
+    [ -z "$description" ] && description="$pkg_name package"
+    
+    printf "Homepage URL: "
+    read -r homepage
+    [ -z "$homepage" ] && homepage="https://example.com"
+    
+    if [ "$format" = "v3" ]; then
+        printf "Build dependencies (space-separated, default: auto): "
+        read -r bdeps_input
+        
+        printf "Runtime dependencies (space-separated): "
+        read -r rdeps_input
+        
+        if [ -z "$bdeps_input" ] || [ "$bdeps_input" = "auto" ]; then
+            case "$build_system" in
+                cmake) bdeps="gcc make cmake" ;;
+                meson) bdeps="gcc meson ninja" ;;
+                python) bdeps="python setuptools" ;;
+                *) bdeps="gcc make" ;;
+            esac
+        else
+            bdeps="$bdeps_input"
+        fi
+        
+        rdeps="$rdeps_input"
+    else
+        printf "Dependencies (space-separated): "
+        read -r deps_input
+        
+        if [ -z "$deps_input" ]; then
+            case "$build_system" in
+                cmake) deps_input="gcc make cmake" ;;
+                meson) deps_input="gcc meson ninja" ;;
+                python) deps_input="python setuptools" ;;
+                *) deps_input="gcc make" ;;
+            esac
+        fi
+    fi
+    
+    # Generate build commands
+    case "$build_system" in
+        autotools)
+            build_cmd="cd ${pkg_name}-${version}
+    ./configure --prefix=/usr
+    make -j\$(nproc)"
+            package_cmd="cd ${pkg_name}-${version}
+    make DESTDIR=\"\$PKGDIR\" install"
+            ;;
+        cmake)
+            build_cmd="cd ${pkg_name}-${version}
+    mkdir -p build && cd build
+    cmake .. -DCMAKE_INSTALL_PREFIX=/usr
+    make -j\$(nproc)"
+            package_cmd="cd ${pkg_name}-${version}/build
+    make DESTDIR=\"\$PKGDIR\" install"
+            ;;
+        meson)
+            build_cmd="cd ${pkg_name}-${version}
+    meson setup build --prefix=/usr
+    ninja -C build"
+            package_cmd="cd ${pkg_name}-${version}
+    DESTDIR=\"\$PKGDIR\" ninja -C build install"
+            ;;
+        python)
+            build_cmd="cd ${pkg_name}-${version}
+    python3 setup.py build"
+            package_cmd="cd ${pkg_name}-${version}
+    python3 setup.py install --root=\"\$PKGDIR\""
+            ;;
+        *)
+            build_cmd="cd ${pkg_name}-${version}
+    make -j\$(nproc)"
+            package_cmd="cd ${pkg_name}-${version}
+    make DESTDIR=\"\$PKGDIR\" install"
+            ;;
+    esac
+    
+    output_file="${OUTPUT_FILE:-${RECIPES_DIR}/${category}/${pkg_name}.stars}"
+    mkdir -p "$(dirname "$output_file")"
+    
+    case "$format" in
+        v3)
+            generate_v3_from_data "$pkg_name" "$version" "$description" "$homepage" \
+                "$category" "" "$bdeps" "$rdeps" "" \
+                "$source_url" "sha256:$checksum $filename" \
+                "$build_cmd" "$package_cmd" "" "" "$output_file"
+            ;;
+        v2)
+            all_deps="$deps_input"
+            generate_v2_from_data "$pkg_name" "$version" "$description" "$homepage" \
+                "$category" "$all_deps" "" "" "" \
+                "$source_url" "sha256:$checksum $filename" \
+                "$build_cmd" "$package_cmd" "" "" "$output_file"
+            ;;
+        v1)
+            all_deps="$deps_input"
+            generate_v1_from_data "$pkg_name" "$version" "$description" "$homepage" \
+                "$all_deps" "$source_url" "sha256:$checksum $filename" \
+                "$build_cmd" "$package_cmd" "" "" "$output_file"
+            ;;
+    esac
+    
+    info "✓ Recipe generated: $output_file"
+    
+    rm -rf "$temp_dir"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FROM-PKGBUILD CONVERTER (Stub)
+# ═══════════════════════════════════════════════════════════════════════════
+
+convert_from_pkgbuild() {
+    pkgbuild_file="$1"
+    format="${2:-v3}"
+    
+    [ ! -f "$pkgbuild_file" ] && err "PKGBUILD not found: $pkgbuild_file"
+    
+    info "╔════════════════════════════════════════════════════════════════╗"
+    info "║              Converting PKGBUILD to .stars                     ║"
+    info "╚════════════════════════════════════════════════════════════════╝"
+    info ""
+    
+    # Extract variables from PKGBUILD
+    pkgname=$(grep '^pkgname=' "$pkgbuild_file" | sed 's/pkgname=//' | tr -d '"' | head -n1)
+    pkgver=$(grep '^pkgver=' "$pkgbuild_file" | sed 's/pkgver=//' | tr -d '"' | head -n1)
+    pkgdesc=$(grep '^pkgdesc=' "$pkgbuild_file" | sed "s/pkgdesc=//" | tr -d '"' | head -n1)
+    url=$(grep '^url=' "$pkgbuild_file" | sed 's/url=//' | tr -d '"' | head -n1)
+    
+    # Extract dependencies
+    depends=$(awk '/^depends=\(/,/\)/ {print}' "$pkgbuild_file" | grep -v 'depends=\|)' | tr -d "'" | tr -d '"' | tr '\n' ' ')
+    makedepends=$(awk '/^makedepends=\(/,/\)/ {print}' "$pkgbuild_file" | grep -v 'makedepends=\|)' | tr -d "'" | tr -d '"' | tr '\n' ' ')
+    
+    # Extract source
+    source=$(grep '^source=' "$pkgbuild_file" | sed 's/source=//' | tr -d '()' | tr -d '"' | tr -d "'" | head -n1)
+    
+    # Extract checksums
+    sha256sums=$(grep '^sha256sums=' "$pkgbuild_file" | sed 's/sha256sums=//' | tr -d '()' | tr -d '"' | tr -d "'")
+    
+    info "Detected:"
+    info "  Package: $pkgname"
+    info "  Version: $pkgver"
+    info "  Depends: $depends"
+    info "  MakeDepends: $makedepends"
+    info ""
+    
+    printf "Category (default: app-misc): "
+    read -r category
+    [ -z "$category" ] && category="app-misc"
+    
+    # Generate placeholder build commands
+    build_cmd="# Extracted from PKGBUILD build()
+    # TODO: Review and adapt build commands"
+    package_cmd="# Extracted from PKGBUILD package()
+    # TODO: Review and adapt package commands"
+    
+    output_file="${OUTPUT_FILE:-${pkgname}.stars}"
+    
+    case "$format" in
+        v3)
+            generate_v3_from_data "$pkgname" "$pkgver" "$pkgdesc" "$url" \
+                "$category" "" "$makedepends" "$depends" "" \
+                "$source" "sha256:$sha256sums $(basename "$source")" \
+                "$build_cmd" "$package_cmd" "" "" "$output_file"
+            ;;
+        v2)
+            all_deps="$makedepends $depends"
+            generate_v2_from_data "$pkgname" "$pkgver" "$pkgdesc" "$url" \
+                "$category" "$all_deps" "" "" "" \
+                "$source" "sha256:$sha256sums $(basename "$source")" \
+                "$build_cmd" "$package_cmd" "" "" "$output_file"
+            ;;
+        v1)
+            all_deps="$makedepends $depends"
+            generate_v1_from_data "$pkgname" "$pkgver" "$pkgdesc" "$url" \
+                "$all_deps" "$source" "sha256:$sha256sums $(basename "$source")" \
+                "$build_cmd" "$package_cmd" "" "" "$output_file"
+            ;;
+    esac
+    
+    info "✓ PKGBUILD converted: $output_file"
+    warn "Review build() and package() functions manually!"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════════════════════════════
+
+OUTPUT_FILE=""
+OUTPUT_FORMAT="v3"
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help) usage ;;
+        -v|--version) show_version ;;
+        -o|--output)
+            [ $# -lt 2 ] && err "Missing argument for $1"
+            OUTPUT_FILE="$2"
+            shift 2
+            ;;
+        -f|--format)
+            [ $# -lt 2 ] && err "Missing argument for $1"
+            OUTPUT_FORMAT="$2"
+            shift 2
+            ;;
+        -d|--dir)
+            [ $# -lt 2 ] && err "Missing argument for $1"
+            RECIPES_DIR="$2"
+            shift 2
+            ;;
+        -*) err "Unknown option: $1" ;;
+        *) break ;;
+    esac
+done
+
+[ $# -lt 1 ] && usage
+
+command="$1"
+shift
+
+case "$command" in
+    interactive)
+        format="${1:-$OUTPUT_FORMAT}"
+        generate_interactive "$format"
+        ;;
+    dir-to-stars)
+        [ $# -lt 1 ] && err "Usage: astral-recipegen dir-to-stars <directory> [format]"
+        dir="$1"
+        format="${2:-$OUTPUT_FORMAT}"
+        convert_directory_to_stars "$dir" "$format"
+        ;;
+    convert|migrate)
+        [ $# -lt 1 ] && err "Usage: astral-recipegen $command <recipe> [target_version]"
+        recipe="$1"
+        target="${2:-v3}"
+        migrate_recipe "$recipe" "$target"
+        ;;
+    template)
+        [ $# -lt 1 ] && err "Usage: astral-recipegen template <type> [version]"
+        build_type="$1"
+        format="${2:-$OUTPUT_FORMAT}"
+        generate_template "$build_type" "$format"
+        ;;
+    auto)
+        [ $# -lt 2 ] && err "Usage: astral-recipegen auto <name> <url> [version]"
+        pkg_name="$1"
+        url="$2"
+        format="${3:-$OUTPUT_FORMAT}"
+        generate_auto "$pkg_name" "$url" "$format"
+        ;;
+    from-pkgbuild)
+        [ $# -lt 1 ] && err "Usage: astral-recipegen from-pkgbuild <PKGBUILD> [version]"
+        pkgbuild="$1"
+        format="${2:-$OUTPUT_FORMAT}"
+        convert_from_pkgbuild "$pkgbuild" "$format"
+        ;;
+    *)
+        err "Unknown command: $command"
+        ;;
+esac
