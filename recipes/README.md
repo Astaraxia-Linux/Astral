@@ -1,1 +1,0 @@
-# THIS IS A MOCK REPO, THE OFFICIAL ASTRAL REPOSITORY IS *[AOHARU](https://github.com/Izumi-Sonoka/AOHARU)*
