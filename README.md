@@ -720,9 +720,9 @@ git push
 1. Read the code (good luck)
 2. Test your changes (seriously)
 3. Submit a PR
-4. Wait for the One Maniac™ to review
+4. Wait for the One Maniac™ to review (may take up to 3 business weekss)
 
-**Coding style**: POSIX sh, no bashisms, keep it simple.
+**Coding style**: POSIX sh, no bashisms, keep it stupid simple.
 
 ---
 
@@ -772,7 +772,7 @@ One Maniac. Just one. Send help (or coffee).
 
 ## Credits
 
-- **Created by**: One Maniac
+- **Created by**: One Maniac™
 - **Inspired by**: Gentoo Portage, Arch Pacman, KISS Linux, and pain
 - **Special thanks**: Everyone who reported bugs instead of rage-quitting (if theres one)
 
