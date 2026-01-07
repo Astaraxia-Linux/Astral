@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v3.4.0.0 Main - minimal POSIX package manager for Astaraxia
-# Patched the patched
-# V: 3 - Major . 4 - Minor . 0 - Patches . 0 - hotfixes
+# Astral v3.4.0.1 Main - minimal POSIX package manager for Astaraxia
+# Added Chroot and .stars V3
+# V: 3 - Major . 4 - Minor . 0 - Patches . 1 - hotfixes
 
-version="3.4.0.0 Main"
+version="3.4.0.1 Main"
 
 # Set strict execution environment, meow~
 set -eu
@@ -689,6 +689,7 @@ System Operations:
   -u, --Update [repo]     Update repository index
   -Cc, --Clean-Cache      Clean uninstalled recipes
   -RI, --rebuild-index    Rebuild file ownership index
+  --chroot <dir>          Chroot into <dir>
 
 Advanced Features:
   --ccache-stats          Show ccache statistics
