@@ -3,7 +3,7 @@
 > *"Because compiling from source should be less painful than a root canal"*
 
 Version: 3.4.1.1 Main  
-Last Updated: 7 January 2026 (GMT+8) 
+Last Updated: 8 January 2026 (GMT+8) 
 Maintained by: One Maniac (yes, just one)
 
 ---
@@ -801,6 +801,6 @@ If you made it this far, congratulations! You're either very thorough or very bo
 
 ---
 
-**Last updated**: 7 January 2026 (GMT+8) 
-**Documentation version**: 3.0  
+**Last updated**: 8 January 2026 (GMT+8) 
+**Documentation version**: 3.2  
 **Sanity level**: Questionable
