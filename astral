@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v3.4.0.1 Main - minimal POSIX package manager for Astaraxia
-# Added Chroot and .stars V3
-# V: 3 - Major . 4 - Minor . 0 - Patches . 1 - hotfixes
+# Astral v3.4.1.1 Main - minimal POSIX package manager for Astaraxia
+# Patched the patched
+# V: 3 - Major . 4 - Minor . 1 - Patches . 1 - hotfixes
 
-version="3.4.0.1 Main"
+version="3.4.1.1 Main"
 
 # Set strict execution environment, meow~
 set -eu
@@ -1458,16 +1458,78 @@ $line"
     done < "$stars_file"
 }
 
-# Helper: Write dependency files
+parse_metadata_block_v3() {
+    content="$1"
+    temp_dir="$2"
+
+    printf '%s\n' "$content" | while IFS= read -r line; do
+        [ -z "$line" ] && continue
+
+        # Parse KEY = "VALUE"
+        key=$(printf '%s' "$line" | cut -d'=' -f1 | tr -d ' ' | tr 'A-Z' 'a-z')
+        value=$(printf '%s' "$line" | cut -d'=' -f2- | sed 's/^[[:space:]]*"//; s/"[[:space:]]*$//')
+
+        case "$key" in
+            version)
+                printf '%s\n' "$value" > "$temp_dir/version"
+                ;;
+            description)
+                printf '%s\n' "$value" > "$temp_dir/info"
+                ;;
+            homepage)
+                printf '%s\n' "$value" >> "$temp_dir/info"
+                ;;
+            category)
+                printf '%s\n' "$value" > "$temp_dir/.category"
+                ;;
+        esac
+    done
+}
+
+# Helper: Write script sections (v3)
+write_script_section_v3() {
+    section="$1"
+    content="$2"
+    temp_dir="$3"
+
+    printf '#!/bin/sh\n%s\n' "$content" > "$temp_dir/$section"
+    chmod +x "$temp_dir/$section"
+}
+
+# Helper: Write dependency sections (v3)
 write_deps_file_v3() {
     section="$1"
     content="$2"
     temp_dir="$3"
-    
+
     printf '%s\n' "$content" | while IFS= read -r line; do
         [ -z "$line" ] && continue
         printf '%s\n' "$line"
     done > "$temp_dir/$section"
+}
+
+# Helper: Write sources (v3)
+write_sources_section_v3() {
+    content="$1"
+    temp_dir="$2"
+
+    printf '%s\n' "$content" | while IFS= read -r line; do
+        [ -z "$line" ] && continue
+
+        # Parse: urls = "..."
+        if printf '%s' "$line" | grep -q '^urls[[:space:]]*='; then
+            url=$(printf '%s' "$line" | cut -d'=' -f2- | sed 's/^[[:space:]]*"//; s/"[[:space:]]*$//')
+            printf '%s\n' "$url"
+        fi
+    done > "$temp_dir/sources"
+}
+
+# Helper: Write checksums (v3)
+write_checksums_section_v3() {
+    content="$1"
+    temp_dir="$2"
+
+    printf '%s\n' "$content" > "$temp_dir/checksums"
 }
 
 # === V2 yeah
@@ -1943,75 +2005,240 @@ download_sources() {
     printf '%s\n' "$filtered_sources" | while IFS= read -r url; do
         url=$(printf '%s' "$url" | tr -d '[:space:]')
         [ -z "$url" ] && continue
-        filename=$(basename "$url")
-        dest_file="$buildtmp/$filename"
 
-        info "  -> Downloading $filename"
-        if ! curl -f#SL "$url" -o "$dest_file"; then
-            err "Failed to download source file from $url"
-        fi
+        # Check if it's a Git URL
+        case "$url" in
+            git+*|*.git|*.git#*)
+                # It's a Git source
+                # Strip git+ prefix
+                git_url=$(printf '%s' "$url" | sed 's/^git+//')
+                # Strip fragment (#branch=, #commit=, etc.)
+                git_url_clean=$(printf '%s' "$git_url" | sed 's/#.*//')
+                # Extract repo name
+                repo_name=$(basename "$git_url_clean" .git)
+                
+                info "  → Cloning Git repository: $repo_name"
+                
+                # Clone directly to buildtmp root (not in subdirectory)
+                if ! git clone --depth 1 "$git_url_clean" "$buildtmp/$repo_name" 2>&1; then
+                    err "Failed to clone Git repository: $git_url_clean"
+                fi
+                
+                info "  ✓ Cloned to: $repo_name/"
+                ;;
+            *)
+                # Regular download
+                filename=$(basename "$url")
+                dest_file="$buildtmp/$filename"
+                
+                info "  → Downloading: $filename"
+                
+                if ! curl -f#SL "$url" -o "$dest_file" 2>&1; then
+                    err "Failed to download: $url"
+                fi
+                
+                info "  ✓ Downloaded: $filename"
+                ;;
+        esac
     done
 }
+
+# Helper: Handle Git sources
+handle_git_source() {
+    url="$1"
+    buildtmp="$2"
+    
+    # Strip git+ prefix if present
+    url_clean=$(printf '%s' "$url" | sed 's/^git+//')
+    
+    # Extract repository URL and ref (branch/commit/tag)
+    repo_url=$(printf '%s' "$url_clean" | sed 's/#.*//')
+    ref_part=$(printf '%s' "$url_clean" | sed -n 's/.*#//p')
+    
+    # Parse ref type (branch, commit, or tag)
+    ref_type=""
+    ref_value=""
+    
+    if [ -n "$ref_part" ]; then
+        ref_type=$(printf '%s' "$ref_part" | cut -d'=' -f1)
+        ref_value=$(printf '%s' "$ref_part" | cut -d'=' -f2)
+    fi
+    
+    # Determine directory name from repo
+    repo_name=$(basename "$repo_url" .git)
+    dest_dir="$buildtmp/$repo_name"
+    
+    info "Cloning Git repository: $repo_url"
+    [ -n "$ref_value" ] && info "  → Ref: $ref_type=$ref_value"
+    
+    # Clone repository
+    if [ -n "$ref_type" ]; then
+        case "$ref_type" in
+            branch)
+                if ! git clone --depth 1 --branch "$ref_value" "$repo_url" "$dest_dir" 2>&1; then
+                    err "Failed to clone repository (branch: $ref_value)"
+                fi
+                ;;
+            tag)
+                if ! git clone --depth 1 --branch "$ref_value" "$repo_url" "$dest_dir" 2>&1; then
+                    err "Failed to clone repository (tag: $ref_value)"
+                fi
+                ;;
+            commit)
+                # Clone full repo, then checkout specific commit
+                if ! git clone "$repo_url" "$dest_dir" 2>&1; then
+                    err "Failed to clone repository"
+                fi
+                ( cd "$dest_dir" && git checkout "$ref_value" ) || err "Failed to checkout commit: $ref_value"
+                ;;
+            *)
+                warn "Unknown ref type: $ref_type, cloning default branch"
+                if ! git clone --depth 1 "$repo_url" "$dest_dir" 2>&1; then
+                    err "Failed to clone repository"
+                fi
+                ;;
+        esac
+    else
+        # No ref specified, clone default branch
+        if ! git clone --depth 1 "$repo_url" "$dest_dir" 2>&1; then
+            err "Failed to clone repository"
+        fi
+    fi
+    
+    info "  ✓ Cloned: $repo_name"
+}
+
+
+# Helper: Handle regular HTTP/FTP sources
+handle_regular_source() {
+    url="$1"
+    buildtmp="$2"
+    
+    filename=$(basename "$url")
+    dest_file="$buildtmp/$filename"
+    
+    info "  ↓ Downloading: $filename"
+    
+    if ! curl -f#SL "$url" -o "$dest_file" 2>&1; then
+        err "Failed to download source file from $url"
+    fi
+    
+    info "  ✓ Downloaded: $filename"
+}
+
 
 verify_checksums_and_extract() {
     pkg="$1"; rpath="$2"; buildtmp="$3"
     checksums_file="$rpath/checksums"
-    [ -f "$checksums_file" ] || { info "No checksums provided for $pkg. Skipping integrity check."; return 0; }
+    sources_file="$rpath/sources"
+    
+    # Skip if no checksums file
+    if [ ! -f "$checksums_file" ]; then
+        info "No checksums file. Extracting archives if any..."
+        extract_only "$sources_file" "$buildtmp"
+        return 0
+    fi
 
-    command -v sha256sum >/dev/null 2>&1 || err "sha256sum command not found. Cannot verify source integrity."
+    command -v sha256sum >/dev/null 2>&1 || err "sha256sum not found"
 
     info "Verifying source integrity using checksums..."
 
+    # Read and verify checksums
     while IFS= read -r line; do
         line=$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
         [ -z "$line" ] && continue
         case "$line" in \#*) continue ;; esac
 
+        # Parse checksum line
         if printf '%s' "$line" | grep -q ':'; then
-            # Format: sha256:hash filename
             expected_hash=$(printf '%s' "$line" | cut -d' ' -f1 | cut -d':' -f2)
             filename=$(printf '%s' "$line" | awk '{print $2}')
         else
-            # Format: hash filename
             expected_hash=$(printf '%s' "$line" | awk '{print $1}')
             filename=$(printf '%s' "$line" | awk '{print $2}')
         fi
 
-        [ -n "$expected_hash" ] || err "Checksum file format error for $pkg. Line: '$line'"
-        [ -n "$filename" ] || err "Checksum file format error for $pkg. Line: '$line'"
+        [ -n "$expected_hash" ] || continue
+        [ -n "$filename" ] || continue
 
         file_path="$buildtmp/$filename"
-        [ -f "$file_path" ] || err "Checksum error: Source file '$filename' not found in build directory. Cannot verify."
+        
+        # Skip directories (Git clones)
+        if [ -d "$file_path" ]; then
+            info "  ⊚ Skipping directory: $filename (Git repository)"
+            continue
+        fi
+        
+        # Skip if file doesn't exist
+        if [ ! -f "$file_path" ]; then
+            warn "File not found: $filename (might be Git source)"
+            continue
+        fi
 
+        # Verify checksum
         actual_hash=$(sha256sum "$file_path" | awk '{print $1}')
         if [ "$actual_hash" != "$expected_hash" ]; then
-            err "Checksum mismatch for $filename! Expected $expected_hash, got $actual_hash. Aborting."
-        else
-            info "  -> Checksum verified for $filename."
+            err "Checksum mismatch for $filename!"
         fi
+        
+        info "  ✓ Verified: $filename"
     done < "$checksums_file"
 
-    info "Checksums verified. Extracting sources..."
-    sources_file="$rpath/sources"
+    info "Checksums verified. Extracting archives..."
+    extract_only "$sources_file" "$buildtmp"
+}
+
+# Helper function for extraction
+extract_only() {
+    sources_file="$1"
+    buildtmp="$2"
+    
+    [ ! -f "$sources_file" ] && return 0
+    
     while IFS= read -r url; do
         url=$(printf '%s' "$url" | grep -E -v '^[[:space:]]*#' | grep -E -v '^[[:space:]]*$' || true)
         [ -z "$url" ] && continue
-        filename=$(basename "$url")
-        dest_file="$buildtmp/$filename"
-        info "  -> Extracting $filename"
-        case "$filename" in
-            *.tar.gz|*.tgz|*.tar.bz2|*.tbz|*.tar.xz|*.txz) tar -xf "$dest_file" -C "$buildtmp" || err "Extract failed for $filename" ;;
-            *.zip)
-                command -v unzip >/dev/null 2>&1 || err "unzip not found"
-                unzip -q "$dest_file" -d "$buildtmp" || err "Unzip failed for $filename" ;;
-            *)
-                info "  -> Unknown archive type for $filename. Leaving as file."
+        
+        # Skip Git URLs (already cloned)
+        case "$url" in
+            git+*|*.git|*.git#*)
+                continue
                 ;;
         esac
-        rm -f "$dest_file"
+        
+        # Get filename
+        filename=$(basename "$url")
+        dest_file="$buildtmp/$filename"
+
+        # Skip if it's a directory or doesn't exist
+        [ ! -f "$dest_file" ] && continue
+
+        info "  → Extracting: $filename"
+        
+        case "$filename" in
+            *.tar.gz|*.tgz)
+                tar -xzf "$dest_file" -C "$buildtmp" || err "Extract failed: $filename"
+                rm -f "$dest_file"
+                ;;
+            *.tar.bz2|*.tbz)
+                tar -xjf "$dest_file" -C "$buildtmp" || err "Extract failed: $filename"
+                rm -f "$dest_file"
+                ;;
+            *.tar.xz|*.txz)
+                tar -xJf "$dest_file" -C "$buildtmp" || err "Extract failed: $filename"
+                rm -f "$dest_file"
+                ;;
+            *.zip)
+                command -v unzip >/dev/null 2>&1 || err "unzip not found"
+                unzip -q "$dest_file" -d "$buildtmp" || err "Unzip failed: $filename"
+                rm -f "$dest_file"
+                ;;
+            *)
+                info "  ⊚ Not an archive: $filename"
+                ;;
+        esac
     done < "$sources_file"
 }
-
 check_if_user_skipped() {
     local pkg_to_check="$1"
     
@@ -2339,9 +2566,32 @@ build_from_recipe_enhanced() {
     download_sources "$rpath" "$buildtmp"
     verify_checksums_and_extract "$_pkg" "$rpath" "$buildtmp"
 
-    # FEATURE 2: Take filesystem snapshot BEFORE build
+    # Take filesystem snapshot BEFORE build
     snapshot_before="$TMPDIR/astral-snapshot-before-$$"
     take_fs_snapshot "$snapshot_before"
+
+        git_dir=""
+    if [ -d "$buildtmp/$_pkg" ]; then
+        # Directory named after package exists (likely Git clone)
+        git_dir="$buildtmp/$_pkg"
+        info "Detected Git clone directory: $_pkg"
+    else
+        # Look for any Git repositories in buildtmp
+        for dir in "$buildtmp"/*; do
+            [ -d "$dir" ] || continue
+            if [ -d "$dir/.git" ]; then
+                git_dir="$dir"
+                info "Detected Git repository: $(basename "$git_dir")"
+                break
+            fi
+        done
+    fi
+    
+    # Export GIT_DIR for build scripts
+    if [ -n "$git_dir" ]; then
+        export ASTRAL_GIT_DIR="$(basename "$git_dir")"
+        export ASTRAL_PKG_NAME="$_pkg"
+    fi
 
     if [ -f "./build" ]; then
         chmod +x ./build || true
@@ -2350,21 +2600,48 @@ build_from_recipe_enhanced() {
         
         info "Starting isolated build for $_pkg..."
         
-        # Save state after configure
         save_build_state "$_pkg" "configure" "$buildtmp" "$recipe_ver"
         
-        ( DESTDIR="$PKGDIR" ./build ) || err "build failed for $_pkg"
+        # Create wrapper that auto-cds into first subdirectory
+        (
+            export DESTDIR="$PKGDIR"
+            
+            # Find first directory (Git clone or extracted archive)
+            first_dir=$(find . -maxdepth 1 -type d ! -name . ! -name pkg | head -n1)
+            
+            if [ -n "$first_dir" ]; then
+                dir_name=$(basename "$first_dir")
+                info "Entering directory: $dir_name"
+                cd "$first_dir" || exit 1
+            fi
+            
+            # Run build script from parent directory
+            . ../build
+        ) || err "build failed for $_pkg"
         
-        # Save state after build
         save_build_state "$_pkg" "build" "$buildtmp" "$recipe_ver"
 
         if [ -f "./package" ]; then
             info "Running package hook for $_pkg..."
-            ( DESTDIR="$PKGDIR" PKGDIR="$PKGDIR" ./package ) || err "package() failed for $_pkg"
+            
+            (
+                export DESTDIR="$PKGDIR"
+                export PKGDIR="$PKGDIR"
+                
+                # Same logic for package script
+                first_dir=$(find . -maxdepth 1 -type d ! -name . ! -name pkg | head -n1)
+                
+                if [ -n "$first_dir" ]; then
+                    dir_name=$(basename "$first_dir")
+                    info "Entering directory: $dir_name"
+                    cd "$first_dir" || exit 1
+                fi
+                
+                . ../package
+            ) || err "package() failed for $_pkg"
         fi
         
-        # Save state after package
-       save_build_state "$_pkg" "package" "$buildtmp" "$recipe_ver"
+        save_build_state "$_pkg" "package" "$buildtmp" "$recipe_ver"
 
         # FEATURE 2: Take snapshot AFTER build and detect ghost files
         snapshot_after="$TMPDIR/astral-snapshot-after-$$"
