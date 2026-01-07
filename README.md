@@ -161,6 +161,8 @@ Astral supports four recipe formats because we couldn't decide on one and now we
 
 The Ancient format. Messy, spaghetti and deprecated (who uses these?)
 
+- [Read here](https://github.com/Astaraxia-Linux/Astral/blob/main/Dir.md)
+
 ### v1 Format (@SECTION)
 
 The OG format. Simple, clean, and deprecated.
