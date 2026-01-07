@@ -1,524 +1,586 @@
-# Astral
+# Astral Package Manager Documentation
 
-Astaraxia Package Manager, written entirely in POSIX shell, because writing it in C would make me lose 10 years of lifespan.
+> *"Because compiling from source should be less painful than a root canal"*
 
-Astral is a **source-based** package manager designed for extremely small, hand-rolled Linux systems like [Astaraxia](https://github.com/Astaraxia-Linux/Astaraxia/) (LFS, custom distros, experimental systems). The goal is a simple, transparent, hackable package manager with minimal assumptions.
-
-## Why Astral Exists (And Why It's Standalone)
-
-Astral is intentionally designed to work **outside of Astaraxia**. This is not an accident.
-
-### The reasoning
-
-* **LFS-first reality**
-  Astral is built to function *before* a full distro exists. When bootstrapping from LFS, you need a package manager **before** Python, Rust, systemd, or abstractions appear.
-
-* **Policy vs mechanism separation**
-  Astral provides *mechanism* (build, stage, install, register).
-  Astaraxia provides *policy* (filesystem layout, defaults, rollback strategy, official repos).
-
-* **Transparency over magic**
-  Astral does not attempt to own your system. It executes shell scripts, stages files, and records metadata. Everything it does is visible and auditable.
-
-* **Minimal assumptions**
-  Astral assumes:
-
-  * `/bin/sh`
-  * basic coreutils
-  * a working toolchain
-
-  If those are missing, you do not need a package manager.
-You need a rescue disk and life choices.
-
-### What Astral is **not**
-
-Astral is **not**:
-
-* A universal replacement for pacman, emerge, or nix-env
-* A dependency solver with global system awareness
-* A safety net for arbitrary distributions
-
-Using Astral outside Astaraxia is supported **only if you understand and accept the consequences**.
-
-### Relationship to Astaraxia
-
-> Astaraxia is Astral plus policy.
-
-If Astral works well on its own, that is a feature — not scope creep.
+Version: 3.3.0.0 Main  
+Last Updated: 7 January 2026 (GMT+8) 
+Maintained by: One Maniac (yes, just one)
 
 ---
 
-## Supported Environments
+## Table of Contents
 
-Astral is known to work (or is expected to work) on:
+1. [Introduction](#introduction)
+2. [Installation](#installation)
+3. [Basic Usage](#basic-usage)
+4. [Recipe Formats](#recipe-formats)
+5. [Package Management](#package-management)
+6. [Dependency System](#dependency-system)
+7. [Configuration](#configuration)
+8. [Advanced Features](#advanced-features)
+9. [Recipe Generator](#recipe-generator)
+10. [Troubleshooting](#troubleshooting)
+11. [Contributing](#contributing)
 
-* Linux From Scratch (LFS / BLFS)
-* Minimal chroots
-* Custom source-based systems
-* Experimental or educational Linux environments
+---
 
-Astral is **not officially supported** on:
+## Introduction
 
-* Arch Linux (Does work)
-* Gentoo (i dont want to brick gentoo for this)
-* Debian / Ubuntu (tested every astral version on crositini)
-* NixOS
+### What is Astral?
 
-It may work. It may also break things.
+Astral is a minimal POSIX package manager for [Astaraxia Linux](https://github.com/Astaraxia-Linux/Astaraxia/). It builds packages from source because apparently, we hate ourselves enough to avoid binary packages. Think of it as Gentoo's Portage, but written by someone who values their sanity (debatable).
 
-# Table Of Content
+### Why Astral?
 
-* [Installation](#installation)
-* [CHANGES](#changes)
-* [Versioning](#versioning)
-* [Architecture Overview](#architecture-overview)
-* [Recipe Format](#recipe-format)
-* [Build Script Example](#build-script-example-build)
-* [Package Script Example](#package-script-example-package)
-* [Using Astral](#using-astral)
-* [Behavior Notes (Important)](#behavior-notes-important)
-* [Troubleshooting](#troubleshooting)
-* [FAQ](#faq)
+- **Source-based**: Because you *totally* want to compile everything
+- **POSIX-compliant**: Works on any UNIX-like system (in theory)
+- **Minimal dependencies**: Just `sh`, `curl`, and your tears
+- **Three recipe formats**: v1, v2, and v3 (because backwards compatibility is a thing)
+- **Smart dependency resolution**: It won't delete your `/usr` (anymore :sob:)
+
+### Why Not Astral?
+
+- You value your time
+- You have a slow computer
+- You prefer binary packages
+- You're a normal person
+
+---
 
 ## Installation
 
-### Manual Installation
+### Prerequisites
 
-Place the script into `/usr/bin/astral`:
+You'll need:
+- A POSIX-compliant shell (bash, dash, etc.)
+- `curl` and/or `wget` (for downloading things)
+- `sha256sum` (for paranoia)
+- Root access (because `sudo`/`doas` is your friend)
+- Coffee (not technically required, but highly recommended)
 
-```bash
-curl -o /usr/bin/astral https://raw.githubusercontent.com/Astaraxia-Linux/Astral/main/astral
-chmod +x /usr/bin/astral
-```
-
-Astral must be a single executable file.
-
----
-
-## Changes (v3.1.2.0 Main)
-
-### New in v3.1.2.0
-- Fixed collsion bugs
-- added confirmations
----
-
-### Implemented (v3.1.2.0)
-*  File ownership database (`.files.index`)
-*  Conflict detection before install
-*  Safe uninstall (never removes shared directories)
-*  Versioned dependencies
-*  Security checks on build scripts
-*  Atomic transactions
-*  Dry-run mode
-*  Instant lock detection with process info
-*  Force install flag (`-f`)
-*  Reverse-dependency tracking
-*  Ccache Support
-*  Supports 2 recipes format, `Directory` based and `.stars` based
-*  added confirmations [y/n]
-
-### Not implemented yet (but planned)
-* Signature checking / GPG verification
-* Multiple repository priorities
-* Parallel builds
-* Download resume for interrupted transfers
-* Binary package caching (started, incomplete)
-* Delta upgrades
-* `--horizon`, for Astaraxia Linux Setup
-
-## Versioning
-
-Astral uses `0.MINOR.PATCH.HOTFIX` versioning:
-- **0.x**: Pre-release (until stable 1.0.0)
-- **MINOR**: Game-changing features (file ownership DB, atomic installs, etc.)
-- **PATCH**: Improvements and additions
-- **HOTFIX**: Bug fixes and quick patches
-
-Example: `3.1.2.0`
-- 3 = Release
-- 1 = 1st generation of features
-- 0 = 2th patch release
-- 0 = 0 hotfixs
-
-## Architecture Overview
-
-Astral's pipeline:
-
-```
-recipe → build stage ($buildtmp) → package stage ($PKGDIR) → root install → DB register
-```
-
-### Key Directories
-
-```
-/usr/src/astral/recipes/      # All recipes
-/var/cache/astral/            # Cached source and binary data
-/var/lib/astral/db/           # Installed package metadata
-/etc/astral/                  # Astral configs
-```
-
-Current DB structure:
-
-```
-/var/lib/astral/db/<pkg>/
-    version                   # Package version
-    files                     # List of installed files
-    depends                   # Runtime dependencies
-/var/lib/astral/db/.files.index   # file → owner map (implemented)
-```
-
----
-
-## Recipe Format
-### `.stars` Based
-
-- [`.stars` Specification](https://github.com/Astaraxia-Linux/Astral/blob/main/.stars.md)
-
-### Directory Based:
-Each package lives in:
-
-```
-/usr/src/astral/recipes/<pkgname>/
-```
-
-A valid recipe **requires** at least:
-
-```
-version   # REQUIRED – version string
-build     # REQUIRED – build script
-```
-
-Optional files:
-
-```
-package       # OPTIONAL – packaging script (recommended)
-depends       # OPTIONAL – runtime dependencies
-bdepends      # OPTIONAL – build-time dependencies
-rdepends      # OPTIONAL – runtime-only dependencies
-sources       # OPTIONAL – URLs for source tarballs
-checksums     # OPTIONAL – SHA256 checksums for sources
-info          # OPTIONAL – human-readable description
-post_install  # OPTIONAL – post-installation script
-post_remove   # OPTIONAL – post-removal script
-conflicts     # OPTIONAL – conflicting packages
-```
-
-### File Rules (Strict)
-
-```
-version — must contain ONLY the version string
-build   — MUST NOT write outside $buildtmp
-package — MUST NOT write outside $PKGDIR
-depends — plain list, no commas, supports version constraints
-sources — URLs only
-info    — free text
-```
-
----
-
-## Example Recipe Structure
-
-```
-example-app/
-├── version
-├── sources
-├── checksums
-├── depends
-├── build
-├── package
-├── post_install
-└── info
-```
-
-### Example: `version`
-
-```
-1.0.0
-```
-
-### Example: `sources`
-
-```
-https://example.com/example-app-1.0.0.tar.gz
-```
-
-### Example: `checksums`
-
-```
-a1b2c3d4e5f6... example-app-1.0.0.tar.gz
-```
-
-### Example: `depends`
-
-**Old Format (Still Supported):**
-```
-libc
-ncurses
-```
-
-**New Format (Versioned Dependencies):**
-```
-libc >= 2.38
-gcc >= 12.0.0
-python <= 3.11
-zlib = 1.2.13
-```
-
-Supported operators: `>=`, `<=`, `>`, `<`, `=`
-
----
-
-## Build Script Example (`build`)
-
-```
-#!/bin/sh
-set -e
-
-PKG_NAME="example-app"
-PKG_VERSION=$(cat version)
-
-# Sources are automatically downloaded and extracted (Only if you have `sources` file in repo)
-# Can use Wget
-
-cd "${PKG_NAME}-${PKG_VERSION}"
-
-./configure --prefix=/usr --sysconfdir=/etc
-make
-```
-
----
-
-## Package Script Example (`package`)
-
-```
-#!/bin/sh
-set -e
-
-PKG_NAME="example-app"
-SOURCE_DIR="${PKG_NAME}-$(cat version)"
-
-cd "$SOURCE_DIR"
-echo "Installing to $PKGDIR"
-make DESTDIR="$PKGDIR" install
-
-# Clean up unwanted files
-rm -rf "$PKGDIR/usr/share/doc/$PKG_NAME/examples" || true
-```
-
----
-
-## ccache Integration
-
-Astral supports ccache for faster rebuilds of C/C++ packages.
-
-### Installation
+### Quick Install
 
 ```bash
-astral -S dev-util/ccache
+# Clone the repository (or download the script)
+curl -O https://raw.githubusercontent.com/Astaraxia-Linux/Astral/main/astral
+chmod +x astral
+sudo mv astral /usr/bin/
+
+# Initialize directories
+sudo astral --version  # This creates necessary directories
 ```
 
 ### Configuration
 
-Add to `/etc/astral/make.conf`:
+Create `/etc/astral/make.conf`:
+
+```bash
+# Build flags (adjust for your masochism level)
+CFLAGS="-O2 -pipe -march=native"
+CXXFLAGS="$CFLAGS"
+MAKEFLAGS="-j$(nproc)"
+
+# Enable ccache (because compiling twice is for chumps)
+CCACHE_ENABLED="yes"
+
+# Features
+FEATURES="ccache parallel-make strip"
+```
+
+**Pro tip**: `-march=native` optimizes for your CPU. Don't use it if you're building for other machines, genius.
+
+---
+
+## Basic Usage
+
+### Installing Packages
+
+```bash
+# Install from official repository (AOHARU)
+sudo astral -S package-name
+
+# Install from community overlay (ASURA)
+sudo astral -SA package-name
+
+# Build from local recipe
+sudo astral -C category/package-name
+```
+
+### Removing Packages
+
+```bash
+# Remove package only
+sudo astral -R package-name
+
+# Remove package + orphaned dependencies
+sudo astral -r package-name
+
+# Remove all orphans (spring cleaning!)
+sudo astral --autoremove
+```
+
+### Searching & Information
+
+```bash
+# Search for packages
+astral -s nano
+
+# Show package info
+astral -I bash
+
+# Show dependency tree
+astral -D gcc
+
+# Why is this installed?
+astral -w readline
+```
+
+### System Maintenance
+
+```bash
+# Update repository indexes
+sudo astral -u
+
+# Upgrade all packages (grab some coffee)
+sudo astral --Upgrade-All
+
+# Clean cache
+sudo astral -Cc
+
+# Rebuild file index
+sudo astral -RI
+```
+
+---
+
+## Recipe Formats
+
+Astral supports three recipe formats because we couldn't decide on one and now we're stuck with all three.
+
+### v1 Format (@SECTION)
+
+The OG format. Simple, clean, and deprecated.
+
+```bash
+VERSION="1.2.3"
+DESCRIPTION="A cool package"
+HOMEPAGE="https://example.com"
+
+@DEPENDS
+gcc
+make
+
+@SOURCES
+https://example.com/package-1.2.3.tar.gz
+
+@CHECKSUMS
+sha256:abc123... package-1.2.3.tar.gz
+
+@BUILD
+./configure --prefix=/usr
+make -j$(nproc)
+
+@PACKAGE
+make DESTDIR="$PKGDIR" install
+```
+
+**Use when**: You're feeling nostalgic or hate yourself.
+
+### v2 Format ($PKG.*)
+
+The current standard. More verbose, more powerful.
+
+```bash
+$PKG.Metadata: {
+    VERSION = "1.2.3"
+    DESCRIPTION = "A cool package"
+    HOMEPAGE = "https://example.com"
+    CATEGORY = "app-editors"
+};
+
+$PKG.Depend {
+    $PKG.Depend.Depends {
+        gcc
+        make
+        ncurses
+    };
+};
+
+$PKG.Sources {
+    urls = "https://example.com/package-1.2.3.tar.gz"
+};
+
+$PKG.Checksums {
+    sha256:abc123... package-1.2.3.tar.gz
+};
+
+$PKG.Build {
+    cd package-1.2.3
+    ./configure --prefix=/usr
+    make -j$(nproc)
+};
+
+$PKG.Package {
+    cd package-1.2.3
+    make DESTDIR="$PKGDIR" install
+};
+```
+
+**Use when**: You want structure but don't need dependency separation.
+
+### v3 Format (Separated Dependencies)
+
+The future is now. Finally separates build-time and runtime dependencies.
+
+```bash
+$PKG.Version = "3"
+
+$PKG.Metadata: {
+    Version = "1.2.3"
+    Description = "A cool package"
+    Homepage = "https://example.com"
+    Category = "app-editors"
+};
+
+$PKG.Depend.BDepends: {
+    gcc
+    make
+};
+
+$PKG.Depend.RDepends: {
+    ncurses
+    readline
+};
+
+$PKG.Depend.Optional: {
+    bash-completion
+};
+
+$PKG.Sources: {
+    urls = "https://example.com/package-1.2.3.tar.gz"
+};
+
+$PKG.Checksums: {
+    sha256:abc123... package-1.2.3.tar.gz
+};
+
+$PKG.Build: {
+    cd package-1.2.3
+    ./configure --prefix=/usr
+    make -j$(nproc)
+};
+
+$PKG.Package: {
+    cd package-1.2.3
+    make DESTDIR="$PKGDIR" install
+};
+```
+
+**Use when**: You want a clean system without build tools polluting your runtime.
+
+**Key differences**:
+- `BDepends`: Build-time only (removed after build)
+- `RDepends`: Runtime dependencies (kept forever)
+- `Optional`: Nice-to-have features (user choice)
+
+---
+
+## Package Management
+
+### The World Set
+
+The "world set" is your list of explicitly installed packages. Think of it as your package wishlist, except you already got everything.
+
+```bash
+# List world set
+astral -W
+
+# Add to world (manual tracking)
+echo "my-package" >> /var/lib/astral/db/world_set
+
+# Remove from world
+astral -R my-package  # Also removes from world
+```
+
+**Important**: Orphaned packages (not in world, not depended on) can be removed with `--autoremove`.
+
+### Dependency Resolution
+
+Astral uses recursive dependency resolution. It's like a family tree, but with software.
+
+```bash
+# Preview what will be installed
+astral -p bash
+
+# Interactive dependency selection
+astral -S bash
+# Shows a tree with:
+# [✓✓] - Already installed
+# [✓ ] - On host (can skip)
+# [  ] - Will install
+# [OPT] - Optional
+```
+
+**Pro tip**: Press Enter to install all, or type numbers to skip (e.g., `1 3 5`).
+
+### Host Dependencies
+
+Some packages might already be on your system. Astral checks:
+
+1. `pkg-config` (most reliable)
+2. Binary in `$PATH`
+3. Shared library in `/lib`, `/usr/lib`, etc.
+4. Your manually configured `HOST_PROVIDED` list
+
+```bash
+# Test if package is on host
+astral --host-check gcc
+
+# Show all host dependencies
+astral --host-deps
+```
+
+---
+
+## Dependency System
+
+### Dependency Types (v3)
+
+- **BDepends**: Build-time dependencies (gcc, make, cmake)
+- **RDepends**: Runtime dependencies (libraries, interpreters)
+- **Optional**: Extra features (bash-completion, docs)
+
+### Versioned Dependencies
+
+You can specify version constraints:
 
 ```
+ncurses >= 6.0
+readline = 8.2
+python < 3.12
+```
+
+Operators: `=`, `>=`, `<=`, `>`, `<`
+
+### Virtual Packages
+
+Virtual packages provide alternatives:
+
+```bash
+# /etc/astral/virtuals/compiler
+gcc
+clang
+tcc
+```
+
+If you request `virtual/compiler`, Astral checks if *any* provider is installed.
+
+### Circular Dependencies
+
+Astral detects circular dependencies and will yell at you:
+
+```
+ERROR: [pkg-a] CIRCULAR DEPENDENCY DETECTED! Chain: pkg-a -> pkg-b -> pkg-a
+```
+
+**Solution**: Fix your damn dependencies. Or cry. Both work.
+
+---
+
+## Configuration
+
+### make.conf
+
+Located at `/etc/astral/make.conf`:
+
+```bash
+# Compiler flags
+CFLAGS="-O2 -pipe -march=native"
+CXXFLAGS="$CFLAGS"
+LDFLAGS="-Wl,--as-needed"
+MAKEFLAGS="-j$(nproc)"
+
+# ccache (compile cache)
 CCACHE_ENABLED="yes"
 CCACHE_DIR="/var/cache/ccache"
 CCACHE_MAXSIZE="5G"
+
+# Features
+FEATURES="ccache parallel-make strip"
+
+# Binary packages (not implemented yet, lol)
+BINPKG_ENABLED="no"
+
+# Host-provided packages
+HOST_PROVIDED="gcc make glibc linux-headers"
+
+# Stripping
+STRIP_BINARIES="yes"
+STRIP_LIBS="yes"
+STRIP_STATIC="yes"
+
+# Collision detection
+COLLISION_DETECT="yes"
+GHOST_FILE_CHECK="yes"
 ```
 
-### Usage
+### Package Masking
 
-Once enabled, ccache is automatically used for all package builds.
+Prevent installation of specific versions:
 
-**Check ccache statistics:**
+```bash
+# /etc/astral/package.mask
+broken-package
+experimental-tool >= 3.0
+old-library < 2.0
 ```
+
+```bash
+# Mask a package
+astral --mask "firefox >= 120.0"
+
+# Unmask
+astral --unmask firefox
+```
+
+---
+
+## Advanced Features
+
+### Parallel Downloads
+
+Downloads up to 4 sources concurrently (configurable):
+
+```bash
+# In make.conf
+ASTRAL_MAX_PARALLEL=4
+```
+
+Saves time when packages have multiple source files.
+
+### ccache Support
+
+ccache caches compilation objects. Install once, compile twice (or more) at lightning speed.
+
+```bash
+# Install ccache
+sudo astral -S dev-util/ccache
+
+# Enable in make.conf
+CCACHE_ENABLED="yes"
+
+# Check stats
 astral --ccache-stats
-```
 
-**Clear ccache:**
-```
+# Clear cache
 astral --ccache-clear
 ```
 
-**Manual ccache commands:**
-```
-ccache -s          # Show stats
-ccache -C          # Clear cache
-ccache -z          # Zero stats
-ccache -M 10G      # Set max size to 10GB
+**Warning**: ccache needs disk space. Set `CCACHE_MAXSIZE` appropriately.
+
+### Build State Management
+
+Resume interrupted builds:
+
+```bash
+# If build fails or is interrupted
+sudo astral -Re package-name
+
+# Astral resumes from last successful stage
 ```
 
-### Expected Speedup
+Stages: `configure` → `build` → `package`
 
-- First build: No speedup (cache miss)
-- Rebuild: 5-10x faster (cache hit)
-- Partial rebuild: 2-5x faster (partial cache hit)
+### Ghost File Detection
 
-### Cache Location
+Detects files installed outside `$PKGDIR` (packaging bugs):
 
-- System: `/var/cache/ccache`
-- User: `~/.ccache`
-
-### Troubleshooting
-
-**ccache not working:**
-- Check: `which gcc` should show `/usr/lib/ccache/bin/gcc`
-- Check: `ccache -s` should show statistics
-
-**Cache too large:**
-- Adjust: `CCACHE_MAXSIZE="10G"` in make.conf
-- Or: `ccache -M 10G`
-
-**Poor hit rate:**
-- Check: `ccache -s` for cache statistics
-- Ensure CFLAGS are consistent across builds
-
----
-
-## Using Astral
-
-### Basic Operations
-
-**Install from AOHARU (Official Repo):**
-```
-astral -S category/example-app
+```bash
+# Automatically checked during installation
+# Shows warning if package installs directly to /usr
 ```
 
-**Install from ASURA (Community Repo):**
-```
-astral -Sa category/example-app
-```
+**What to do**: File a bug report. The package recipe is broken.
 
-**Compile from Local Recipe:**
-```
-astral -C category/example-app
-```
+### Atomic Installation
 
-**Remove Package (Keep Dependencies):**
-```
-astral -R example-app
-```
+Packages are installed atomically. Either everything succeeds, or nothing happens.
 
-**Remove Package + Orphaned Dependencies:**
-```
-astral -r example-app
-```
-
-**Remove All Orphaned Packages:**
-```
-astral --autoremove
-```
-
-### Query Operations
-
-**Search for Packages:**
-```
-astral -s keyword
-```
-
-**Show Package Info:**
-```
-astral -I example-app
-```
-
-**Show Dependency Tree:**
-```
-astral -D example-app
-```
-
-**Check System Dependencies:**
-```
-astral -Dc
-```
-
-**Preview Install (Dry Run):**
-```
-astral -p example-app
-```
-
-**Show Why Package is Installed:**
-```
-astral -w example-app
-```
-
-**List Explicitly Installed Packages:**
-```
-astral -W
-```
-
-**List All Installed Packages:**
-```
-astral -ll
-```
-
-### System Operations
-
-**Update Repository Index:**
-```
-astral -u              # Update AOHARU
-astral -u asura        # Update ASURA
-```
-
-**Upgrade All Packages:**
-```
-astral -UA
-```
-
-**Clean Uninstalled Recipe Cache:**
-```
-astral -Cc
-```
-
-**Rebuild File Index:**
-```
-astral -RI
-```
-
-### Advanced Options
-
-**Dry-Run Mode (Preview Only):**
-```
-astral -n -S package
-```
-
-**Force Override Conflicts:**
-```
-astral -f -S package
-```
-
-**Custom Install Root:**
-```
-astral --dir /mnt/sysroot -S package
-```
+**Benefits**:
+- No half-installed packages
+- Safe interruption (Ctrl+C won't break your system)
+- Rollback on failure
 
 ---
 
-## Behavior Notes (Important)
+## Recipe Generator
 
-### Upgrades
+### astral-recipegen
 
-Current behavior:
+A tool to generate `.stars` recipes without manually typing boilerplate.
 
-* Installs new version over the old one
-* Atomically replaces files to prevent partial upgrades
-* Conflict detection ensures file ownership tracking
+### Interactive Mode
 
-### Dependencies
+```bash
+astral-recipegen interactive v3
+```
 
-* `depends` is respected during build and runtime
-* Versioned dependencies are checked before installation
-* `bdepends` are build-time only, `rdepends` are runtime-only
-* Host-provided dependencies (system libraries) are automatically detected
+Prompts for:
+- Package name
+- Version
+- Description
+- Dependencies
+- Build system
 
-### Safety Guarantees
+### Auto-Detection
 
-* All scripts run under `set -e`
-* Package scripts cannot write to `/` directly
-* Only final install phase touches the root filesystem
-* All build work is isolated in `$buildtmp`
-* Transactional installs prevent partial package states
-* Security checks block malicious patterns in build scripts
+```bash
+astral-recipegen auto nano https://nano.org/dist/nano-8.2.tar.xz
+```
+
+Does the following:
+1. Downloads source
+2. Detects build system (autotools/cmake/meson/etc.)
+3. Extracts version from filename
+4. Generates checksum
+5. Creates recipe
+
+**Magic**: It actually works most of the time.
+
+### Template Generation
+
+```bash
+astral-recipegen template cmake v3 -o mypackage.stars
+astral-recipegen template python v2
+```
+
+Generates pre-filled templates for common build systems.
+
+### Converting Directory Recipes
+
+```bash
+astral-recipegen dir-to-stars /usr/src/astral/recipes/app-editors/nano
+```
+
+Converts old directory-based recipes to `.stars` format.
+
+### Migration
+
+```bash
+# Migrate v2 → v3
+astral-recipegen migrate mypackage.stars v3
+
+# Smart dependency splitting (auto-detects build vs runtime)
+astral-recipegen migrate old-recipe.stars v3
+```
+
+### From PKGBUILD (Experimental)
+
+```bash
+astral-recipegen from-pkgbuild /path/to/PKGBUILD v3
+```
+
+Converts Arch Linux PKGBUILDs. Results may vary. Review manually.
 
 ---
 
@@ -526,108 +588,213 @@ Current behavior:
 
 ### Common Issues
 
-**"PKGDIR: parameter not set"**
-- Your `build` or `package` script is using `$PKGDIR` before it's set
-- Solution: Only use `$PKGDIR` in the `package()` function
+#### "Another instance of astral is already running"
 
-**"Circular dependency detected"**
-- Package A depends on B, B depends on A
-- Solution: Review your `depends` files, break the cycle
+Someone (probably you) is already running astral.
 
-**"File conflict detected"**
-- Another package owns this file
-- Solution: Use `-f` to force override (dangerous!) or review the conflict
+**Fix**:
+```bash
+# Check if actually running
+ps aux | grep astral
 
-**"Another instance of astral is already running"**
-- Another Astral instance is running (shows PID and process name)
-- Solution: The error message shows which process is holding the lock
-- If it's a stale lock from a crashed process, Astral will auto-remove it
-- Manual removal (if needed): `rm -rf /var/lock/astral.lock.d`
-
-**"File index missing"**
-- First-time install or corrupted index
-- Solution: `astral -RI` to rebuild index
-
-**"Checksum mismatch"**
-- Downloaded source doesn't match expected checksum
-- Solution: Check if source was modified upstream, update `checksums` file if legitimate
-
-**"Version mismatch" for dependencies**
-- Installed dependency doesn't meet version requirement
-- Solution: Upgrade the dependency first: `astral -S dependency-name`
-
-### Performance Issues
-
-**Slow conflict detection**
-- File index might be missing
-- Solution: `astral -RI`
-
-**Slow builds**
-- Check `MAKEFLAGS` in `/etc/astral/make.conf`
-- Enable ccache: `CCACHE_ENABLED="yes"`
-
-### Getting Help
-
+# If it's a stale lock
+sudo rm -rf /var/lock/astral.lock.d
 ```
-1. Check logs: `/var/log/astral/`
-2. Run with dry-run: `astral -n -S package`
-3. Inspect recipe: `astral -Ins package`
-4. File an issue: https://github.com/Astaraxia-Linux/Astral/issues
+
+#### "Package version X.Y.Z is MASKED"
+
+The package version is explicitly blocked.
+
+**Fix**:
+```bash
+# Check why
+cat /etc/astral/package.mask
+
+# Unmask if you're brave
+astral --unmask package-name
 ```
+
+#### "CIRCULAR DEPENDENCY DETECTED"
+
+Your dependency graph has a loop. Math says this is impossible, but here we are.
+
+**Fix**: Fix the recipes. You can't install A if A depends on B and B depends on A. It's turtles all the way down.
+
+#### "Checksum mismatch"
+
+The downloaded file doesn't match the expected checksum.
+
+**Causes**:
+1. Source file changed (bad upstream)
+2. Network corruption (bad luck)
+3. MITM attack (bad day)
+
+**Fix**:
+```bash
+# Re-download
+rm /var/cache/astral/src/*
+
+# If it persists, update checksum in recipe
+sha256sum /var/cache/astral/src/package-1.2.3.tar.gz
+```
+
+#### "Failed to download source"
+
+Network issues or dead link.
+
+**Fix**:
+1. Check internet connection (turn it off and on again)
+2. Try again later
+3. Update recipe with working mirror
+
+#### Build fails with "command not found"
+
+Missing build dependency.
+
+**Fix**:
+```bash
+# Check what's missing
+astral -D package-name
+
+# Install missing dependencies
+sudo astral -S missing-package
+```
+
+### Debugging
+
+Enable verbose output:
+
+```bash
+sudo astral -v -S package-name
+```
+
+Check build logs:
+
+```bash
+# Build logs
+ls /tmp/astral-build-*
+
+# Sync logs
+tail -f /var/log/astral_sync_*.log
+```
+
+---
+
+## Contributing
+
+### Writing Recipes
+
+1. **Use v3 format** (it's the future, embrace it)
+2. **Separate dependencies** (BDepends vs RDepends)
+3. **Test your recipe** before submitting
+4. **Use descriptive commit messages** ("fixed stuff" is not descriptive)
+
+### Recipe Guidelines
+
+- **Checksums are mandatory** (we're paranoid for a reason)
+- **Use `$PKGDIR`** for installation (never install directly to `/`)
+- **Strip binaries** unless there's a good reason
+- **Clean up** (remove docs/examples if nobody reads them)
+
+### Submitting to ASURA
+
+ASURA is the community overlay. Submit your recipes there.
+
+```bash
+# Fork the repository
+git clone https://codeberg.org/Izumi/ASURA
+
+# Add your recipe
+cd ASURA/recipes
+mkdir -p category/package-name
+cp your-recipe.stars category/package-name.stars
+
+# Commit and push
+git add .
+git commit -m "Add package-name-1.2.3"
+git push
+```
+
+### Contributing to Astral Core
+
+1. Read the code (good luck)
+2. Test your changes (seriously)
+3. Submit a PR
+4. Wait for the One Maniac™ to review
+
+**Coding style**: POSIX sh, no bashisms, keep it simple.
 
 ---
 
 ## FAQ
 
-**Why not Rust?**  
-Because Astral is supposed to boot on systems that don't even have `bash` yet, let alone a 200-MB Rust toolchain.
+### Why POSIX sh?
 
-**Why POSIX sh?**  
 Because if `/bin/sh` isn't working, you have bigger problems than package management.
 
-**Why not Python?**  
-Because Python isn't installed in LFS unless *you* install it, and Astral must work before that.
+### Why not just use [insert package manager here]?
 
-**Why not C?**  
-Because C buys performance Astral does not need, while adding complexity Astral explicitly avoids. A C implementation would require careful memory management, a build system, and platform-specific assumptions. Astral's goal is transparency and hackability during early bootstrap, not raw speed.
+Because we're special snowflakes who compile from source.
 
-**Why not Go?**  
-Because Go requires a full toolchain and runtime that does not exist during LFS bootstrap. Astral is designed to work *before* higher-level languages are available. Go is suitable for optional post-bootstrap tooling, but not for Astral's core.
+### Does Astral support binary packages?
 
-**Will Astral break your system?**  
-Only if you intentionally ignore `$PKGDIR` rules, run untrusted recipes, or `rm -R glibc`.
+Technically yes (`BINPKG_ENABLED="no"` in the config), but actually no.
 
-**Is Astral fast?**  
-Depends how fast you can type `make` and `curl`. It's POSIX shell - don't expect Rust-level performance.
+### Can I use Astral on [insert distro here]?
 
-**Can I use Astral on Arch/Gentoo/Debian?**  
-Technically yes, but **don't**. Astral is designed for minimal systems where you control everything. On established distros, use the native package manager.
+Probably. It's POSIX-compliant. Your mileage may vary.
 
-**What's the difference between AOHARU and ASURA?**
+### Why three recipe formats?
+
+Legacy reasons. We couldn't break backwards compatibility without angering the *three* people using v1.
+
+### Is Astral stable?
+
+Define "stable". It won't delete your `/usr` anymore, so... yes?
+
+### How do I pronounce "Astral"?
+
+Like "astral projection", but for packages.
+
+### What's the difference between AOHARU and ASURA?
 - **AOHARU**: Official, manually reviewed, trusted
 - **ASURA**: Community-contributed, use at your own risk
 
-**Do I need to review recipes?**  
-For AOHARU: No, we review them. For ASURA: **YES, ALWAYS.** Never run untrusted code as root.
+### Do I need to review recipes?  
+For AOHARU: No, we review them. 
+For ASURA: **YES, ALWAYS.** Never run untrusted code as the damn root.
 
-**Can Astral coexist with other package managers?**  
-Not recommended. File conflicts will occur. Choose one package manager per system.
+### Who maintains this?
 
-**Where's the binary package support?**  
-Experimental/incomplete. Source-first design means binaries are an optimization, not core.
-
-**Why "Astral"?**  
-Because the original dev wanted something that sounded cool and had no taken GitHub repos. Also it fits the space/star theme of Astaraxia.
-
-**How does Astral handle virtual packages?**  
-Astral supports virtual packages through `/etc/astral/virtuals/`. A virtual like "compiler" can be satisfied by gcc, clang, or tcc. If any provider is installed or host-provided, the virtual is satisfied.
-
-**What about host-provided dependencies?**  
-Astral automatically detects system libraries via `ldconfig`, `pkg-config`, and binaries in `$PATH`. Mark additional host dependencies in `/etc/astral/make.conf` with `HOST_PROVIDED="gcc make libc"`.
-
-**Can I mask packages?**  
-Yes! Use `astral --mask package >= 2.0` to prevent installation of specific versions. Manage masks in `/etc/astral/package.mask`.
+One Maniac. Just one. Send help (or coffee).
 
 ---
 
+## Credits
+
+- **Created by**: One Maniac
+- **Inspired by**: Gentoo Portage, Arch Pacman, KISS Linux, and pain
+- **Special thanks**: Everyone who reported bugs instead of rage-quitting (if theres one)
+
+---
+
+## License
+
+Just plain GPL-3.0
+
+---
+
+## Final Notes
+
+> *"Astral: Because life's too short to not compile everything from source"*  
+> — Nobody, ever
+
 Astral is still evolving. Expect the code to be a spagetti, the philosophy to be based, and the implementation to be extremely transparent.
+
+If you made it this far, congratulations! You're either very thorough or very bored (very me). Either way, happy compiling!
+
+---
+
+**Last updated**: 7 January 2026 (GMT+8) 
+**Documentation version**: 3.0  
+**Sanity level**: Questionable
