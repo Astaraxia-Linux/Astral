@@ -35,7 +35,7 @@ Astral is a minimal POSIX package manager for [Astaraxia Linux](https://github.c
 - **Source-based**: Because you *totally* want to compile everything
 - **POSIX-compliant**: Works on any UNIX-like system (in theory)
 - **Minimal dependencies**: Just `sh`, `curl`, and your tears
-- **Three recipe formats**: v1, v2, and v3 (because backwards compatibility is a thing)
+- **Three recipe formats**: dir, v1, v2, and v3 (because backwards compatibility is a thing)
 - **Smart dependency resolution**: It won't delete your `/usr` (anymore :sob:)
 
 ### Why Not Astral?
@@ -155,7 +155,11 @@ sudo astral -RI
 
 ## Recipe Formats
 
-Astral supports three recipe formats because we couldn't decide on one and now we're stuck with all three.
+Astral supports four recipe formats because we couldn't decide on one and now we're stuck with all four.
+
+### Dir Format (Directory Based)
+
+The Ancient format. Messy, spaghetti and deprecated (who uses these?)
 
 ### v1 Format (@SECTION)
 
