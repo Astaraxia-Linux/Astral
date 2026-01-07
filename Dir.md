@@ -1,4 +1,4 @@
-# Astral `.stars` Format Specification v2
+# Astral `Directory` Format Specification
 
 ## Overview
 
