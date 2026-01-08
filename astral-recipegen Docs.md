@@ -865,10 +865,6 @@ $PKG.Build: {
 
 ## Troubleshooting
 
-### "parse_metadata_block_v3: command not found"
-
-You're missing the v3 parser functions. See [astral-v3-parser-fix](astral-v3-parser-fix) and add the missing functions to your astral script.
-
 ### Syntax Errors
 
 Common mistakes:
