@@ -21,6 +21,7 @@ Maintained by: One Maniac (yes, just one)
 9. [Recipe Generator](#recipe-generator)
 10. [Troubleshooting](#troubleshooting)
 11. [Contributing](#contributing)
+12. [FAQ](#faq)
 
 ---
 
@@ -802,5 +803,5 @@ If you made it this far, congratulations! You're either very thorough or very bo
 ---
 
 **Last updated**: 8 January 2026 (GMT+8) 
-**Documentation version**: 3.2  
+**Documentation version**: 3.3
 **Sanity level**: Questionable
