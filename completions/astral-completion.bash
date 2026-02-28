@@ -1,0 +1,120 @@
+#!/bin/bash
+# Astral bash completion
+# Source this file: source completions/bash
+
+_astral() {
+    local cur prev words cword
+    _init_completion || return
+
+    # Main commands
+    local commands=(
+        "-S:--Sync"
+        "-C:--Compile"
+        "-SA:--Sync-Asura"
+        "--Upgrade-All"
+        "-u:--Update"
+        "-s:--Search"
+        "-R:--Remove"
+        "-r:--RemoveDep"
+        "-Cc:--Clean-Cache"
+        "-U:--self-update"
+        "--info"
+        "--inspect"
+        "--list-installed"
+        "-D:--Deps"
+        "-Dc:--DepCheck"
+        "--config"
+        "--rebuild-index"
+        "--show-env"
+        "--hold"
+        "--unhold"
+        "--list-held"
+        "-v:--verbose"
+        "--version"
+        "--help"
+    )
+
+    # Options that don't require a package argument
+    local no_pkg_opts=(
+        "--Upgrade-All"
+        "--list-held"
+        "--list-installed"
+        "-Cc"
+        "--Clean-Cache"
+        "-Dc"
+        "--DepCheck"
+        "--config"
+        "-v"
+        "--verbose"
+        "--version"
+        "--help"
+    )
+
+    # Global options
+    local global_opts=(
+        "--dir"
+        "-f"
+        "--force"
+        "-n"
+        "--dry-run"
+        "-y"
+        "--yes"
+        "-q"
+        "--quiet"
+        "--check-version"
+        "-p"
+        "--pretend"
+        "--json"
+    )
+
+    # Check if we're at the command position
+    if [[ $cword -eq 1 ]]; then
+        # First word - complete commands
+        COMPREPLY=($(compgen -W "${commands[*]} ${global_opts[*]}" -- "$cur"))
+        return
+    fi
+
+    # Check if previous word is a global option
+    for opt in "${global_opts[@]}"; do
+        if [[ "$prev" == "$opt" ]]; then
+            COMPREPLY=($(compgen -W "${commands[*]}" -- "$cur"))
+            return
+        fi
+    done
+
+    # Check if we need package completion
+    local needs_pkg=1
+    for opt in "${no_pkg_opts[@]}"; do
+        if [[ "${words[1]}" == "$opt" ]]; then
+            needs_pkg=0
+            break
+        fi
+    done
+
+    if [[ $needs_pkg -eq 1 ]]; then
+        # Complete package names from local recipes and installed packages
+        local packages=""
+        
+        # Add installed packages
+        if [[ -d "/var/lib/astral/db" ]]; then
+            packages+=$(find /var/lib/astral/db -type f -name version -maxdepth 2 2>/dev/null | \
+                sed "s|/var/lib/astral/db/||" | sed 's|/version$||' | sort | tr '\n' ' ')
+        fi
+        
+        # Add local recipes
+        if [[ -d "/usr/src/astral/recipes" ]]; then
+            packages+=$(find /usr/src/astral/recipes -type d -maxdepth 2 2>/dev/null | \
+                sed 's|/usr/src/astral/recipes/||' | grep '/' | tr '\n' ' ')
+        fi
+
+        # Add remote index entries
+        for idx in /var/lib/astral/db/index_aoharu /var/lib/astral/db/index_asura; do
+            [[ -f "$idx" ]] || continue
+            packages+=$(grep -v '^#' "$idx" | grep '|' | awk -F'|' '{gsub(/ /,"",$1); print $1}' | tr '\n' ' ')
+        done
+        
+        COMPREPLY=($(compgen -W "$packages" -- "$cur"))
+    fi
+} &&
+
+complete -F _astral astral
