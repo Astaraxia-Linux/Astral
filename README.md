@@ -2,8 +2,8 @@
 
 > *"Because compiling from source should be less painful than a root canal"*
 
-Version: 3.4.1.1 Main  
-Last Updated: 8 January 2026 (GMT+8) 
+Version: 5.0.0.0 Main  
+Last Updated: 28 February 2026 (GMT+8)  
 Maintained by: One Maniac (yes, just one)
 
 ---
@@ -727,7 +727,7 @@ git push
 1. Read the code (good luck)
 2. Test your changes (seriously)
 3. Submit a PR
-4. Wait for the One Maniac™ to review (may take up to 3 business weekss)
+4. Wait for the One Maniac™ to review (may take up to 3 business weeks)
 
 **Coding style**: POSIX sh, no bashisms, keep it stupid simple.
 
@@ -751,7 +751,7 @@ Technically yes (`BINPKG_ENABLED="no"` in the config), but actually no.
 
 Probably. It's POSIX-compliant. Your mileage may vary.
 
-### Why three recipe formats?
+### Why four recipe formats?
 
 Legacy reasons. We couldn't break backwards compatibility without angering the *three* people using v1.
 
@@ -768,8 +768,8 @@ Like "astral projection", but for packages.
 - **ASURA**: Community-contributed, use at your own risk
 
 ### Do I need to review recipes?  
-For AOHARU: No, we review them. 
-For ASURA: **YES, ALWAYS.** Never run untrusted code as the damn root.
+For AOHARU: No, we review them.  
+For ASURA: **YES, ALWAYS.** Never run untrusted code as root.
 
 ### Who maintains this?
 
@@ -781,7 +781,7 @@ One Maniac. Just one. Send help (or coffee).
 
 - **Created by**: One Maniac™
 - **Inspired by**: Gentoo Portage, Arch Pacman, KISS Linux, and pain
-- **Special thanks**: Everyone who reported bugs instead of rage-quitting (if theres one)
+- **Special thanks**: Everyone who reported bugs instead of rage-quitting (if there's one)
 
 ---
 
@@ -796,12 +796,12 @@ Just plain GPL-3.0
 > *"Astral: Because life's too short to not compile everything from source"*  
 > — Nobody, ever
 
-Astral is still evolving. Expect the code to be a spagetti, the philosophy to be based, and the implementation to be extremely transparent.
+Astral is still evolving. Expect the code to be spaghetti, the philosophy to be based, and the implementation to be extremely transparent.
 
-If you made it this far, congratulations! You're either very thorough or very bored (very me). Either way, happy compiling!
+If you made it this far, congratulations! You're either very thorough or very bored. Either way, happy compiling!
 
 ---
 
-**Last updated**: 8 January 2026 (GMT+8) 
-**Documentation version**: 3.3
+**Last updated**: 28 February 2026 (GMT+8)  
+**Documentation version**: 5.0  
 **Sanity level**: Questionable
