@@ -4,7 +4,7 @@ This document answers a very practical question:
 
 **"Why doesn’t Astral just ship with recipes for everything already?"**
 
-Short answer: I am one person, not a distribution foundation—time, trust, and reality are finite.
+Short answer: I am one person, not a distribution foundation time, trust, and reality are finite.
 
 ---
 
