@@ -538,11 +538,11 @@ astral status sshd
 ```
 
 Supported init systems, detected automatically:
-- **systemd** — uses `systemctl`
-- **OpenRC** — uses `rc-service` / `rc-update`
-- **runit** — uses `sv` / symlinks in `/var/service`
-- **s6** — uses `s6-rc` / `s6-rc-bundle-update`
-- **SysVinit** — uses `service` / `update-rc.d` / `chkconfig`
+- **systemd** - uses `systemctl`
+- **OpenRC** - uses `rc-service` / `rc-update`
+- **runit** - uses `sv` / symlinks in `/var/service`
+- **s6** - uses `s6-rc` / `s6-rc-bundle-update`
+- **SysVinit** - uses `service` / `update-rc.d` / `chkconfig`
 
 Astral tells you which init system it detected when you run a service command. If it gets it wrong, file a bug.
 
@@ -689,7 +689,7 @@ sudo astral --off collision
 
 ### Ghost File Detection
 
-Detects files installed outside `$PKGDIR` (packaging bugs). Automatically checked during installation — shows a warning if a package recipe tries to install directly to `/usr`.
+Detects files installed outside `$PKGDIR` (packaging bugs). Automatically checked during installation - shows a warning if a package recipe tries to install directly to `/usr`.
 
 **What to do**: File a bug. The recipe is broken.
 
@@ -1029,9 +1029,9 @@ git push
 
 ### Contributing to Astral Core
 
-1. Read the code (good luck — it's 10k lines of sh)
+1. Read the code (good luck - it's 10k lines of sh)
 2. Test your changes (seriously)
-3. No bashisms — POSIX sh only
+3. No bashisms - POSIX sh only
 4. Submit a PR
 5. Wait for the One Maniac™ to review (may take up to 3 business weeks)
 
@@ -1079,7 +1079,7 @@ For ASURA: **YES, ALWAYS.** Never run untrusted code as root.
 
 ### What's astral-env?
 
-It's the declarative system configuration layer that sits on top of Astral. It lets you describe your entire system — packages, services, dotfiles, snapshots — in a `.stars` file and apply it all at once. [Read the astral-env docs](https://github.com/Astaraxia-Linux/astral-env).
+It's the declarative system configuration layer that sits on top of Astral. It lets you describe your entire system - packages, services, dotfiles, snapshots - in a `.stars` file and apply it all at once. [Read the astral-env docs](https://github.com/Astaraxia-Linux/stral-env).
 
 ### Who maintains this?
 
@@ -1104,7 +1104,7 @@ Just plain GPL-3.0
 ## Final Notes
 
 > *"Astral: Because life's too short to not compile everything from source"*  
-> — Nobody, ever
+> - Nobody, ever
 
 Astral is still evolving. The code is still spaghetti. The philosophy is still based. The implementation is extremely transparent (you can read all 10,000+ lines of it).
 
