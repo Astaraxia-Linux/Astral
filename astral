@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v5.0.0.0 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
+# Astral v5.0.1.0 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
 # SOURCE-ONLY
-# V: 5 - Major . 0 - Minor . 0 - Patches . 0 - hotfixes
+# V: 5 - Major . 0 - Minor . 1 - Patches . 0 - hotfixes
 
-version="5.0.0.0 Main"
+version="5.0.1.0 Main"
 ASTRAL_PRODUCTION_DATE="2025-11-26"
 now_seconds=$(date +%s)
 prod_seconds=$(date -d "$ASTRAL_PRODUCTION_DATE" +%s)
@@ -168,6 +168,7 @@ INDEX_FILE_ASURA="$DB_DIR/index_asura"
 
 # --- Misc Var ---
 LOCK_FILE=${LOCK_FILE:-/var/lock/astral.lock}
+EDITOR=${EDITOR:-vi}
 
 mkdir -p "$RECIPES_DIR" "$CACHE_SRC" "$DB_DIR" "$LOG_DIR" "$TMPDIR" "$ASTRAL_LIB_DIR" 2>/dev/null || true
 setup_logging
@@ -432,136 +433,6 @@ apply_tool_config() {
 }
 
 # Location: After load_config() (around line 150)
-
-# === REPRODUCIBLE BUILD SYSTEM ===
-RDY_FILE=${RDY_FILE:-/etc/astral/rdy.stars}
-
-parse_rdy_file() {
-    rdy_file="$1"
-    
-    [ ! -f "$rdy_file" ] && err "RDY file not found: $rdy_file"
-    
-    info "Parsing reproducible deployment file: $rdy_file"
-    
-    # Check if reproducibility is enabled
-    if ! grep -q 'enabled = "true"' "$rdy_file"; then
-        warn "Reproducibility not enabled in RDY file"
-        return 1
-    fi
-    
-    # Export build timestamp for SOURCE_DATE_EPOCH
-    timestamp=$(grep 'timestamp = ' "$rdy_file" | sed 's/.*timestamp = "\(.*\)".*/\1/')
-    if [ -n "$timestamp" ]; then
-        export SOURCE_DATE_EPOCH=$(date -d "$timestamp" +%s 2>/dev/null || date +%s)
-        info "Set SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH for reproducibility"
-    fi
-    
-    # Parse and set config
-    config_section=$(awk '/$RDY.Config:/,/}/' "$rdy_file")
-    
-    # Override make.conf settings
-    eval "$(printf '%s' "$config_section" | grep 'CFLAGS =' | sed 's/.*= "\(.*\)"/CFLAGS="\1"/')"
-    eval "$(printf '%s' "$config_section" | grep 'USE_FLAGS =' | sed 's/.*= "\(.*\)"/USE_FLAGS="\1"/')"
-    
-    export CFLAGS CXXFLAGS MAKEFLAGS USE_FLAGS
-    
-    info "Loaded reproducible configuration from RDY file"
-}
-
-deploy_from_rdy() {
-    rdy_file="${1:-$RDY_FILE}"
-    
-    parse_rdy_file "$rdy_file"
-    
-    info "╭────────────────────────────────────────────────────────────────╮"
-    info "│           Reproducible Deployment from RDY File               │"
-    info "╰────────────────────────────────────────────────────────────────╯"
-    
-    # Extract package list
-    temp_pkg_list="$TMPDIR/rdy-packages-$$"
-    awk '/$RDY.Packages:/,/^}/' "$rdy_file" | \
-        grep -E '^[[:space:]]+(AOHARU|ASURA)' | \
-        awk '{print $1 ":" $2}' > "$temp_pkg_list"
-    
-    total=$(wc -l < "$temp_pkg_list")
-    current=0
-    
-    info "Installing $total packages from RDY specification..."
-    info ""
-    
-    while IFS=: read -r repo pkg_spec; do
-        current=$((current + 1))
-        category_pkg=$(printf '%s' "$pkg_spec" | awk '{print $1}')
-        version=$(printf '%s' "$pkg_spec" | awk '{print $2}')
-        
-        info "[$current/$total] Installing $category_pkg ($version) from $repo"
-        
-        case "$repo" in
-            AOHARU)
-                REPO_CONTEXT="aoharu"
-                sync_pkg_recursive "$category_pkg" 0 1
-                ;;
-            ASURA)
-                REPO_CONTEXT="asura"
-                sync_pkg_asura "$category_pkg" 0 1
-                ;;
-        esac
-    done < "$temp_pkg_list"
-    
-    rm -f "$temp_pkg_list"
-    
-    # Deploy user configs
-    info ""
-    info "Deploying user configurations..."
-    
-    deploy_user_configs "$rdy_file"
-    
-    info "✓ Reproducible deployment complete"
-}
-
-deploy_user_configs() {
-    rdy_file="$1"
-    
-    # Extract user sections
-    awk '/$RDY.User\./,/^[[:space:]]*}[[:space:]]*$/' "$rdy_file" | \
-        grep 'RDY.User\.' | \
-        sed 's/.*$RDY.User\.\([^:]*\):.*/\1/' | \
-        sort -u | \
-        while IFS= read -r username; do
-            [ -z "$username" ] && continue
-            
-            info "  Deploying config for user: $username"
-            
-            # Get home directory
-            if [ "$username" = "root" ]; then
-                home_dir="/root"
-            else
-                home_dir="/home/$username"
-            fi
-            
-            [ ! -d "$home_dir" ] && { warn "Home directory not found: $home_dir"; continue; }
-            
-            # Parse links for this user
-            awk "/$RDY.User.$username:/,/^[[:space:]]*}/" "$rdy_file" | \
-                grep '^[[:space:]]*[0-9]' | \
-                while read -r num dest url; do
-                    dest_path="$home_dir/$dest"
-                    dest_dir=$(dirname "$dest_path")
-                    
-                    mkdir -p "$dest_dir"
-                    
-                    info "    → Downloading: $dest"
-                    
-                    if printf '%s' "$url" | grep -q '\.tar\.gz'; then
-                        curl -fsSL "$url" | tar -xzf - -C "$dest_dir"
-                    else
-                        curl -fsSL "$url" -o "$dest_path"
-                    fi
-                    
-                    chown -R "$username:$username" "$dest_path" 2>/dev/null || true
-                done
-        done
-}
 
 # === ADVANCED USE FLAG SYSTEM ===
 USE_EXPAND="ARCH KERNEL LIBC INIT VIDEO_CARDS INPUT_DEVICES"
@@ -1645,6 +1516,10 @@ parse_astral_stars_config() {
                         esac
                         info "    → usage mode: $USAGE_MODE"
                         ;;
+                    EDITOR)
+                        EDITOR="$value"
+                        info "    → editor: $EDITOR"
+                        ;;
                 esac
                 ;;
             repo)
@@ -1776,14 +1651,8 @@ $AST.core: {
     #DB_DIR = "/var/lib/astral/db"
     INSTALL_ROOT = "/"
     USAGE_MODE = "full"
-};
-
-$AST.repo: {
-    # AOHARU is the official repository
-    AOHARU_URL = "https://izumi-sonoka.github.io/AOHARU/"
-    
-    # ASURA is the overlay/user repository
-    #ASURA_URL = "https://example.com/asura/"
+    astral-env          = "disabled"
+    astral-env-system   = "disabled"
 };
 
 $AST.security: {
@@ -2804,6 +2673,8 @@ Package Management:
   --autoremove            Remove all orphaned packages
   -Re, --resume <pkg>     Resume interrupted build
   --parallel-build <pkgs> Build multiple packages in parallel
+  --parallel-remove <pkgs> Remove multiple packages in parallel
+  --parallel-removedep <pkgs> Remove multiple packages + orphaned deps in parallel
 
 Query & Information:
   -s, --search <pkg>      Search for packages
@@ -3377,7 +3248,27 @@ test_sandbox_isolation() {
 
 is_pkg_installed() {
     pkg="$1"
-    [ -d "$DB_DIR/$pkg" ] || [ -n "$(find "$DB_DIR" -type d -name "$pkg" -maxdepth 2 2>/dev/null)" ]
+    
+    # Check astral's own DB first
+    if [ -d "$DB_DIR/$pkg" ] || [ -n "$(find "$DB_DIR" -type d -name "$pkg" -maxdepth 2 2>/dev/null)" ]; then
+        return 0
+    fi
+    
+    # Check host package manager (Arch Linux)
+    if command -v pacman >/dev/null 2>&1; then
+        if pacman -Q "$pkg" >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    
+    # Check host package manager (Debian/Ubuntu)
+    if command -v dpkg >/dev/null 2>&1; then
+        if dpkg -l "$pkg" >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    
+    return 1
 }
 
 resolve_installed_path() {
@@ -3574,6 +3465,122 @@ parallel_build() {
     
     info "✓ Parallel build complete"
 }
+
+parallel_remove() {
+    max_jobs="${1:-$(nproc)}"
+    shift
+    packages="$*"
+
+    [ -n "$packages" ] || err "no packages specified for parallel removal"
+
+    info "╭────────────────────────────────────────────────────────────────╮"
+    info "│             Parallel Remove Mode ($max_jobs jobs)                    │"
+    info "╰────────────────────────────────────────────────────────────────╯"
+
+    running_jobs=0
+    job_pids=""
+    failed_pkgs=""
+
+    for pkg in $packages; do
+        # Resolve path before forking — resolve_installed_path is read-only
+        pkg_path=$(resolve_installed_path "$pkg") || {
+            warn "Package '$pkg' not installed, skipping."
+            continue
+        }
+
+        # Wait if at job limit
+        while [ "$running_jobs" -ge "$max_jobs" ]; do
+            new_pids=""
+            for pid in $job_pids; do
+                if ! kill -0 "$pid" 2>/dev/null; then
+                    wait "$pid"
+                    exit_code=$?
+                    running_jobs=$((running_jobs - 1))
+                    if [ "$exit_code" -ne 0 ]; then
+                        warn "A removal job (pid $pid) failed"
+                    fi
+                else
+                    new_pids="$new_pids $pid"
+                fi
+            done
+            job_pids="$new_pids"
+            [ "$running_jobs" -ge "$max_jobs" ] && sleep 0.2
+        done
+
+        # Fork removal
+        info "Removing: $pkg"
+        ( remove_pkg_only "$pkg_path" ) &
+        job_pid=$!
+        job_pids="$job_pids $job_pid"
+        running_jobs=$((running_jobs + 1))
+    done
+
+    # Wait for all remaining jobs
+    info "Waiting for all removals to complete..."
+    for pid in $job_pids; do
+        wait "$pid" || warn "A removal job (pid $pid) failed"
+    done
+
+    info "✓ Parallel remove complete"
+}
+
+parallel_removedep() {
+    max_jobs="${1:-$(nproc)}"
+    shift
+    packages="$*"
+
+    [ -n "$packages" ] || err "no packages specified for parallel removedep"
+
+    info "╭────────────────────────────────────────────────────────────────╮"
+    info "│          Parallel RemoveDep Mode ($max_jobs jobs)                    │"
+    info "╰────────────────────────────────────────────────────────────────╯"
+
+    running_jobs=0
+    job_pids=""
+
+    for pkg in $packages; do
+        # Verify installed before forking
+        resolve_installed_path "$pkg" >/dev/null 2>&1 || {
+            warn "Package '$pkg' not installed, skipping."
+            continue
+        }
+
+        # Wait if at job limit
+        while [ "$running_jobs" -ge "$max_jobs" ]; do
+            new_pids=""
+            for pid in $job_pids; do
+                if ! kill -0 "$pid" 2>/dev/null; then
+                    wait "$pid"
+                    exit_code=$?
+                    running_jobs=$((running_jobs - 1))
+                    if [ "$exit_code" -ne 0 ]; then
+                        warn "A removedep job (pid $pid) failed"
+                    fi
+                else
+                    new_pids="$new_pids $pid"
+                fi
+            done
+            job_pids="$new_pids"
+            [ "$running_jobs" -ge "$max_jobs" ] && sleep 0.2
+        done
+
+        # Fork — each removedep_pkg manages its own dep walk independently
+        info "Removing with deps: $pkg"
+        ( removedep_pkg "$pkg" ) &
+        job_pid=$!
+        job_pids="$job_pids $job_pid"
+        running_jobs=$((running_jobs + 1))
+    done
+
+    info "Waiting for all removedep jobs to complete..."
+    for pid in $job_pids; do
+        wait "$pid" || warn "A removedep job (pid $pid) failed"
+    done
+
+    info "✓ Parallel removedep complete"
+}
+
+
 
 # helper: find recipe path - search subdirectories
 recipe_path() {
@@ -5926,7 +5933,7 @@ check_if_user_skipped() {
     local pkg_to_check="$1"
     
     # Check if package is in skip list
-    if [ -n "$ASTRAL_SKIP_PACKAGES" ] && [ -f "$ASTRAL_SKIP_PACKAGES" ]; then
+    if [ -n "${ASTRAL_SKIP_PACKAGES:-}" ] && [ -f "$ASTRAL_SKIP_PACKAGES" ]; then
         if grep -qxF "$pkg_to_check" "$ASTRAL_SKIP_PACKAGES" 2>/dev/null; then
             info "[$pkg_to_check] Skipped by user selection"
             return 0  # Return success to indicate skip
@@ -8279,7 +8286,7 @@ acquire_lock_mkdir() {
                         fi
                         
                         # Show progress every 30 seconds
-                        if [ $((waited % 1)) -eq 0 ] && [ $waited -gt 0 ]; then
+                        if [ $((waited % 30)) -eq 0 ] && [ $waited -gt 0 ]; then
                             if command -v ps >/dev/null 2>&1; then
                                 process_info=$(ps -p "$old_pid" -o comm= 2>/dev/null || printf 'unknown')
                                 lock_host=$(cat "$lockdir/host" 2>/dev/null || printf 'unknown')
@@ -10195,12 +10202,22 @@ case "$1" in
 
   -R|--Remove)
     [ $# -gt 1 ] || err "package name required"
-    remove_pkg "$2"
+    shift
+    if [ $# -eq 1 ]; then
+        remove_pkg "$1"
+    else
+        parallel_remove "$(nproc)" "$@"
+    fi
     ;;
 
   -r|--RemoveDep)
     [ $# -gt 1 ] || err "package name required"
-    removedep_pkg "$2"
+    shift
+    if [ $# -eq 1 ]; then
+        removedep_pkg "$1"
+    else
+        parallel_removedep "$(nproc)" "$@"
+    fi
     ;;
 
   -Cc|--Clean-Cache)
@@ -10248,13 +10265,29 @@ case "$1" in
 
 --config)
     info "=== Astral Configuration ==="
+    
+    # Show make.conf variables
+    info "--- make.conf ---"
     printf "Config File:      %s\n" "$CONFIG_FILE"
     printf "USE_FLAGS:        %s\n" "$USE_FLAGS"
     printf "CFLAGS:           %s\n" "$CFLAGS"
     printf "MAKEFLAGS:        %s\n" "$MAKEFLAGS"
     printf "CCACHE_ENABLED:   %s\n" "$CCACHE_ENABLED"
-    printf "BINPKG_ENABLED:   %s\n" "$BINPKG_ENABLED"
     printf "FEATURES:         %s\n" "$FEATURES"
+    
+    # Load and show astral.stars configuration
+    info "--- astral.stars ($ASTRAL_CONFIG) ---"
+    if [ -f "$ASTRAL_CONFIG" ]; then
+        parse_astral_stars_config "$ASTRAL_CONFIG"
+        printf "Config File:      %s\n" "$ASTRAL_CONFIG"
+        printf "Recipes Dir:     %s\n" "$RECIPES_DIR"
+        printf "DB Dir:          %s\n" "$DB_DIR"
+        printf "Cache Dir:       %s\n" "$CACHE_SRC"
+        printf "Install Root:    %s\n" "$INSTALL_ROOT"
+        printf "Editor:          %s\n" "$EDITOR"
+    else
+        printf "Config File:      %s (not found)\n" "$ASTRAL_CONFIG"
+    fi
     ;;
 
   -V|--Version)
@@ -10603,6 +10636,18 @@ start|stop|restart|enable|disable|status)
      [ $# -gt 1 ] || err "package names required"
      shift
      parallel_build "$(nproc)" "$@"
+     ;;
+
+ --parallel-remove)
+     [ $# -gt 1 ] || err "package names required"
+     shift
+     parallel_remove "$(nproc)" "$@"
+     ;;
+
+ --parallel-removedep)
+     [ $# -gt 1 ] || err "package names required"
+     shift
+     parallel_removedep "$(nproc)" "$@"
      ;;
 
  --verify-integrity)
