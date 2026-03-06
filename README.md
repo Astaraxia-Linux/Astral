@@ -3,7 +3,7 @@
 > *"Because compiling from source should be less painful than a root canal"*
 
 Version: 5.0.0.0 Main  
-Last Updated: 28 February 2026 (GMT+8)  
+Last Updated: 06 March 2026 (GMT+8)  
 Maintained by: One Maniac (yes, just one)
 
 ---
@@ -16,12 +16,15 @@ Maintained by: One Maniac (yes, just one)
 4. [Recipe Formats](#recipe-formats)
 5. [Package Management](#package-management)
 6. [Dependency System](#dependency-system)
-7. [Configuration](#configuration)
-8. [Advanced Features](#advanced-features)
-9. [Recipe Generator](#recipe-generator)
-10. [Troubleshooting](#troubleshooting)
-11. [Contributing](#contributing)
-12. [FAQ](#faq)
+7. [Service Management](#service-management)
+8. [Configuration](#configuration)
+9. [Advanced Features](#advanced-features)
+10. [Security Features](#security-features)
+11. [Transactions & Rollback](#transactions--rollback)
+12. [Recipe Generator](#recipe-generator)
+13. [Troubleshooting](#troubleshooting)
+14. [Contributing](#contributing)
+15. [FAQ](#faq)
 
 ---
 
@@ -38,6 +41,10 @@ Astral is a minimal POSIX package manager for [Astaraxia Linux](https://github.c
 - **Minimal dependencies**: Just `sh`, `curl`, and your tears
 - **Four recipe formats**: dir, v1, v2, and v3 (because backwards compatibility is a thing)
 - **Smart dependency resolution**: It won't delete your `/usr` (anymore :sob:)
+- **Parallel builds and removals**: Because waiting is for the weak
+- **Atomic transactions with rollback**: Because mistakes happen
+- **Built-in service management**: init-system-agnostic, works everywhere
+- **Security features**: GPG signing, certificate pinning, FIM, audit trails
 
 ### Why Not Astral?
 
@@ -62,13 +69,13 @@ You'll need:
 ### Quick Install
 
 ```bash
-# Clone the repository (or download the script)
+# Download the script
 curl -O https://raw.githubusercontent.com/Astaraxia-Linux/Astral/main/astral
 chmod +x astral
 sudo mv astral /usr/bin/
 
-# Initialize directories
-sudo astral --version  # This creates necessary directories
+# Initialize directories (also prints version)
+sudo astral --version
 ```
 
 ### Configuration
@@ -105,19 +112,35 @@ sudo astral -SA package-name
 
 # Build from local recipe
 sudo astral -C category/package-name
+
+# Install multiple packages in parallel
+sudo astral --parallel-build pkg1 pkg2 pkg3
+
+# Resume an interrupted build
+sudo astral -Re package-name
 ```
 
 ### Removing Packages
 
 ```bash
-# Remove package only
+# Remove a single package
 sudo astral -R package-name
+
+# Remove multiple packages in parallel
+sudo astral -R pkg1 pkg2 pkg3
 
 # Remove package + orphaned dependencies
 sudo astral -r package-name
 
+# Remove multiple packages + their orphaned deps in parallel
+sudo astral -r pkg1 pkg2 pkg3
+
 # Remove all orphans (spring cleaning!)
 sudo astral --autoremove
+
+# Explicit parallel remove commands
+sudo astral --parallel-remove pkg1 pkg2 pkg3
+sudo astral --parallel-removedep pkg1 pkg2 pkg3
 ```
 
 ### Searching & Information
@@ -129,11 +152,39 @@ astral -s nano
 # Show package info
 astral -I bash
 
+# Show package info as JSON
+astral -I bash --json
+
 # Show dependency tree
 astral -D gcc
 
+# Check for broken dependencies
+astral -Dc
+
 # Why is this installed?
 astral -w readline
+
+# Preview what would be installed (no changes)
+astral --preview package-name
+
+# Show USE flags
+astral --use
+astral --use package-name
+
+# Count packages
+astral --count          # all
+astral --count aoharu
+astral --count installed
+
+# List installed packages
+astral -ll
+astral -ll --json
+
+# List world set (explicitly installed)
+astral -W
+
+# Show build environment
+astral --show-env
 ```
 
 ### System Maintenance
@@ -141,15 +192,41 @@ astral -w readline
 ```bash
 # Update repository indexes
 sudo astral -u
+sudo astral -u aoharu    # specific repo
 
 # Upgrade all packages (grab some coffee)
 sudo astral --Upgrade-All
 
-# Clean cache
+# Clean cache (uninstalled recipes)
 sudo astral -Cc
 
-# Rebuild file index
+# Rebuild file ownership index
 sudo astral -RI
+
+# Generate dependency graph (.dot format)
+astral --graph-deps package-name
+
+# Validate a recipe file
+astral --validate /path/to/recipe.stars
+
+# Verify installed package file integrity
+astral --verify-integrity package-name
+
+# Verify package builds reproducibly
+astral --verify-reproducible package-name
+
+# Clean temporary build directories
+sudo astral --cleanup-temp
+
+# Check for Astral updates
+astral --check-version
+
+# Update Astral itself
+sudo astral -U
+sudo astral -U dev    # specific branch
+
+# Show current configuration
+astral --config
 ```
 
 ---
@@ -237,7 +314,7 @@ $PKG.Package {
 
 ### v3 Format (Separated Dependencies)
 
-The future is now. Finally separates build-time and runtime dependencies.
+The recommended format. Finally separates build-time and runtime dependencies.
 
 ```bash
 $PKG.Version = "3"
@@ -281,6 +358,14 @@ $PKG.Package: {
     cd package-1.2.3
     make DESTDIR="$PKGDIR" install
 };
+
+$PKG.PostInstall: {
+    # Optional: runs after installation
+};
+
+$PKG.PostRemove: {
+    # Optional: runs after removal
+};
 ```
 
 **Use when**: You want a clean system without build tools polluting your runtime.
@@ -289,6 +374,7 @@ $PKG.Package: {
 - `BDepends`: Build-time only (removed after build)
 - `RDepends`: Runtime dependencies (kept forever)
 - `Optional`: Nice-to-have features (user choice)
+- `PostInstall` / `PostRemove`: Hooks that run after install/removal
 
 ---
 
@@ -302,22 +388,56 @@ The "world set" is your list of explicitly installed packages. Think of it as yo
 # List world set
 astral -W
 
-# Add to world (manual tracking)
-echo "my-package" >> /var/lib/astral/db/world_set
-
-# Remove from world
-astral -R my-package  # Also removes from world
+# World set management
+astral --world-add package-name
+astral --world-remove package-name
+astral --world-show
+astral --world-sets          # show available sets (@system, @world)
+astral --world-depclean      # world-aware dependency cleaning
+astral --calc-system         # calculate @system set
 ```
 
 **Important**: Orphaned packages (not in world, not depended on) can be removed with `--autoremove`.
+
+### Package Holds
+
+Prevent specific packages from being upgraded:
+
+```bash
+# Hold a package at its current version
+astral --hold package-name
+
+# Release the hold
+astral --unhold package-name
+
+# See what's held
+astral --list-held
+```
+
+### Package Masking
+
+Block specific package versions:
+
+```bash
+# Mask a version range
+astral --mask "firefox >= 120.0"
+
+# Unmask
+astral --unmask firefox
+
+# /etc/astral/package.mask (manual editing)
+broken-package
+experimental-tool >= 3.0
+old-library < 2.0
+```
 
 ### Dependency Resolution
 
 Astral uses recursive dependency resolution. It's like a family tree, but with software.
 
 ```bash
-# Preview what will be installed
-astral -p bash
+# Preview what will be installed (no changes made)
+astral --preview bash
 
 # Interactive dependency selection
 astral -S bash
@@ -340,11 +460,29 @@ Some packages might already be on your system. Astral checks:
 4. Your manually configured `HOST_PROVIDED` list
 
 ```bash
-# Test if package is on host
+# Test if a package is provided by the host
 astral --host-check gcc
 
-# Show all host dependencies
+# Show all detected host dependencies
 astral --host-deps
+```
+
+### Virtual Packages
+
+Virtual packages allow alternatives:
+
+```bash
+# /etc/astral/virtuals/compiler
+gcc
+clang
+tcc
+```
+
+If you request `virtual/compiler`, Astral checks if *any* provider is installed.
+
+```bash
+# List all virtual package providers
+astral --list-virtuals
 ```
 
 ---
@@ -369,19 +507,6 @@ python < 3.12
 
 Operators: `=`, `>=`, `<=`, `>`, `<`
 
-### Virtual Packages
-
-Virtual packages provide alternatives:
-
-```bash
-# /etc/astral/virtuals/compiler
-gcc
-clang
-tcc
-```
-
-If you request `virtual/compiler`, Astral checks if *any* provider is installed.
-
 ### Circular Dependencies
 
 Astral detects circular dependencies and will yell at you:
@@ -391,6 +516,35 @@ ERROR: [pkg-a] CIRCULAR DEPENDENCY DETECTED! Chain: pkg-a -> pkg-b -> pkg-a
 ```
 
 **Solution**: Fix your damn dependencies. Or cry. Both work.
+
+---
+
+## Service Management
+
+Astral has built-in service management that auto-detects your init system. No need to remember which tool your distro uses.
+
+```bash
+# Start / stop / restart a service
+sudo astral start sshd
+sudo astral stop sshd
+sudo astral restart sshd
+
+# Enable / disable at boot
+sudo astral enable sshd
+sudo astral disable sshd
+
+# Check service status
+astral status sshd
+```
+
+Supported init systems, detected automatically:
+- **systemd** — uses `systemctl`
+- **OpenRC** — uses `rc-service` / `rc-update`
+- **runit** — uses `sv` / symlinks in `/var/service`
+- **s6** — uses `s6-rc` / `s6-rc-bundle-update`
+- **SysVinit** — uses `service` / `update-rc.d` / `chkconfig`
+
+Astral tells you which init system it detected when you run a service command. If it gets it wrong, file a bug.
 
 ---
 
@@ -418,7 +572,7 @@ FEATURES="ccache parallel-make strip"
 # Binary packages (not implemented yet, lol)
 BINPKG_ENABLED="no"
 
-# Host-provided packages
+# Host-provided packages (won't try to install these)
 HOST_PROVIDED="gcc make glibc linux-headers"
 
 # Stripping
@@ -426,33 +580,48 @@ STRIP_BINARIES="yes"
 STRIP_LIBS="yes"
 STRIP_STATIC="yes"
 
+# Parallel downloads
+ASTRAL_MAX_PARALLEL=4
+
 # Collision detection
 COLLISION_DETECT="yes"
 GHOST_FILE_CHECK="yes"
 ```
 
-### Package Masking
+### astral.stars
 
-Prevent installation of specific versions:
-
-```bash
-# /etc/astral/package.mask
-broken-package
-experimental-tool >= 3.0
-old-library < 2.0
-```
+Global Astral configuration lives at `/etc/astral/astral.stars`:
 
 ```bash
-# Mask a package
-astral --mask "firefox >= 120.0"
+# Create default config
+sudo astral --astral-stars-create
 
-# Unmask
-astral --unmask firefox
+# Edit and hot-reload
+sudo astral --astral-stars-edit /etc/astral/astral.stars
 ```
 
 ---
 
 ## Advanced Features
+
+### Parallel Builds and Removals
+
+Build or remove multiple packages concurrently:
+
+```bash
+# Install multiple packages in parallel (respects dependency order)
+sudo astral --parallel-build pkg1 pkg2 pkg3
+
+# Remove multiple packages in parallel
+sudo astral --parallel-remove pkg1 pkg2 pkg3
+sudo astral --parallel-removedep pkg1 pkg2 pkg3
+
+# -R and -r also dispatch to parallel automatically when given multiple packages
+sudo astral -R pkg1 pkg2 pkg3
+sudo astral -r pkg1 pkg2 pkg3
+```
+
+Uses `$(nproc)` jobs by default.
 
 ### Parallel Downloads
 
@@ -463,11 +632,9 @@ Downloads up to 4 sources concurrently (configurable):
 ASTRAL_MAX_PARALLEL=4
 ```
 
-Saves time when packages have multiple source files.
-
 ### ccache Support
 
-ccache caches compilation objects. Install once, compile twice (or more) at lightning speed.
+ccache caches compilation objects. Install once, compile twice at lightning speed.
 
 ```bash
 # Install ccache
@@ -490,24 +657,41 @@ astral --ccache-clear
 Resume interrupted builds:
 
 ```bash
-# If build fails or is interrupted
 sudo astral -Re package-name
-
-# Astral resumes from last successful stage
 ```
 
-Stages: `configure` → `build` → `package`
+Stages: `configure` → `build` → `package`. Resumes from the last successful stage.
+
+### Sandbox Isolation
+
+Packages build in an isolated sandbox. Astral picks the best available method:
+
+1. **Bubblewrap** (most secure, preferred)
+2. **Chroot** (requires root)
+3. **Fakechroot** (userspace isolation, no root needed)
+4. **Fakeroot** (minimal, better than nothing)
+
+```bash
+# Test sandbox isolation on your system
+sudo astral --sandbox-test
+```
+
+Safety features can be toggled:
+
+```bash
+# Show status of all safety features
+astral --safety-status
+
+# Enable/disable specific features (script-check, collision, etc.)
+sudo astral --on script-check
+sudo astral --off collision
+```
 
 ### Ghost File Detection
 
-Detects files installed outside `$PKGDIR` (packaging bugs):
+Detects files installed outside `$PKGDIR` (packaging bugs). Automatically checked during installation — shows a warning if a package recipe tries to install directly to `/usr`.
 
-```bash
-# Automatically checked during installation
-# Shows warning if package installs directly to /usr
-```
-
-**What to do**: File a bug report. The package recipe is broken.
+**What to do**: File a bug. The recipe is broken.
 
 ### Atomic Installation
 
@@ -515,8 +699,130 @@ Packages are installed atomically. Either everything succeeds, or nothing happen
 
 **Benefits**:
 - No half-installed packages
-- Safe interruption (Ctrl+C won't break your system)
-- Rollback on failure
+- Safe interruption (Ctrl+C won't wreck your system)
+- Automatic rollback on failure
+
+### JSON Output
+
+Several commands support `--json` for scripting:
+
+```bash
+astral -s package-name --json
+astral -I package-name --json
+astral -ll --json
+```
+
+### Chroot
+
+```bash
+# Chroot into a directory (e.g. a new Astaraxia install)
+sudo astral --chroot /mnt/astaraxia
+```
+
+---
+
+## Security Features
+
+### GPG Signing
+
+```bash
+# Import a repository GPG key
+sudo astral --import-key https://example.com/repo.asc
+
+# Verify a file's GPG signature
+astral --verify-sig /path/to/file.tar.gz
+
+# Generate a new GPG signing key
+sudo astral --gpg-gen-key "My Signing Key"
+
+# List managed keys
+astral --gpg-list-keys
+
+# Set trust level (unknown|never|marginal|full|ultimate)
+sudo astral --gpg-set-trust <key-id> full
+
+# Generate a revocation certificate
+astral --gpg-revoke <key-id>
+
+# Rotate signing key
+sudo astral --gpg-rotate <old-key-id> <new-key-id>
+
+# Build Web of Trust graph
+astral --gpg-wot
+```
+
+### Certificate Pinning
+
+Pin HTTPS certificates for extra paranoia:
+
+```bash
+# Pin a host's certificate
+sudo astral --pin-cert example.com
+sudo astral --pin-cert example.com:443
+
+# Verify a pinned certificate hasn't changed
+astral --verify-cert example.com
+```
+
+### File Integrity Monitoring (FIM)
+
+Track file hashes and detect unauthorized changes:
+
+```bash
+# Record a file's current hash
+sudo astral --fim-record /etc/passwd
+
+# Check if a file has changed since recording
+astral --fim-check /etc/passwd
+
+# Scan all tracked files at once
+astral --fim-scan
+```
+
+### Audit Trail
+
+Recipe audit log for accountability:
+
+```bash
+# Query the audit log
+astral --audit-query
+
+# Verify a recipe's audit trail
+astral --audit-verify package-name
+```
+
+### Lock System
+
+```bash
+# Show current lock status (who's holding it, for how long)
+astral --lock-info
+
+# Test the lock system
+astral --lock-test
+```
+
+---
+
+## Transactions & Rollback
+
+Every install/remove operation is a transaction. Nothing is permanent until it commits.
+
+```bash
+# List transactions
+astral --transactions          # all
+astral --transactions active
+astral --transactions committed
+
+# Roll back a specific transaction by ID
+sudo astral --rollback <transaction-id>
+
+# Recover from incomplete/interrupted transactions
+sudo astral --recover
+```
+
+**How it works**: Before any operation, Astral snapshots the DB and all affected paths. If something goes wrong (power cut, Ctrl+C, build failure), `--recover` finds incomplete transactions and rolls them back automatically.
+
+**Note**: This is Astral's package-level transaction system, separate from `astral-env`'s system-level rollback.
 
 ---
 
@@ -524,7 +830,7 @@ Packages are installed atomically. Either everything succeeds, or nothing happen
 
 ### astral-recipegen
 
-A tool to generate `.stars` recipes without manually typing boilerplate.
+Generates `.stars` recipes so you don't have to type boilerplate.
 
 ### Interactive Mode
 
@@ -532,25 +838,20 @@ A tool to generate `.stars` recipes without manually typing boilerplate.
 astral-recipegen interactive v3
 ```
 
-Prompts for:
-- Package name
-- Version
-- Description
-- Dependencies
-- Build system
+Prompts for package name, version, description, dependencies, and build system.
 
 ### Auto-Detection
 
 ```bash
-astral-recipegen auto nano https://nano.org/dist/nano-8.2.tar.xz
+astral-recipegen auto nano https://nano-editor.org/dist/v8/nano-8.2.tar.xz
 ```
 
-Does the following:
+Does the following automatically:
 1. Downloads source
-2. Detects build system (autotools/cmake/meson/etc.)
+2. Detects build system (autotools/cmake/meson/python/make)
 3. Extracts version from filename
 4. Generates checksum
-5. Creates recipe
+5. Creates v3 recipe
 
 **Magic**: It actually works most of the time.
 
@@ -559,9 +860,10 @@ Does the following:
 ```bash
 astral-recipegen template cmake v3 -o mypackage.stars
 astral-recipegen template python v2
+astral-recipegen template autotools v3
+astral-recipegen template meson v3
+astral-recipegen template make v3
 ```
-
-Generates pre-filled templates for common build systems.
 
 ### Converting Directory Recipes
 
@@ -569,16 +871,14 @@ Generates pre-filled templates for common build systems.
 astral-recipegen dir-to-stars /usr/src/astral/recipes/app-editors/nano
 ```
 
-Converts old directory-based recipes to `.stars` format.
-
 ### Migration
 
 ```bash
-# Migrate v2 → v3
+# Migrate v1/v2 → v3
 astral-recipegen migrate mypackage.stars v3
 
-# Smart dependency splitting (auto-detects build vs runtime)
-astral-recipegen migrate old-recipe.stars v3
+# Convert between any versions
+astral-recipegen convert mypackage.stars v2
 ```
 
 ### From PKGBUILD (Experimental)
@@ -587,32 +887,33 @@ astral-recipegen migrate old-recipe.stars v3
 astral-recipegen from-pkgbuild /path/to/PKGBUILD v3
 ```
 
-Converts Arch Linux PKGBUILDs. Results may vary. Review manually.
+Converts Arch Linux PKGBUILDs. Results may vary. Always review manually.
+
+### Git Support
+
+```bash
+astral-recipegen git
+```
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
+### "Another instance of astral is already running" / Stale Lock
 
-#### "Another instance of astral is already running"
-
-Someone (probably you) is already running astral.
-
-**Fix**:
 ```bash
 # Check if actually running
 ps aux | grep astral
 
-# If it's a stale lock
+# Show lock info
+astral --lock-info
+
+# Remove stale lock manually (only if astral is definitely not running)
 sudo rm -rf /var/lock/astral.lock.d
 ```
 
-#### "Package version X.Y.Z is MASKED"
+### "Package version X.Y.Z is MASKED"
 
-The package version is explicitly blocked.
-
-**Fix**:
 ```bash
 # Check why
 cat /etc/astral/package.mask
@@ -621,68 +922,72 @@ cat /etc/astral/package.mask
 astral --unmask package-name
 ```
 
-#### "CIRCULAR DEPENDENCY DETECTED"
+### "CIRCULAR DEPENDENCY DETECTED"
 
-Your dependency graph has a loop. Math says this is impossible, but here we are.
+Fix the recipes. You can't install A if A depends on B and B depends on A. It's turtles all the way down.
 
-**Fix**: Fix the recipes. You can't install A if A depends on B and B depends on A. It's turtles all the way down.
+### "Checksum mismatch"
 
-#### "Checksum mismatch"
+**Causes**: Source file changed upstream, network corruption, or a very bad day (MITM).
 
-The downloaded file doesn't match the expected checksum.
-
-**Causes**:
-1. Source file changed (bad upstream)
-2. Network corruption (bad luck)
-3. MITM attack (bad day)
-
-**Fix**:
 ```bash
 # Re-download
 rm /var/cache/astral/src/*
 
-# If it persists, update checksum in recipe
+# Update checksum in recipe if source changed upstream
 sha256sum /var/cache/astral/src/package-1.2.3.tar.gz
 ```
 
-#### "Failed to download source"
+### "Failed to download source"
 
-Network issues or dead link.
-
-**Fix**:
-1. Check internet connection (turn it off and on again)
+1. Check your internet connection (turn it off and on again)
 2. Try again later
-3. Update recipe with working mirror
+3. Update the recipe with a working mirror
 
-#### Build fails with "command not found"
+### Build fails with "command not found"
 
 Missing build dependency.
 
-**Fix**:
 ```bash
-# Check what's missing
-astral -D package-name
-
-# Install missing dependencies
-sudo astral -S missing-package
+astral -D package-name        # check dependency tree
+sudo astral -S missing-dep    # install what's missing
 ```
+
+### Interrupted build / half-installed package
+
+```bash
+# Resume from last successful stage
+sudo astral -Re package-name
+
+# Or recover all incomplete transactions
+sudo astral --recover
+```
+
+### Service command fails / wrong init system detected
+
+```bash
+# Check what Astral thinks your init system is
+astral status any-service-name
+# Output includes "Using init system: <name>"
+```
+
+If it's wrong, file a bug with your `/proc/1/comm` output.
 
 ### Debugging
 
-Enable verbose output:
-
 ```bash
+# Verbose output
 sudo astral -v -S package-name
-```
 
-Check build logs:
-
-```bash
-# Build logs
+# Check build logs
 ls /tmp/astral-build-*
 
-# Sync logs
+# Check sync logs
 tail -f /var/log/astral_sync_*.log
+
+# Run test suite
+sudo astral --test all
+sudo astral --test quick
 ```
 
 ---
@@ -702,10 +1007,11 @@ tail -f /var/log/astral_sync_*.log
 - **Use `$PKGDIR`** for installation (never install directly to `/`)
 - **Strip binaries** unless there's a good reason
 - **Clean up** (remove docs/examples if nobody reads them)
+- **PostInstall/PostRemove hooks** for anything that needs to happen after the files land
 
 ### Submitting to ASURA
 
-ASURA is the community overlay. Submit your recipes there.
+ASURA is the community overlay.
 
 ```bash
 # Fork the repository
@@ -713,7 +1019,6 @@ git clone https://codeberg.org/Izumi/ASURA
 
 # Add your recipe
 cd ASURA/recipes
-mkdir -p category/package-name
 cp your-recipe.stars category/package-name.stars
 
 # Commit and push
@@ -724,12 +1029,11 @@ git push
 
 ### Contributing to Astral Core
 
-1. Read the code (good luck)
+1. Read the code (good luck — it's 10k lines of sh)
 2. Test your changes (seriously)
-3. Submit a PR
-4. Wait for the One Maniac™ to review (may take up to 3 business weeks)
-
-**Coding style**: POSIX sh, no bashisms, keep it stupid simple.
+3. No bashisms — POSIX sh only
+4. Submit a PR
+5. Wait for the One Maniac™ to review (may take up to 3 business weeks)
 
 ---
 
@@ -745,7 +1049,7 @@ Because we're special snowflakes who compile from source.
 
 ### Does Astral support binary packages?
 
-Technically yes (`BINPKG_ENABLED="no"` in the config), but actually no.
+Technically yes (`BINPKG_ENABLED="no"` in the config), but actually no. Not yet.
 
 ### Can I use Astral on [insert distro here]?
 
@@ -764,12 +1068,18 @@ Define "stable". It won't delete your `/usr` anymore, so... yes?
 Like "astral projection", but for packages.
 
 ### What's the difference between AOHARU and ASURA?
+
 - **AOHARU**: Official, manually reviewed, trusted
 - **ASURA**: Community-contributed, use at your own risk
 
-### Do I need to review recipes?  
+### Do I need to review recipes?
+
 For AOHARU: No, we review them.  
 For ASURA: **YES, ALWAYS.** Never run untrusted code as root.
+
+### What's astral-env?
+
+It's the declarative system configuration layer that sits on top of Astral. It lets you describe your entire system — packages, services, dotfiles, snapshots — in a `.stars` file and apply it all at once. [Read the astral-env docs](https://github.com/Astaraxia-Linux/astral-env).
 
 ### Who maintains this?
 
@@ -781,7 +1091,7 @@ One Maniac. Just one. Send help (or coffee).
 
 - **Created by**: One Maniac™
 - **Inspired by**: Gentoo Portage, Arch Pacman, KISS Linux, and pain
-- **Special thanks**: Everyone who reported bugs instead of rage-quitting (if there's one)
+- **Special thanks**: Everyone who reported bugs instead of rage-quitting (both of you)
 
 ---
 
@@ -796,12 +1106,12 @@ Just plain GPL-3.0
 > *"Astral: Because life's too short to not compile everything from source"*  
 > — Nobody, ever
 
-Astral is still evolving. Expect the code to be spaghetti, the philosophy to be based, and the implementation to be extremely transparent.
+Astral is still evolving. The code is still spaghetti. The philosophy is still based. The implementation is extremely transparent (you can read all 10,000+ lines of it).
 
-If you made it this far, congratulations! You're either very thorough or very bored. Either way, happy compiling!
+If you made it this far, congratulations. You're either very thorough, very bored, or writing documentation for a One Maniac™ project at 2am. Either way, happy compiling.
 
 ---
 
-**Last updated**: 28 February 2026 (GMT+8)  
+**Last updated**: 06 March 2026 (GMT+8)  
 **Documentation version**: 5.0  
-**Sanity level**: Questionable
+**Sanity level**: Questionable, as always
