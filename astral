@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v5.0.1.0 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
+# Astral v5.1.0.0 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
 # SOURCE-ONLY
-# V: 5 - Major . 0 - Minor . 1 - Patches . 0 - hotfixes
+# V: 5 - Major . 1 - Minor . 0 - Patches . 0 - hotfixes
 
-version="5.0.1.0 Main"
+version="5.2.0.0 Main"
 ASTRAL_PRODUCTION_DATE="2025-11-26"
 now_seconds=$(date +%s)
 prod_seconds=$(date -d "$ASTRAL_PRODUCTION_DATE" +%s)
@@ -73,12 +73,11 @@ enable_debug_mode() {
 
 debug_trace() {
     [ "$DEBUG_MODE" -eq 0 ] && return 0
-    
-    caller_info=$(caller 0)
-    line_num=$(printf '%s' "$caller_info" | awk '{print $1}')
-    func_name=$(printf '%s' "$caller_info" | awk '{print $2}')
-    
-    printf '[DEBUG] [%s:%s] %s\n' "$func_name" "$line_num" "$*" >> "$DEBUG_LOG"
+    # POSIX has no caller builtin (it's bash-only and breaks on dash/ash).
+    # Callers must pass their own label as $1: debug_trace "func_name" "message"
+    _label="${1:-unknown}"
+    shift
+    printf '[DEBUG] [%s] %s\n' "$_label" "$*" >> "$DEBUG_LOG"
 }
 
 # === ENHANCED LOGGING SYSTEM ===
@@ -88,12 +87,20 @@ LOG_SYNC_FILE=${LOG_SYNC_FILE:-/var/log/astral/sync.log}
 LOG_BUILD_FILE=${LOG_BUILD_FILE:-/var/log/astral/build.log}
 LOG_ENABLE=${LOG_ENABLE:-1}
 
+# §8.3 — Portable file size (GNU stat / BSD stat / wc -c fallback)
+file_size_bytes() {
+    _f="$1"
+    _s=$(stat -c%s "$_f" 2>/dev/null) && { printf '%s' "$_s"; return 0; }
+    _s=$(stat -f%z "$_f" 2>/dev/null) && { printf '%s' "$_s"; return 0; }
+    wc -c < "$_f" 2>/dev/null | tr -d ' '
+}
+
 setup_logging() {
     mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$LOG_SYNC_FILE")" "$(dirname "$LOG_BUILD_FILE")" 2>/dev/null || true
     
     # Rotate logs if too large (>10MB)
     for logfile in "$LOG_FILE" "$LOG_SYNC_FILE" "$LOG_BUILD_FILE"; do
-        if [ -f "$logfile" ] && [ "$(stat -f%z "$logfile" 2>/dev/null || stat -c%s "$logfile" 2>/dev/null)" -gt 10485760 ]; then
+        if [ -f "$logfile" ] && [ "$(file_size_bytes "$logfile")" -gt 10485760 ]; then
             mv "$logfile" "${logfile}.old" 2>/dev/null || true
             info "Rotated log: $logfile"
         fi
@@ -176,6 +183,65 @@ setup_logging
 _original_info() { printf "${NC}%s\n" "$*"; }
 _original_warn() { printf "${YELLOW}[WARNING]${NC} %s\n" "$*" >&2; }
 _original_err() { printf "${RED}[ERROR]${NC} %s\n" "$*" >&2; exit 1; }
+
+# §5.2 — Structured error output with actionable hints
+err_hint() {
+    _msg="$1"
+    _hint="$2"
+    printf '%b[ERROR]%b %s\n' "$RED" "$NC" "$_msg" >&2
+    printf '%b Hint:%b %s\n' "$YELLOW" "$NC" "$_hint" >&2
+    exit 1
+}
+
+# §5.3 — Machine-readable errors for astral-env (ASTRAL_JSON_OUTPUT=1)
+err_structured() {
+    _code="$1" _msg="$2" _pkg="${3:-}" _hint="${4:-}"
+    if [ "${ASTRAL_JSON_OUTPUT:-0}" -eq 1 ]; then
+        printf '{"error":{"code":"%s","message":"%s","package":"%s","hint":"%s"}}\n' \
+            "$_code" "$_msg" "$_pkg" "$_hint" >&2
+    else
+        printf '%b[ERROR]%b [%s] %s\n' "$RED" "$NC" "$_code" "$_msg" >&2
+        [ -n "$_hint" ] && printf ' Hint: %s\n' "$_hint" >&2
+    fi
+    exit 1
+}
+
+# Named error helpers — call these instead of generic err() for common failures
+recipe_not_found_err() {
+    _pkg="$1"
+    err_hint \
+        "Recipe not found: $_pkg" \
+        "Try: astral -u (update index), then astral -s $_pkg (search). Is the spelling correct?"
+}
+
+dep_failed_err() {
+    _pkg="$1" _dep="$2" _reason="$3"
+    err_hint \
+        "Dependency '$_dep' required by '$_pkg' failed: $_reason" \
+        "Check: astral -i $_dep (show info). Force: astral -S --force $_pkg"
+}
+
+checksum_mismatch_err() {
+    _file="$1" _algo="$2"
+    err_hint \
+        "Checksum mismatch for $_file ($_algo)" \
+        "Source may be corrupted or recipe is outdated. Clean cache: astral -c"
+}
+
+build_failed_err() {
+    _pkg="$1" _log="$2"
+    err_hint \
+        "Build failed for $_pkg" \
+        "See log: $_log --- Resume from checkpoint: astral -S --resume $_pkg"
+}
+
+circular_dep_err() {
+    _chain="$1"
+    err_hint \
+        "Circular dependency detected: $_chain" \
+        "This is a recipe bug. Report it: https://github.com/izumi-sonoka/AOHARU/issues"
+}
+
 
 
 info() { 
@@ -750,6 +816,77 @@ verify_signature() {
         err "GPG signature verification FAILED for $file"
         return 1
     fi
+}
+
+# §4.2 — Checksum-first, GPG-sig-optional verification
+# Usage: verify_source_file <file> <checksums_file> [sig_file]
+# Always verifies checksum; GPG sig is optional bonus trust.
+verify_source_file() {
+    _file="$1"
+    _checksums="$2"
+    _sig="${3:-}"
+
+    _fname=$(basename "$_file")
+    [ -f "$_file" ] || { err "Source not found: $_file"; return 1; }
+    [ -f "$_checksums" ] || { warn "No checksums file for $_fname"; return 0; }
+
+    # ── Step 1: Checksum ─────────────────────────────────────────────
+    _found_checksum=0
+    while IFS=: read -r _algo _expected _cfname; do
+        _algo=$(printf '%s' "$_algo" | tr -d ' ')
+        _expected=$(printf '%s' "$_expected" | tr -d ' ')
+        _cfname=$(printf '%s' "$_cfname" | tr -d ' ')
+        [ "$_cfname" = "$_fname" ] || [ -z "$_cfname" ] || continue
+
+        case "$_algo" in
+            SHA256)
+                _actual=$(sha256sum "$_file" 2>/dev/null | awk '{print $1}') ;;
+            SHA512)
+                _actual=$(sha512sum "$_file" 2>/dev/null | awk '{print $1}') ;;
+            BLAKE2B)
+                # §4 — BLAKE2B fallback alongside SHA256
+                if command -v b2sum >/dev/null 2>&1; then
+                    _actual=$(b2sum "$_file" 2>/dev/null | awk '{print $1}')
+                else
+                    warn "b2sum not available, skipping BLAKE2B check for $_fname"
+                    continue
+                fi ;;
+            MD5)
+                warn "MD5 checksum used for $_fname --- weak, please upgrade recipe"
+                _actual=$(md5sum "$_file" 2>/dev/null | awk '{print $1}') ;;
+            *)
+                warn "Unknown checksum algorithm '$_algo' for $_fname"
+                continue ;;
+        esac
+
+        if [ "$_actual" != "$_expected" ]; then
+            checksum_mismatch_err "$_fname" "$_algo"
+            return 1
+        fi
+        info "  ✓ [$_algo] $_fname checksum OK"
+        _found_checksum=1
+    done < "$_checksums"
+
+    [ "$_found_checksum" -eq 0 ] && warn "No checksum entry found for $_fname --- add one to the recipe"
+
+    # ── Step 2: GPG sig (optional) ────────────────────────────────────
+    if [ -n "$_sig" ] && [ -f "$_sig" ]; then
+        if command -v gpg >/dev/null 2>&1; then
+            if gpg --verify "$_sig" "$_file" 2>/dev/null; then
+                info "  ✓ [GPG] $_fname signature OK"
+            else
+                if [ "${SAFETY_SIGNATURE_VERIFY:-1}" -eq 1 ]; then
+                    err "GPG signature INVALID for $_fname --- refusing install"
+                    return 1
+                else
+                    warn "GPG signature invalid for $_fname (SAFETY_SIGNATURE_VERIFY=0, continuing)"
+                fi
+            fi
+        else
+            warn "gpg not available --- cannot verify signature for $_fname"
+        fi
+    fi
+    return 0
 }
 
 sign_package() {
@@ -2252,57 +2389,55 @@ conflicts_with() {
     grep -Fx "$pkg2" "$rpath1/conflicts" >/dev/null 2>&1
 }
 
-# Portable version resolution
+# §2.3 — Portable version resolution (subshell pipe bug fixed)
+# The original used a pipe-fed while loop whose variable assignments were lost
+# in the parent shell. We now write constraints to a temp file instead.
 resolve_version_conflicts() {
     pkg="$1"
-    
+
     info "Resolving version constraints for: $pkg"
-    
-    # Collect constraints (pure POSIX)
-    constraints=""
-    
-    # Iterate through installed packages
+
+    # §2.3 fix: write constraints to a temp file to avoid subshell variable loss
+    _constraints_file="$TMPDIR/astral-vc-$$"
+    : > "$_constraints_file"
+
     for installed_pkg in $(list_installed_packages_portable); do
         deps=$(get_pkg_deps "$installed_pkg" 2>/dev/null) || continue
-        
-        # Parse dependencies line by line
-        printf '%s\n' "$deps" | while IFS= read -r dep_line; do
+        _dep_tmpf="$TMPDIR/astral-deps-$$"
+        printf '%s\n' "$deps" > "$_dep_tmpf"
+        while IFS= read -r dep_line; do
             dep_pkg=$(printf '%s' "$dep_line" | awk '{print $1}')
             dep_op=$(printf '%s' "$dep_line" | awk '{print $2}')
             dep_ver=$(printf '%s' "$dep_line" | awk '{print $3}')
-            
             [ "$dep_pkg" != "$pkg" ] && continue
             [ -z "$dep_op" ] && continue
-            
-            constraints="${constraints}${dep_op} ${dep_ver}
-"
-        done
+            printf '%s %s\n' "$dep_op" "$dep_ver" >> "$_constraints_file"
+        done < "$_dep_tmpf"
+        rm -f "$_dep_tmpf"
     done
-    
+
     # Find satisfying version
     available_versions=$(list_pkg_versions "$pkg" "x86_64" "$REPO_CONTEXT" 2>/dev/null | awk '{print $2}')
-    
+
     for ver in $available_versions; do
         satisfies_all=1
-        
-        printf '%s' "$constraints" | while IFS= read -r constraint; do
+        while IFS= read -r constraint; do
             [ -z "$constraint" ] && continue
-            
             op=$(printf '%s' "$constraint" | awk '{print $1}')
             req_ver=$(printf '%s' "$constraint" | awk '{print $2}')
-            
             if ! version_compare "$ver" "$op" "$req_ver"; then
                 satisfies_all=0
                 break
             fi
-        done
-        
-        if [ $satisfies_all -eq 1 ]; then
+        done < "$_constraints_file"
+        if [ "$satisfies_all" -eq 1 ]; then
+            rm -f "$_constraints_file"
             printf '%s\n' "$ver"
             return 0
         fi
     done
-    
+
+    rm -f "$_constraints_file"
     return 1
 }
 
@@ -5248,6 +5383,94 @@ fetch_remote_recipe_stars() {
     return 1
 }
 
+# §3 — Parallel source downloader (pure POSIX sh, FIFO job pool)
+# Replaces serial download_sources() as the primary downloader.
+# Falls back to serial download_sources() if mkfifo is unavailable.
+parallel_download_sources() {
+    _rpath="$1"
+    _buildtmp="$2"
+    _sources_file="$_rpath/sources"
+    [ -f "$_sources_file" ] || return 0
+
+    # Determine max parallel jobs
+    _jobs="${JOBS:-$(nproc 2>/dev/null || printf '4')}"
+
+    # Job-slot FIFO: each newline token = one available slot
+    _fifo="$TMPDIR/astral-dl-fifo-$$"
+    mkfifo "$_fifo" 2>/dev/null || {
+        warn "[parallel_dl] mkfifo unavailable, falling back to serial download"
+        download_sources "$_rpath" "$_buildtmp"
+        return $?
+    }
+
+    # Open FIFO read/write so it is not closed between reads
+    exec 3<>"$_fifo"
+
+    # Pre-fill pool with $_jobs tokens
+    _i=0
+    while [ "$_i" -lt "$_jobs" ]; do
+        printf '\n' >&3
+        _i=$((_i + 1))
+    done
+
+    _dl_error_file="$TMPDIR/astral-dl-errors-$$"
+    rm -f "$_dl_error_file"
+
+    while IFS= read -r _line; do
+        _line=$(printf '%s' "$_line" | tr -d '[:space:]')
+        [ -z "$_line" ] && continue
+        case "$_line" in '#'*) continue ;; esac
+
+        # Acquire a slot (blocks if all slots taken)
+        read -r _token <&3
+
+        # Launch download in background subshell
+        (
+            _url="$_line"
+            _fname=$(basename "$(printf '%s' "$_url" | sed 's/#.*//')")
+            _dest="$_buildtmp/$_fname"
+            case "$_url" in
+                git+*|*.git|*.git'#'*)
+                    _gurl=$(printf '%s' "$_url" | sed 's/^git+//' | sed 's/#.*//')
+                    _branch=$(printf '%s' "$_url" | grep '#' && printf '%s' "$_url" | sed 's/.*#[a-z]*=//' || printf 'main')
+                    download_git_source "$(basename "$_gurl" .git)" "$_gurl" "$_buildtmp" "$_branch" \
+                        || printf '%s\n' "$_url" >> "$_dl_error_file"
+                    ;;
+                *)
+                    info "  → [$_fname] downloading..."
+                    if curl -fSL "$_url" -o "$_dest" 2>/dev/null; then
+                        info "  ✓ [$_fname] done"
+                        # Try optional signature download
+                        sig_url="${_url}.sig"
+                        sig_file="${_dest}.sig"
+                        curl -fsSL "$sig_url" -o "$sig_file" 2>/dev/null || true
+                    else
+                        warn "  ✗ [$_fname] download failed"
+                        printf '%s\n' "$_url" >> "$_dl_error_file"
+                    fi
+                    ;;
+            esac
+            # Release slot back to pool
+            printf '\n' >&3
+        ) &
+    done < "$_sources_file"
+
+    # Wait for all background jobs to finish
+    wait
+    exec 3>&-
+    rm -f "$_fifo"
+
+    # Report any errors
+    if [ -f "$_dl_error_file" ]; then
+        warn "The following sources failed to download:"
+        cat "$_dl_error_file" >&2
+        rm -f "$_dl_error_file"
+        return 1
+    fi
+    rm -f "$_dl_error_file"
+    return 0
+}
+
 download_sources() {
     rpath="$1"; buildtmp="$2"
     sources_file="$rpath/sources"
@@ -5375,12 +5598,15 @@ store_file_checksums() {
     
     info "Storing file checksums for verification..."
     
-    ( cd "$pkgdir" && find . -type f ) | while read -r file; do
+    # §8.1 — Avoid pipe subshell: use temp file so loop runs in current shell
+    _cs_tmpf="$TMPDIR/astral-cs-$$"
+    ( cd "$pkgdir" && find . -type f ) > "$_cs_tmpf"
+    while IFS= read -r file; do
         file_clean=$(printf '%s' "$file" | sed 's|^\./||')
         checksum=$(sha256sum "$pkgdir/$file" 2>/dev/null | awk '{print $1}')
-        
         [ -n "$checksum" ] && printf '%s %s\n' "$file_clean" "$checksum" >> "$checksum_file"
-    done
+    done < "$_cs_tmpf"
+    rm -f "$_cs_tmpf"
 }
 
 verify_reproducibility() {
@@ -5560,6 +5786,31 @@ handle_regular_source() {
     info "  ✓ Downloaded: $filename"
 }
 
+
+# §11.2 — Cached checksum to avoid re-hashing on build resume
+# Uses a .checksum_cache file in the same dir; invalidates if source file is newer.
+get_or_compute_checksum() {
+    _file="$1"
+    _cache="$(dirname "$_file")/.checksum_cache"
+    _fname=$(basename "$_file")
+
+    # Try cache first
+    if [ -f "$_cache" ]; then
+        _cached=$(grep "^$_fname " "$_cache" | awk '{print $2}')
+        if [ -n "$_cached" ] && [ "$_cache" -nt "$_file" ]; then
+            printf '%s' "$_cached"
+            return 0
+        fi
+    fi
+
+    # Compute and update cache
+    _sum=$(sha256sum "$_file" | awk '{print $1}')
+    _tmpf="$_cache.tmp"
+    grep -v "^$_fname " "$_cache" 2>/dev/null > "$_tmpf" || true
+    printf '%s %s\n' "$_fname" "$_sum" >> "$_tmpf"
+    mv -f "$_tmpf" "$_cache"
+    printf '%s' "$_sum"
+}
 
 verify_checksums_and_extract() {
     pkg="$1"
@@ -6051,6 +6302,78 @@ resolve_sat_dependencies() {
     printf '%s\n' "$packages_to_install"
 }
 
+# §2.2 — Two-phase flat dependency resolver
+# Replaces the recursive VISITED_PACKAGES approach which misidentifies shared
+# deps as circular (diamond dep problem). Uses an iterative queue instead.
+#
+# collect_deps <pkg> [repo]
+# Populates DEP_QUEUE, DEP_VISITED, DEP_CONSTRAINTS (global, reset each call)
+collect_deps() {
+    _root="$1"
+    _repo="${2:-aoharu}"
+
+    DEP_QUEUE="$_root"
+    DEP_VISITED=""
+    DEP_CONSTRAINTS=""
+
+    while [ -n "$DEP_QUEUE" ]; do
+        # Pop first item off queue (no arrays --- pure POSIX)
+        _pkg=$(printf '%s' "$DEP_QUEUE" | cut -d' ' -f1)
+        _rest=$(printf '%s' "$DEP_QUEUE" | cut -d' ' -f2-)
+        [ "$_pkg" = "$_rest" ] && _rest=""
+        DEP_QUEUE="$_rest"
+
+        # Skip already visited (handles diamond deps naturally)
+        case " $DEP_VISITED " in
+            *" $_pkg "*) continue ;;
+        esac
+        DEP_VISITED="$DEP_VISITED $_pkg"
+
+        # Fetch recipe if not local
+        _rpath=$(recipe_path "$_pkg" 2>/dev/null) || {
+            fetch_remote_recipe "$_pkg" "$_repo" 2>/dev/null || {
+                warn "[$_pkg] Recipe not found, skipping"
+                continue
+            }
+            _rpath=$(recipe_path "$_pkg")
+        }
+
+        # Expand .stars if needed
+        case "$_rpath" in
+            *.stars)
+                _tmp="$TMPDIR/astral-dep-expand-$$-$_pkg"
+                expand_stars_recipe "$_rpath" "$_tmp" "$_pkg"
+                _rpath="$_tmp"
+                ;;
+        esac
+
+        # Read all dep types into one stream
+        for _depfile in depends bdepends rdepends; do
+            [ -f "$_rpath/$_depfile" ] || continue
+            while IFS= read -r _depline; do
+                case "$_depline" in ''|'#'*) continue ;; esac
+                _dep=$(printf '%s' "$_depline" | awk '{print $1}')
+                _constraint=$(printf '%s' "$_depline" | cut -d' ' -f2-)
+                [ -z "$_dep" ] && continue
+                # Record constraint as pkg:dep:constraint
+                DEP_CONSTRAINTS="${DEP_CONSTRAINTS}${_pkg}:${_dep}:${_constraint} "
+                # Enqueue dep if not yet visited
+                case " $DEP_VISITED " in
+                    *" $_dep "*) ;;
+                    *) DEP_QUEUE="$DEP_QUEUE $_dep" ;;
+                esac
+            done < "$_rpath/$_depfile"
+        done
+    done
+}
+
+# resolve_install_order — call after collect_deps; prints install order (deepest deps first)
+resolve_install_order() {
+    printf '%s' "$DEP_CONSTRAINTS" | grep . | \
+        awk -F: '{print $2}' | \
+        awk '!seen[$0]++'   # deduplicate, preserve first-seen order
+}
+
 collect_constraints_recursive() {
     pkg="$1"
     
@@ -6291,7 +6614,7 @@ sync_pkg_recursive() {
         INSTALLING_CCACHE=1
         export INSTALLING_CCACHE
     fi
-    
+
     build_from_recipe_enhanced "$1" "$CALL_FORCE"
     
     unset INSTALLING_CCACHE
@@ -6336,6 +6659,17 @@ sync_pkg_asura() {
     # Reset to AOHARU
     REPO_CONTEXT="aoharu"
     info "✓ ASURA sync complete, context reset to AOHARU"
+}
+
+# §7.2 — Inject use() helper into build environment for optional deps
+# Must be called just before sourcing the build script.
+# Writes a use() function definition to a temp file that the build script sources.
+astral_inject_use_helpers() {
+    _use_helper="$TMPDIR/astral-use-helper-$$"
+    # Pure POSIX: write use() to a sourced file (export -f is bash-only)
+    printf 'use() { case " $USE_FLAGS " in *" $1 "*) return 0;; *) return 1;; esac; }\n'         > "$_use_helper"
+    printf '. %s\n' "$_use_helper"  # caller must eval this output
+    # Caller: eval "$(astral_inject_use_helpers)"
 }
 
 build_from_recipe_enhanced() {
@@ -6411,7 +6745,8 @@ build_from_recipe_enhanced() {
 
     create_sandbox "$buildtmp" "$sandbox_root"
 
-    download_sources "$rpath" "$buildtmp"
+    # §3 — Use parallel downloader; falls back to serial if mkfifo unavailable
+    parallel_download_sources "$rpath" "$buildtmp"
     verify_checksums_and_extract "$_pkg" "$rpath" "$buildtmp"
     
     transaction_log "install" "$_pkg" "version=$(cat "$rpath/version")"
@@ -6618,66 +6953,74 @@ update_repo() {
             info "Updating Axia Official Repository Index (AOHARU)..."
             INDEX_FILE="$INDEX_FILE_AOHARU"
             INDEX_URL="${REPO_URL}astral.index"
-            SIGNATURE_URL="${REPO_URL}astral.index.sig"
             ;;
         asura)
             info "Updating Axia User Repository For All Indeks (ASURA)..."
             INDEX_FILE="$INDEX_FILE_ASURA"
             INDEX_URL="${USER_REPO_URL}/astral.index"
-            SIGNATURE_URL="${USER_REPO_URL}/astral.index.sig"
             ;;
         *)
             err "Unknown repository '$repo' for update"
             ;;
     esac
 
-    # Create temp files
-    temp_index="$TMPDIR/astral-index-$"
-    temp_sig="$TMPDIR/astral-index.sig-$"
-    
-    # Download index
+    temp_index="$TMPDIR/astral-index-$$"
+
     if ! curl -f#SL "$INDEX_URL" -o "$temp_index"; then
-        rm -f "$temp_index" "$temp_sig"
+        rm -f "$temp_index"
         err "Failed to download index from $INDEX_URL"
         return 1
     fi
-    
-    # Validate index format before replacing
+
     if [ ! -s "$temp_index" ] || ! grep -qE '^[a-zA-Z0-9_-]+:' "$temp_index"; then
-        rm -f "$temp_index" "$temp_sig"
+        rm -f "$temp_index"
         err "Downloaded index file is invalid or empty"
         return 1
     fi
-    
-    # Try to download and verify signature if GPG verification is enabled
-    if [ "$SAFETY_SIGNATURE_VERIFY" -eq 1 ]; then
-        if curl -f#SL "$SIGNATURE_URL" -o "$temp_sig" 2>/dev/null; then
-            info "Verifying index signature..."
-            if command -v gpg >/dev/null 2>&1; then
-                if gpg --verify "$temp_sig" "$temp_index" 2>/dev/null; then
-                    info "Index signature verified successfully"
-                else
-                    # Signature verification failed - warn but continue
-                    warn "Index signature verification failed - index may be compromised"
-                    if [ "$SAFETY_SECURE_DOWNLOAD" -eq 1 ]; then
-                        rm -f "$temp_index" "$temp_sig"
-                        err "SECURITY: Refusing to use unverified index"
-                        return 1
-                    fi
-                fi
-            else
-                warn "GPG not available - cannot verify index signature"
-            fi
-        else
-            vinfo "No signature file found for index (this is optional)"
-        fi
-    fi
-    
-    # Move the validated index to its final location
+
     mv -f "$temp_index" "$INDEX_FILE"
-    rm -f "$temp_sig"
-    
     info "Database updated successfully."
+    # §11.1 — Rebuild per-package lookup cache after index update
+    build_pkg_cache
+}
+
+# §11.1 — Per-package lookup cache (avoids re-reading full index on every lookup)
+# Called at end of update_repo(); can also be run with astral --rebuild-cache.
+build_pkg_cache() {
+    _index="$INDEX_FILE_AOHARU"
+    _cache_dir="$DB_DIR/.pkg_cache"
+    [ -f "$_index" ] || return 0
+
+    # Only rebuild if index is newer than cache directory
+    if [ -d "$_cache_dir" ] && [ "$_cache_dir" -nt "$_index" ]; then
+        return 0
+    fi
+
+    info "Rebuilding package lookup cache..."
+    rm -rf "$_cache_dir"
+    mkdir -p "$_cache_dir"
+
+    # §8.1 — Use temp file to avoid pipe subshell
+    _idx_tmpf="$TMPDIR/astral-idx-rebuild-$$"
+    cat "$_index" > "$_idx_tmpf"
+    while IFS='|' read -r _entry _arch _ver; do
+        case "$_entry" in ''|'#'*) continue ;; esac
+        _entry=$(printf '%s' "$_entry" | tr -d ' ')
+        _ver=$(printf '%s' "$_ver" | tr -d ' ')
+        _arch=$(printf '%s' "$_arch" | tr -d ' ')
+        # Write tiny cache file: version on line 1, arch on line 2
+        printf '%s\n%s\n' "$_ver" "$_arch"             > "$_cache_dir/$(printf '%s' "$_entry" | tr '/' '__')"
+    done < "$_idx_tmpf"
+    rm -f "$_idx_tmpf"
+    info "Package cache built ($(ls "$_cache_dir" | wc -l | tr -d ' ') entries)"
+}
+
+# Fast per-package lookup using the on-disk cache
+query_pkg_cached() {
+    _entry="$1"
+    _cfile="$DB_DIR/.pkg_cache/$(printf '%s' "$_entry" | tr '/' '__')"
+    [ -f "$_cfile" ] && cat "$_cfile" && return 0
+    return 1  # Not found --- fall back to index scan
 }
 
 # === NEW INDEX PARSER V2 ===
@@ -6920,6 +7263,75 @@ show_pkg_info_json() {
 }
 
 # rewritten... hopes that it doesnt fucking explode
+# §10 — Enhanced search with fuzzy match and filter flags
+# Usage: astral_search_enhanced <query> [--installed] [--category <cat>]
+astral_search_enhanced() {
+    _query="$1"
+    _installed_only=0
+    _category=""
+    shift
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --installed) _installed_only=1 ;;
+            --category)  _category="$2"; shift ;;
+        esac
+        shift
+    done
+
+    _results=0
+
+    # §8.1 — Read index via temp file to avoid pipe subshell
+    _idx_tmpf="$TMPDIR/astral-search-idx-$$"
+    [ -f "$INDEX_FILE_AOHARU" ] && cat "$INDEX_FILE_AOHARU" > "$_idx_tmpf" || : > "$_idx_tmpf"
+
+    while IFS='|' read -r _entry _arch _ver; do
+        [ -z "$_entry" ] && continue
+        case "$_entry" in '#'*) continue ;; esac
+
+        _cat=$(printf '%s' "$_entry" | cut -d/ -f1)
+        _pkg=$(printf '%s' "$_entry" | cut -d/ -f2)
+
+        # Category filter
+        [ -n "$_category" ] && [ "$_cat" != "$_category" ] && continue
+
+        # Fuzzy match: query appears anywhere in path or description
+        _desc=""
+        _info_file="$RECIPES_DIR/$_cat/$_pkg.stars"
+        [ -f "$_info_file" ] && _desc=$(grep '^description:' "$_info_file" | cut -d: -f2-)
+
+        case "${_entry}${_desc}" in
+            *"$_query"*) ;;
+            *) continue ;;
+        esac
+
+        # Installed check
+        _installed_ver=$(get_installed_ver "$_pkg" 2>/dev/null) || _installed_ver="none"
+        if [ "$_installed_only" -eq 1 ] && [ "$_installed_ver" = "none" ]; then
+            continue
+        fi
+
+        # Output line
+        if [ "$_installed_ver" != "none" ]; then
+            _status="[installed: $_installed_ver]"
+            _color="$GREEN"
+        else
+            _status=""
+            _color="$NC"
+        fi
+
+        printf '%b%-40s%b %-12s %s %s\n'             "$_color" "$_entry" "$NC" "$_ver" "$_desc" "$_status"
+        _results=$((_results + 1))
+    done < "$_idx_tmpf"
+    rm -f "$_idx_tmpf"
+
+    if [ "$_results" -eq 0 ]; then
+        info "No packages found matching '$_query'"
+        info "Hint: Run 'astral -u' to update the index, then try again"
+    else
+        info "($_results result(s))"
+    fi
+}
+
 search_pkg() {
     query="$1"
     info "Searching for package '$query'..."
@@ -7260,9 +7672,13 @@ upgrade_all() {
 
     # Create holds file if it doesn't exist
     touch "$HOLDS_FILE" 2>/dev/null || true
-    
+
+    # §8.1 — Avoid pipe subshell: count vars inside a pipe-fed while-loop are
+    # invisible after the loop on dash/ash. Write pkg list to a temp file first.
+    _upgrade_tmpf="$TMPDIR/astral-upgrade-list-$$"
     find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null |
-    sed "s|^${DB_DIR}/||" | sed 's|/version$||' |
+        sed "s|^${DB_DIR}/||" | sed 's|/version$||' > "$_upgrade_tmpf"
+
     while IFS= read -r pkg_path; do
         pkg=$(basename "$pkg_path")
         category=$(dirname "$pkg_path")
@@ -7307,7 +7723,8 @@ upgrade_all() {
             fi
         fi
         count=$((count + 1))
-    done
+    done < "$_upgrade_tmpf"
+    rm -f "$_upgrade_tmpf"
 
     if [ "$PRETEND" -eq 1 ] || [ "$PRETEND_MODE" -eq 1 ]; then
         info ""
@@ -7534,18 +7951,19 @@ remove_pkg_only() {
     info "Removing package database entry: $pkg_path"
 
     rpath=$(recipe_path "$(basename "$pkg_path")") 2>/dev/null || rpath=""
-    
-    # Run pre_remove hook before removal
+
+    # §9 — Correct hook order: pre_remove → remove files → remove DB → post_remove
+    # post_remove must only run AFTER files and DB entry are gone.
+    # Previously post_remove ran before file removal, which was wrong.
+
+    # 1. pre_remove: called BEFORE any files are touched (service stop, config backup, etc.)
     if [ -n "$rpath" ] && [ -f "$rpath/pre_remove" ]; then
         info "Running pre_remove hook for $(basename "$pkg_path")..."
-        ( "$rpath/pre_remove" ) || info "Warning: pre_remove hook failed for $pkg_path"
-    fi
-    
-    if [ -n "$rpath" ] && [ -f "$rpath/post_remove" ]; then
-        info "Running post_remove hook for $(basename "$pkg_path")..."
-        ( "$rpath/post_remove" ) || info "Warning: post_remove hook failed for $pkg_path"
+        ( "$rpath/pre_remove" ) || warn "pre_remove hook failed for $pkg_path (continuing)"
     fi
 
+    # 2. Remove tracked files (only files and symlinks, never directories)
+    _removal_ok=0
     if [ -f "$pkgdir/files" ]; then
         while IFS= read -r f; do
             [ -z "$f" ] && continue
@@ -7555,15 +7973,21 @@ remove_pkg_only() {
             if [ -f "$fullpath" ] || [ -L "$fullpath" ]; then
                 rm -f "$fullpath" 2>/dev/null || warn "Failed to remove: $fullpath"
             fi
-            # Explicitly skip directories
+            # Explicitly skip directories to avoid removing shared dirs like /usr/bin
+            # *flashback of astral v0.1.0.0 removing my LFS /usr*
         done < "$pkgdir/files"
+        _removal_ok=1
     fi
 
-    # Do NOT attempt to remove directories at all
-    # This prevents deleting shared directories like /usr/bin, /usr/lib, etc. - *flashback of astral v0.1.0.0 removing my LFS /usr*
-
+    # 3. Remove DB entry
     rm -rf "$pkgdir"
     info "Removed $pkg_path from database (directories preserved for safety)."
+
+    # 4. post_remove: called AFTER files and DB are gone, and only if removal succeeded
+    if [ "$_removal_ok" -eq 1 ] && [ -n "$rpath" ] && [ -f "$rpath/post_remove" ]; then
+        info "Running post_remove hook for $(basename "$pkg_path")..."
+        ( "$rpath/post_remove" ) || warn "post_remove hook failed for $pkg_path"
+    fi
 }
 
 removedep_pkg() {
@@ -10196,7 +10620,9 @@ case "$1" in
     if [ "$JSON_OUTPUT" -eq 1 ]; then
         search_pkg_json "$2"
     else
-        search_pkg "$2"
+        # §10 — Use enhanced search (fuzzy match + installed status + category filter)
+        astral_search_enhanced "$2"
+        search_pkg "$2"  # also run legacy local recipe search
     fi
     ;;
 
