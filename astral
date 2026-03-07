@@ -6643,7 +6643,7 @@ update_repo() {
     fi
     
     # Validate index format before replacing
-    if ! head -n 5 "$temp_index" | grep -qE '^[a-zA-Z0-9_-]+:' || [ ! -s "$temp_index" ]; then
+    if [ ! -s "$temp_index" ] || ! grep -qE '^[a-zA-Z0-9_-]+:' "$temp_index"; then
         rm -f "$temp_index" "$temp_sig"
         err "Downloaded index file is invalid or empty"
         return 1
