@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v5.1.0.0 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
+# Astral v5.3.0.0 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
 # SOURCE-ONLY
-# V: 5 - Major . 1 - Minor . 0 - Patches . 0 - hotfixes
+# V: 5 - Major . 3 - Minor . 0 - Patches . 0 - hotfixes
 
-version="5.2.0.0 Main"
+version="5.3.0.0 Main"
 ASTRAL_PRODUCTION_DATE="2025-11-26"
 now_seconds=$(date +%s)
 prod_seconds=$(date -d "$ASTRAL_PRODUCTION_DATE" +%s)
@@ -132,6 +132,11 @@ INSTALL_ROOT="/"    # Installation target directory
 FORCE_BUILD=0
 DRY_RUN=0
 VISITED_PACKAGES=""
+DEP_CALL_STACK=""
+_this_pkg=""
+_this_force=""
+_this_explicit=""
+_this_repo=""
 LOCK_TIMEOUT=${LOCK_TIMEOUT:-300}
 
 # Locate where tf is astral
@@ -312,7 +317,8 @@ err() {
     exit 1
 }
 
-debug() { 
+debug() {
+    [ "${ASTRAL_DEBUG:-0}" = "1" ] || return 0
     printf "${GREEN}[DEBUG]${NC} %s\n" "$*"
     log_msg "DEBUG" "$@"
 }
@@ -327,6 +333,9 @@ vwarn() {
 REPO_CONTEXT="aoharu"  # Current repository context (aoharu or asura)
 EXPLICIT_PKG_REPO=""   # Track which repo the main package came from
 
+# Debug mode (set debug = yes in $AST.core to enable)
+ASTRAL_DEBUG=${ASTRAL_DEBUG:-0}
+
 # === SAFETY FEATURE TOGGLES ===
 SAFETY_SCRIPT_CHECK=${SAFETY_SCRIPT_CHECK:-1}
 SAFETY_COLLISION_DETECT=${SAFETY_COLLISION_DETECT:-1}
@@ -339,6 +348,7 @@ SAFETY_SECURE_DOWNLOAD=${SAFETY_SECURE_DOWNLOAD:-1}
 SAFETY_FILE_INTEGRITY=${SAFETY_FILE_INTEGRITY:-1}
 SAFETY_MERKLE_VERIFY=${SAFETY_MERKLE_VERIFY:-1}
 SAFETY_CERT_PIN=${SAFETY_CERT_PIN:-0}
+SAFETY_ADVANCED_SCRIPT_CHECK=${SAFETY_ADVANCED_SCRIPT_CHECK:-0}  # opt-in: enable in astral.stars
 
 disable_safety_feature() {
     feature="$1"
@@ -387,6 +397,10 @@ disable_safety_feature() {
             SAFETY_CERT_PIN=0
             warn "Disabled: Certificate pinning"
             ;;
+        advanced-script-check|advanced-check)
+            SAFETY_ADVANCED_SCRIPT_CHECK=0
+            warn "Disabled: Advanced script security analysis"
+            ;;
         all)
             SAFETY_SCRIPT_CHECK=0
             SAFETY_COLLISION_DETECT=0
@@ -425,6 +439,7 @@ list_safety_features() {
     printf "│    File integrity:        %s\n" "$([ $SAFETY_FILE_INTEGRITY -eq 1 ] && printf "${GREEN}ENABLED${NC}" || printf "${RED}DISABLED${NC}")"
     printf "│    Merkle verification:   %s\n" "$([ $SAFETY_MERKLE_VERIFY -eq 1 ] && printf "${GREEN}ENABLED${NC}" || printf "${RED}DISABLED${NC}")"
     printf "│    Certificate pinning:   %s\n" "$([ $SAFETY_CERT_PIN -eq 1 ] && printf "${GREEN}ENABLED${NC}" || printf "${RED}DISABLED${NC}")"
+    printf "│    Adv. script analysis:  %s\n" "$([ $SAFETY_ADVANCED_SCRIPT_CHECK -eq 1 ] && printf "${GREEN}ENABLED${NC}" || printf "${YELLOW}OPT-IN (set SAFETY_ADVANCED_SCRIPT_CHECK=1)${NC}")"
     info "╰────────────────────────────────────────────────────────────────╯"
 }
 
@@ -439,7 +454,7 @@ USE_FLAGS=""
 CFLAGS="-O2 -pipe"
 CXXFLAGS=""
 LDFLAGS=""
-MAKEFLAGS="-j1"
+MAKEFLAGS="-j$(nproc 2>/dev/null || echo 4)"
 CCACHE_ENABLED="no"
 FEATURES=""
 DISTCC_ENABLED="no"
@@ -875,7 +890,7 @@ verify_source_file() {
             if gpg --verify "$_sig" "$_file" 2>/dev/null; then
                 info "  ✓ [GPG] $_fname signature OK"
             else
-                if [ "${SAFETY_SIGNATURE_VERIFY:-1}" -eq 1 ]; then
+                if [ "$SAFETY_SIGNATURE_VERIFY" -eq 1 ]; then
                     err "GPG signature INVALID for $_fname --- refusing install"
                     return 1
                 else
@@ -1540,9 +1555,10 @@ parse_astral_stars_config() {
         
         # Check for namespace block start: $AST.namespace: {
         case "$line" in
-            '$AST.'*':')
+            '$AST.'*':'*)
                 # Pattern: $AST.namespace: or $AST.namespace: {
                 current_namespace=$(printf '%s' "$line" | sed 's/\$AST\.//;s/:[[:space:]]*{.*//;s/:$//')
+                debug "config: namespace='$current_namespace'"
                 in_block=1
                 brace_depth=0
                 # Check if { is on same line
@@ -1657,6 +1673,13 @@ parse_astral_stars_config() {
                         EDITOR="$value"
                         info "    → editor: $EDITOR"
                         ;;
+                    DEBUG)
+                        case "$value" in
+                            1|yes|true|enable) ASTRAL_DEBUG=1 ;;
+                            *) ASTRAL_DEBUG=0 ;;
+                        esac
+                        [ "$ASTRAL_DEBUG" = "1" ] && info "    → debug mode: enabled"
+                        ;;
                 esac
                 ;;
             repo)
@@ -1683,12 +1706,12 @@ parse_astral_stars_config() {
                         info "    → GPG keyring: $GPG_KEYRING"
                         ;;
                     SAFETY_*)
-                        feature=$(printf '%s' "$key" | sed 's/SAFETY_//;s/'"'"'//g' | tr '[:upper:]' '[:lower:]')
                         case "$value" in
-                            1|yes|true|enable) eval "SAFETY_${feature}=1" ;;
-                            0|no|false|disable) eval "SAFETY_${feature}=0" ;;
+                            1|yes|true|enable)  eval "${key}=1" ;;
+                            0|no|false|disable) eval "${key}=0" ;;
                         esac
-                        info "    → safety $feature: $value"
+                        debug "config: $key=$value"
+                        info "    → $key: $value"
                         ;;
                 esac
                 ;;
@@ -1764,6 +1787,13 @@ parse_astral_stars_config() {
             ;;
         esac
     done < "$config_file"
+
+    # Export all SAFETY_* vars so parallel download subshells inherit them
+    export SAFETY_SCRIPT_CHECK SAFETY_COLLISION_DETECT SAFETY_GHOST_DETECT \
+           SAFETY_CHECKSUM_VERIFY SAFETY_MASK_CHECK SAFETY_SIGNATURE_VERIFY \
+           SAFETY_RECIPE_AUDIT SAFETY_SECURE_DOWNLOAD SAFETY_FILE_INTEGRITY \
+           SAFETY_MERKLE_VERIFY SAFETY_CERT_PIN SAFETY_ADVANCED_SCRIPT_CHECK \
+           ASTRAL_DEBUG
     
     info "✓ Config loaded from astral.stars"
     return 0
@@ -1810,8 +1840,9 @@ $AST.security: {
 };
 
 $AST.host: {
-    # Packages provided by host system (skip dependency check)
-    #PROVIDED = "gcc make libc glibc linux-headers"
+    # Packages provided by the host system — astral will skip building these as deps.
+    # Add any package names here that you know are already installed system-wide.
+    PROVIDED = "gcc make glibc libc ncurses linux-headers binutils coreutils bash"
 };
 
 $AST.build: {
@@ -2039,24 +2070,11 @@ is_masked() {
 check_script_safety() {
     script_file="$1"
     pkg_name="$2"
+    _verbose="${3:-}"
 
     [ ! -f "$script_file" ] && return 0
 
-    cat >&2 <<SAFETY_WARNING
-───────────────────────────────────────────────────────────────
-⚠️  SAFETY CHECK: $pkg_name
-───────────────────────────────────────────────────────────────
-WARNING: These checks provide BASIC protection only.
-They can be bypassed by determined attackers.
-
-DO NOT run untrusted packages without review.
-Astral is NOT a security sandbox.
-
-YOU HAVE BEEN WARNED
-───────────────────────────────────────────────────────────────
-SAFETY_WARNING
-
-    info "Running safety checks on '$pkg_name'..."
+    [ -n "$_verbose" ] && info "Running safety checks on '$pkg_name'..." || true
 
     # Blocks: rm -rf $PKGDIR/ or rm -rf $DESTDIR/
     if grep -qE '\$(\{)?(PKGDIR|DESTDIR)(\})?[[:space:]]*/[[:space:]]*$' "$script_file" 2>/dev/null; then
@@ -2097,7 +2115,222 @@ SAFETY_WARNING
         warn "Script '$pkg_name' contains 'eval' - review carefully before running"
     fi
 
-    info "✓ Basic safety checks passed (review script manually for full safety)"
+    # Catch variable-indirection bypasses: CMD="rm -rf /"; $CMD  or  $(eval ...)
+    # Pattern: a variable is assigned a dangerous string then executed via $VAR
+    if grep -qE '(rm|dd|mkfs|wipefs)[[:space:]].*=.*["\x27]' "$script_file" 2>/dev/null || \
+       grep -qE '^[[:space:]]*[A-Z_]+=["\x27].*(rm -rf|dd of=|mkfs|wipefs)' "$script_file" 2>/dev/null; then
+        warn "Script '$pkg_name' assigns dangerous commands to variables — review before running"
+    fi
+
+    # Catch obfuscated fork bombs: variations beyond the classic :(){:|:&}
+    if grep -qE 'while true|while :' "$script_file" 2>/dev/null && \
+       grep -qE '&[[:space:]]*$|& $' "$script_file" 2>/dev/null; then
+        warn "Script '$pkg_name' has an unbounded background loop — possible fork bomb, review before running"
+    fi
+
+    [ -n "$_verbose" ] && info "✓ Basic safety checks passed (review script manually for full safety)"
+    return 0
+}
+
+# ============================================================================
+# ADVANCED SCRIPT SECURITY ANALYSIS
+# Enable with SAFETY_ADVANCED_SCRIPT_CHECK=1 in astral.stars
+# Checks for namespace violations, privilege abuse, obfuscation, and more.
+# Reports a full list of findings rather than stopping at the first hit.
+# ============================================================================
+
+advanced_script_safety_check() {
+    _pkg="$1"
+    _rpath="$2"
+
+    [ "${SAFETY_ADVANCED_SCRIPT_CHECK:-0}" -eq 1 ] || return 0
+
+    _violations=0
+    _warnings=0
+
+    printf '%b╭────────────────────────────────────────────────────────────────╮%b\n' "$YELLOW" "$NC" >&2
+    printf '%b│          ADVANCED SECURITY ANALYSIS: %-26s│%b\n' "$YELLOW" "$_pkg" "$NC" >&2
+    printf '%b╰────────────────────────────────────────────────────────────────╯%b\n' "$YELLOW" "$NC" >&2
+
+    # ── Helper: scan all build-related scripts in the recipe ─────────────────
+    _scripts=""
+    for _s in build package pre_install post_install pre_remove post_remove; do
+        [ -f "$_rpath/$_s" ] && _scripts="$_scripts $_rpath/$_s"
+    done
+
+    _adv_fail() {
+        printf '%b  [BLOCK] %s%b\n' "$RED" "$*" "$NC" >&2
+        _violations=$((_violations + 1))
+    }
+    _adv_warn() {
+        printf '%b  [WARN]  %s%b\n' "$YELLOW" "$*" "$NC" >&2
+        _warnings=$((_warnings + 1))
+    }
+    _adv_ok() {
+        printf '%b  [OK]    %s%b\n' "$GREEN" "$*" "$NC" >&2
+    }
+
+    # ── 1. Namespace violation — writes outside $PKGDIR / $DESTDIR ───────────
+    # A legitimate build script should ONLY write to $PKGDIR or $DESTDIR.
+    # Any absolute path write that isn't prefixed by one of those vars is
+    # potentially touching the host filesystem.
+    for _sf in $_scripts; do
+        _sfname=$(basename "$_sf")
+
+        # Collect absolute path writes not guarded by PKGDIR/DESTDIR
+        # Patterns: cp/install/mv/ln to an absolute path not containing the var
+        _ns_hits=$(grep -nE \
+            '(cp|install|mv|ln)[[:space:]].*[[:space:]]/[a-zA-Z]' \
+            "$_sf" 2>/dev/null | \
+            grep -vE '\$(\{)?(PKGDIR|DESTDIR|TMPDIR|buildtmp|D\b)(\})?|#')
+
+        if [ -n "$_ns_hits" ]; then
+            _adv_fail "[$_sfname] Writes to absolute paths outside \$PKGDIR/\$DESTDIR:"
+            printf '%s\n' "$_ns_hits" | while IFS= read -r _line; do
+                printf '%b             %s%b\n' "$RED" "$_line" "$NC" >&2
+            done
+        fi
+
+        # Direct writes using redirection to absolute paths
+        _redir_hits=$(grep -nE \
+            '>+[[:space:]]*/[a-zA-Z]' \
+            "$_sf" 2>/dev/null | \
+            grep -vE '\$(\{)?(PKGDIR|DESTDIR|TMPDIR|buildtmp)(\})?|#|/dev/null|>&[0-9]')
+
+        if [ -n "$_redir_hits" ]; then
+            _adv_fail "[$_sfname] Redirects to absolute paths outside \$PKGDIR/\$DESTDIR:"
+            printf '%s\n' "$_redir_hits" | while IFS= read -r _line; do
+                printf '%b             %s%b\n' "$RED" "$_line" "$NC" >&2
+            done
+        fi
+    done
+    [ $_violations -eq 0 ] && _adv_ok "No namespace violations detected"
+
+    # ── 2. /proc and /sys tampering ──────────────────────────────────────────
+    for _sf in $_scripts; do
+        _sfname=$(basename "$_sf")
+        if grep -qE '(/proc/|/sys/)[a-zA-Z]' "$_sf" 2>/dev/null | grep -vE '#'; then
+            _adv_warn "[$_sfname] Accesses /proc or /sys — may tamper with kernel parameters or other processes"
+        fi
+    done
+
+    # ── 3. Crontab / init / systemd / rc.d hijacking ─────────────────────────
+    for _sf in $_scripts; do
+        _sfname=$(basename "$_sf")
+        if grep -qE '(crontab|/etc/cron|/etc/init\.d|/etc/rc\.|/etc/systemd|systemctl enable|systemctl start|chkconfig|update-rc\.d)' \
+                "$_sf" 2>/dev/null; then
+            _adv_warn "[$_sfname] Modifies init system or cron — verify this is intentional for a daemon package"
+        fi
+    done
+
+    # ── 4. LD_PRELOAD / LD_LIBRARY_PATH injection ────────────────────────────
+    for _sf in $_scripts; do
+        _sfname=$(basename "$_sf")
+        if grep -qE '(LD_PRELOAD|LD_LIBRARY_PATH)[[:space:]]*=' "$_sf" 2>/dev/null; then
+            _adv_fail "[$_sfname] Sets LD_PRELOAD or LD_LIBRARY_PATH — classic shared-library injection vector"
+        fi
+    done
+
+    # ── 5. setuid / setgid / setcap abuse ────────────────────────────────────
+    for _sf in $_scripts; do
+        _sfname=$(basename "$_sf")
+        if grep -qE 'chmod[[:space:]]+(u\+s|g\+s|[0-9]*[24][0-9]{3})|setcap[[:space:]]' \
+                "$_sf" 2>/dev/null; then
+            _adv_warn "[$_sfname] Sets SUID/SGID bits or file capabilities — ensure this binary truly needs elevated privileges"
+        fi
+    done
+
+    # ── 6. /etc/passwd, /etc/shadow, /etc/sudoers modification ───────────────
+    for _sf in $_scripts; do
+        _sfname=$(basename "$_sf")
+        if grep -qE '(/etc/passwd|/etc/shadow|/etc/sudoers|visudo|useradd|usermod|groupadd)' \
+                "$_sf" 2>/dev/null; then
+            _adv_warn "[$_sfname] Modifies users/groups or sudoers — legitimate for packages that need a system user, but verify"
+        fi
+    done
+
+    # ── 7. Shell obfuscation techniques ──────────────────────────────────────
+    for _sf in $_scripts; do
+        _sfname=$(basename "$_sf")
+
+        # Base64-encoded payloads piped to shell
+        if grep -qE '(base64[[:space:]].*-d|base64[[:space:]].*--decode).*\|.*(sh|bash|ash|dash)' \
+                "$_sf" 2>/dev/null; then
+            _adv_fail "[$_sfname] Decodes and executes base64 payload — strong obfuscation indicator"
+        fi
+
+        # Python/perl -c with exec/system (common dropper pattern)
+        if grep -qE '(python|python3|perl)[[:space:]]+-c[[:space:]].*exec\|system' \
+                "$_sf" 2>/dev/null; then
+            _adv_fail "[$_sfname] Executes inline Python/Perl with exec/system — possible dropper"
+        fi
+
+        # Hex/octal encoded strings piped to shell
+        if grep -qE '(printf|echo).*\\\\x[0-9a-fA-F]{2}.*\|.*(sh|bash)' \
+                "$_sf" 2>/dev/null; then
+            _adv_fail "[$_sfname] Hex-encoded payload piped to shell — obfuscation detected"
+        fi
+
+        # $(cat /dev/urandom) or similar entropy abuse to generate payloads
+        if grep -qE '/dev/(urandom|random).*exec\|eval' "$_sf" 2>/dev/null; then
+            _adv_warn "[$_sfname] Reads from /dev/urandom and passes to eval/exec"
+        fi
+    done
+
+    # ── 8. Network namespace escape / raw socket / packet capture ────────────
+    for _sf in $_scripts; do
+        _sfname=$(basename "$_sf")
+        if grep -qE '(tcpdump|nmap|nc[[:space:]]|netcat|socat|/dev/tcp|/dev/udp)' \
+                "$_sf" 2>/dev/null; then
+            _adv_warn "[$_sfname] Uses raw network tools (tcpdump/nmap/netcat/socat) — unexpected in a build script"
+        fi
+    done
+
+    # ── 9. SSH key / GPG keyring tampering ───────────────────────────────────
+    for _sf in $_scripts; do
+        _sfname=$(basename "$_sf")
+        if grep -qE '(~/.ssh|/root/.ssh|authorized_keys|known_hosts|~/.gnupg|/root/.gnupg)' \
+                "$_sf" 2>/dev/null; then
+            _adv_fail "[$_sfname] Modifies SSH keys or GPG keyrings — this is almost never legitimate in a build script"
+        fi
+    done
+
+    # ── 10. Writes to other package namespaces ─────────────────────────────
+    # e.g. installing into /usr/lib/pkgA from pkgB's build script
+    # We check if the script references another installed package's files path
+    if command -v find >/dev/null 2>&1 && [ -d "$DB_DIR" ]; then
+        _other_pkgs_tmpf="$TMPDIR/astral-advsec-pkgs-$$"
+        find "$DB_DIR" -maxdepth 2 -name "version" 2>/dev/null | \
+            sed "s|/version$||" | xargs -I{} basename {} 2>/dev/null > "$_other_pkgs_tmpf"
+
+        for _sf in $_scripts; do
+            _sfname=$(basename "$_sf")
+            while IFS= read -r _other_pkg; do
+                [ -z "$_other_pkg" ] && continue
+                [ "$_other_pkg" = "$_pkg" ] && continue
+                # Look for explicit references to another installed package's name
+                # in a path context (e.g. /usr/lib/otherpkg or $PKGDIR/../otherpkg)
+                if grep -qE "(lib|share|include|bin)/${_other_pkg}[^a-zA-Z0-9_-]|/${_other_pkg}/\." \
+                        "$_sf" 2>/dev/null; then
+                    _adv_warn "[$_sfname] References path belonging to installed package '$_other_pkg' — possible namespace collision"
+                fi
+            done < "$_other_pkgs_tmpf"
+        done
+        rm -f "$_other_pkgs_tmpf"
+    fi
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    printf '\n' >&2
+    if [ "$_violations" -gt 0 ]; then
+        printf '%b  Advanced check: %d BLOCKING violation(s), %d warning(s)%b\n' \
+            "$RED" "$_violations" "$_warnings" "$NC" >&2
+        err "Advanced security analysis blocked installation of '$_pkg' — $_violations violation(s) found. Review the script and set SAFETY_ADVANCED_SCRIPT_CHECK=0 to override if you are certain it is safe."
+    elif [ "$_warnings" -gt 0 ]; then
+        printf '%b  Advanced check: 0 violations, %d warning(s) — proceeding with caution%b\n' \
+            "$YELLOW" "$_warnings" "$NC" >&2
+    else
+        printf '%b  Advanced check: CLEAN — no issues found%b\n' "$GREEN" "$NC" >&2
+    fi
 }
 
 SANDBOX_METHOD=${SANDBOX_METHOD:-auto}  # auto, bubblewrap, firejail, chroot, fakechroot, none
@@ -3295,28 +3528,28 @@ deep_recipe_check() {
         warn "  ⚠ Package modifies privileged files/permissions"
     fi
     
-    # 2. Network access in build
-    if grep -rE 'curl|wget|fetch|download' "$rpath/build" 2>/dev/null; then
+    # 2. Network access in build — only flag actual download tool invocations, not mentions
+    if grep -rE '^[[:space:]]*(curl|wget|fetch)[[:space:]]' "$rpath/build" 2>/dev/null | grep -qv '^#'; then
         if [ "$SANDBOX_NETWORK" = "no" ]; then
-            err "  ✗ Build script requires network but sandbox network is disabled"
+            warn "  ⚠ Build script may require network but SANDBOX_NETWORK=no"
             errors=$((errors + 1))
         fi
     fi
     
     # 3. Suspicious system modifications
     if grep -rE 'rm.*-rf[[:space:]]*/|mkfs|wipefs|dd.*of=/dev' "$rpath" 2>/dev/null; then
-        err "  ✗ DANGEROUS: Package contains destructive commands"
+        warn "  ✗ DANGEROUS: Package contains destructive commands"
         errors=$((errors + 1))
     fi
     
     # 4. Check for hardcoded paths that might leak host
-    if grep -rE '/home/|/root/' "$rpath" 2>/dev/null | grep -v '^#'; then
+    if grep -rE '/home/[a-z]|/root/' "$rpath" 2>/dev/null | grep -v '^#' | grep -qv 'doc\|example\|README'; then
         warn "  ⚠ Package contains hardcoded home paths"
     fi
     
     # 5. Verify all sources have checksums
     if [ -f "$rpath/sources" ] && [ ! -f "$rpath/checksums" ]; then
-        err "  ✗ Package has sources but no checksums (SECURITY RISK)"
+        warn "  ✗ Package has sources but no checksums (SECURITY RISK)"
         errors=$((errors + 1))
     fi
     
@@ -3326,10 +3559,12 @@ deep_recipe_check() {
     fi
     
     # 7. Verify DESTDIR usage
-    if ! grep -q 'DESTDIR' "$rpath/build" 2>/dev/null; then
-        warn "  ⚠ Build script doesn't use \$DESTDIR (may create ghost files)"
+    if ! grep -q 'DESTDIR' "$rpath/build" 2>/dev/null && \
+       ! grep -q 'PKGDIR' "$rpath/build" 2>/dev/null; then
+        warn "  ⚠ Build script doesn't use \$DESTDIR or \$PKGDIR (may create ghost files)"
     fi
     
+    [ "$errors" -eq 0 ] && info "  ✓ Deep safety checks passed"
     return $errors
 }
 
@@ -3383,40 +3618,51 @@ test_sandbox_isolation() {
 
 is_pkg_installed() {
     pkg="$1"
-    
-    # Check astral's own DB first
-    if [ -d "$DB_DIR/$pkg" ] || [ -n "$(find "$DB_DIR" -type d -name "$pkg" -maxdepth 2 2>/dev/null)" ]; then
+    _pkgbase=$(basename "$pkg")
+
+    # Check astral DB: must have a version file to count as installed
+    # (directory alone could be a leftover from a failed transaction)
+    if [ -f "$DB_DIR/$pkg/version" ]; then
         return 0
     fi
-    
+    # Also search by bare package name under category dirs
+    _found=$(find "$DB_DIR" -maxdepth 2 -name "version" -path "*/$_pkgbase/version" 2>/dev/null | head -n1)
+    if [ -n "$_found" ]; then
+        return 0
+    fi
+
     # Check host package manager (Arch Linux)
     if command -v pacman >/dev/null 2>&1; then
-        if pacman -Q "$pkg" >/dev/null 2>&1; then
+        if pacman -Q "$_pkgbase" >/dev/null 2>&1; then
             return 0
         fi
     fi
-    
+
     # Check host package manager (Debian/Ubuntu)
     if command -v dpkg >/dev/null 2>&1; then
-        if dpkg -l "$pkg" >/dev/null 2>&1; then
+        if dpkg -l "$_pkgbase" 2>/dev/null | grep -q "^ii"; then
             return 0
         fi
     fi
-    
+
     return 1
 }
 
 resolve_installed_path() {
     requested_pkg="$1"
+    _base=$(basename "$requested_pkg")
 
-    if [ -d "$DB_DIR/$requested_pkg" ]; then
+    # Must have a version file — bare directory is not a valid install record
+    if [ -f "$DB_DIR/$requested_pkg/version" ]; then
         printf '%s\n' "$requested_pkg"
         return 0
     fi
 
-    found_path=$(find "$DB_DIR" -type d -name "$requested_pkg" -maxdepth 2 2>/dev/null | head -n 1 || true)
+    # Search by basename under category dirs
+    found_path=$(find "$DB_DIR" -maxdepth 2 -name "version" \
+        -path "*/$_base/version" 2>/dev/null | head -n1)
     if [ -n "$found_path" ]; then
-        printf '%s\n' "$(printf '%s' "$found_path" | sed "s|^${DB_DIR}/||")"
+        printf '%s\n' "$(dirname "$found_path" | sed "s|^${DB_DIR}/||")"
         return 0
     fi
 
@@ -3745,38 +3991,53 @@ recipe_path() {
 
     # === FILESYSTEM FIRST ===
     # Check all reasonable on-disk locations before touching the index.
-    # This handles packages that were already fetched/expanded.
+    # IMPORTANT: always prefer an expanded directory (has a 'build' script) over
+    # a raw .stars file, so callers get a usable path directly.
     for _search_name in "$_pkg" "$_pkg_bare"; do
-        # Exact .stars file at category/pkg.stars
-        if [ -n "$_category" ] && [ -f "$RECIPES_DIR/$_category/$_search_name.stars" ]; then
-            printf '%s\n' "$RECIPES_DIR/$_category/$_search_name.stars"
-            return 0
-        fi
-        # Expanded directory recipe at category/pkg/
+        # Expanded directory recipe at category/pkg/ (most useful — check first)
         if [ -n "$_category" ] && [ -d "$RECIPES_DIR/$_category/$_search_name" ] && \
            [ -f "$RECIPES_DIR/$_category/$_search_name/build" ]; then
             printf '%s\n' "$RECIPES_DIR/$_category/$_search_name"
             return 0
         fi
-        # Glob for versioned .stars files: category/pkg/pkg-*-*.stars
+        # Exact .stars file at category/pkg.stars
+        if [ -n "$_category" ] && [ -f "$RECIPES_DIR/$_category/$_search_name.stars" ] && \
+           [ -s "$RECIPES_DIR/$_category/$_search_name.stars" ]; then
+            printf '%s\n' "$RECIPES_DIR/$_category/$_search_name.stars"
+            return 0
+        fi
+        # Versioned .stars: category/pkg/pkg-VER-ARCH.stars
+        # But first check if the expanded dir beside it has a build script
         if [ -n "$_category" ]; then
             _glob=$(find "$RECIPES_DIR/$_category" -maxdepth 2 \
                 -name "${_search_name}-*.stars" 2>/dev/null | head -n1)
             if [ -n "$_glob" ]; then
+                # Prefer expanded dir in same location
+                _expanded_candidate=$(dirname "$_glob")
+                if [ -f "$_expanded_candidate/build" ]; then
+                    printf '%s\n' "$_expanded_candidate"
+                    return 0
+                fi
                 printf '%s\n' "$_glob"
                 return 0
             fi
         fi
-        # Search whole recipes dir without category hint
-        _found=$(find "$RECIPES_DIR" -maxdepth 3 \
-            \( -name "${_search_name}.stars" -o -name "${_search_name}-*.stars" \) \
-            2>/dev/null | head -n1)
+        # Search whole recipes dir without category hint — prefer expanded dirs
+        _found=$(find "$RECIPES_DIR" -maxdepth 3 -type d -name "$_search_name" 2>/dev/null | \
+            while read -r d; do [ -f "$d/build" ] && printf '%s\n' "$d" && break; done | head -n1)
         if [ -n "$_found" ]; then
             printf '%s\n' "$_found"
             return 0
         fi
-        _found=$(find "$RECIPES_DIR" -maxdepth 3 -type d -name "$_search_name" 2>/dev/null | \
-            while read -r d; do [ -f "$d/build" ] && printf '%s\n' "$d" && break; done | head -n1)
+        _found=$(find "$RECIPES_DIR" -maxdepth 3 \
+            \( -name "${_search_name}.stars" -o -name "${_search_name}-*.stars" \) \
+            2>/dev/null | while read -r f; do
+                [ -s "$f" ] || continue
+                # Check if there's an expanded dir beside this .stars
+                _exp=$(dirname "$f")
+                [ -f "$_exp/build" ] && printf '%s\n' "$_exp" && break
+                printf '%s\n' "$f" && break
+            done | head -n1)
         if [ -n "$_found" ]; then
             printf '%s\n' "$_found"
             return 0
@@ -3823,19 +4084,13 @@ recipe_path() {
     recipe_name="${pkg_name}-${sel_ver}-${sel_arch}.stars"
     recipe_full="$RECIPES_DIR/$category/$recipe_name"
 
-    if [ -f "$recipe_full" ]; then
+    if [ -f "$recipe_full" ] && [ -s "$recipe_full" ]; then
         printf '%s\n' "$recipe_full"
         return 0
     fi
 
-    # Try fetching
-    fetch_remote_recipe "$_pkg" "$REPO_CONTEXT" "$sel_ver" "$sel_arch"
-
-    if [ -f "$recipe_full" ]; then
-        printf '%s\n' "$recipe_full"
-        return 0
-    fi
-
+    # Recipe not on disk yet — return the expected path so the caller can fetch it
+    # (do NOT fetch here; recipe_path is a pure lookup function)
     return 1
 }
 
@@ -4076,7 +4331,6 @@ is_pkg_required() {
 check_host_dependency() {
     dep="$1"
 
-    # Verbose debugging (set ASTRAL_DEBUG=1 to enable)
     debug() {
         [ "${ASTRAL_DEBUG:-0}" = "1" ] && warn "[HOST-CHECK] $*"
     }
@@ -4085,49 +4339,67 @@ check_host_dependency() {
 
     # Priority 1: Check config override first (fastest)
     case " $HOST_PROVIDED " in
-        *" $dep "*)
-            debug "  ✓ Found in HOST_PROVIDED config"
-            return 0
-            ;;
+        *" $dep "*) debug "  ✓ Found in HOST_PROVIDED config"; return 0 ;;
     esac
 
-    # Priority 2: Check pkg-config (most reliable for libraries)
+    # Priority 2: Well-known package → library/binary name mapping
+    # Many packages have names that don't match their actual library/binary names
+    _dep_resolved="$dep"
+    case "$dep" in
+        glibc|libc)        _dep_resolved="libc" ;;
+        ncurses)           _dep_resolved="libncurses" ;;
+        ncurses-libs)      _dep_resolved="libncurses" ;;
+        openssl)           _dep_resolved="libssl" ;;
+        zlib)              _dep_resolved="libz" ;;
+        bzip2)             _dep_resolved="libbz2" ;;
+        xz|liblzma)        _dep_resolved="liblzma" ;;
+        readline)          _dep_resolved="libreadline" ;;
+        pcre)              _dep_resolved="libpcre" ;;
+        pcre2)             _dep_resolved="libpcre2-8" ;;
+        libffi)            _dep_resolved="libffi" ;;
+        expat)             _dep_resolved="libexpat" ;;
+        sqlite|sqlite3)    _dep_resolved="libsqlite3" ;;
+        libpng)            _dep_resolved="libpng" ;;
+        libjpeg|jpeg)      _dep_resolved="libjpeg" ;;
+        freetype|freetype2)_dep_resolved="libfreetype" ;;
+        fontconfig)        _dep_resolved="libfontconfig" ;;
+        linux-headers|linux-api-headers) return 0 ;;  # always host-provided
+    esac
+
+    # Priority 3: Check pkg-config (most reliable for libraries)
     if command -v pkg-config >/dev/null 2>&1; then
-        if pkg-config --exists "$dep" 2>/dev/null; then
+        if pkg-config --exists "$dep" 2>/dev/null || \
+           pkg-config --exists "$_dep_resolved" 2>/dev/null; then
             debug "  ✓ Found via pkg-config"
             return 0
         fi
         debug "  ✗ Not found in pkg-config"
     fi
 
-    # Priority 3: Check if it's a binary in PATH
+    # Priority 4: Check if it's a binary in PATH
     if command -v "$dep" >/dev/null 2>&1; then
-        # Verify the binary actually exists and is executable
         dep_path=$(command -v "$dep")
-        if [ -x "$dep_path" ]; then
-            return 0
-        fi
+        [ -x "$dep_path" ] && return 0
     fi
     debug "  ✗ Not in PATH"
 
-    # Priority 4: Library checking (complex cases)
-    case "$dep" in
-        lib*.so*|*.so*)
-            debug "  → Checking as shared library"
-            if check_shared_library "$dep"; then
+    # Priority 5: Library check using resolved name
+    case "$_dep_resolved" in
+        lib*)
+            debug "  → Checking as shared library: $_dep_resolved"
+            if check_shared_library "$_dep_resolved"; then
                 debug "  ✓ Found as shared library"
                 return 0
             fi
             debug "  ✗ Not found as shared library"
             ;;
         *)
-            # Try with lib prefix
             debug "  → Trying with lib prefix"
-            if check_shared_library "lib${dep}"; then
-                debug "  ✓ Found as lib${dep}"
+            if check_shared_library "lib${_dep_resolved}"; then
+                debug "  ✓ Found as lib${_dep_resolved}"
                 return 0
             fi
-            debug "  ✗ Not found as lib${dep}"
+            debug "  ✗ Not found as lib${_dep_resolved}"
             ;;
     esac
 
@@ -4948,7 +5220,6 @@ TRANSACTION_ENABLED=${TRANSACTION_ENABLED:-1}
 transaction_begin() {
     [ "$TRANSACTION_ENABLED" -eq 0 ] && return 0
     
-    # Generate transaction ID without date command fallbacks
     if command -v date >/dev/null 2>&1; then
         trans_id="$(date +%Y%m%d_%H%M%S 2>/dev/null || printf '%s' "$(portable_timestamp)")_$$"
     else
@@ -4959,7 +5230,6 @@ transaction_begin() {
     
     mkdir -p "$trans_dir"/{metadata,backup,journal}
     
-    # Save initial state (pure POSIX)
     cat > "$trans_dir/metadata/info" <<EOF
 transaction_id=$trans_id
 start_time=$(portable_timestamp)
@@ -4968,16 +5238,19 @@ user=$(portable_whoami)
 status=active
 EOF
     
-    # Snapshot current package database (with tar fallback)
+    # Snapshot ONLY the package db, explicitly excluding .transactions to prevent
+    # exponential backup growth (transactions contain backups of backups otherwise)
     if command -v tar >/dev/null 2>&1; then
-        tar -cf "$trans_dir/backup/db_snapshot.tar" -C "$DB_DIR" . 2>/dev/null || true
-        # Try compression if available
+        tar -cf "$trans_dir/backup/db_snapshot.tar" \
+            --exclude='./.transactions' \
+            -C "$DB_DIR" . 2>/dev/null || true
         if command -v gzip >/dev/null 2>&1; then
             gzip "$trans_dir/backup/db_snapshot.tar" 2>/dev/null || true
         fi
     else
-        # Fallback: copy directory structure
-        cp -R "$DB_DIR" "$trans_dir/backup/db_backup" 2>/dev/null || true
+        # Fallback: copy without .transactions
+        find "$DB_DIR" -mindepth 1 -maxdepth 1 ! -name '.transactions' \
+            -exec cp -R {} "$trans_dir/backup/db_backup/" \; 2>/dev/null || true
     fi
     
     export ASTRAL_TRANSACTION_ID="$trans_id"
@@ -5032,21 +5305,26 @@ transaction_commit() {
     
     trans_dir="$ASTRAL_TRANSACTION_DIR"
     
-    # Update status (portable sed)
     if command -v sed >/dev/null 2>&1; then
-        # Try -i flag (GNU)
         if sed -i 's/status=active/status=committed/' "$trans_dir/metadata/info" 2>/dev/null; then
             :
-        # Try -i '' (BSD)
         elif sed -i '' 's/status=active/status=committed/' "$trans_dir/metadata/info" 2>/dev/null; then
             :
         else
-            # Fallback: temp file
             portable_sed_inplace 's/status=active/status=committed/' "$trans_dir/metadata/info"
         fi
     fi
     
     printf 'end_time=%s\n' "$(portable_timestamp)" >> "$trans_dir/metadata/info"
+    
+    # Delete backup now that commit succeeded — no rollback possible anyway
+    rm -rf "$trans_dir/backup" 2>/dev/null || true
+
+    # Prune old committed transactions, keep only the last 5
+    if [ -d "$TRANSACTION_DIR" ]; then
+        find "$TRANSACTION_DIR" -mindepth 1 -maxdepth 1 -type d | sort | head -n -5 | \
+            xargs -r rm -rf 2>/dev/null || true
+    fi
     
     info "Transaction committed: $ASTRAL_TRANSACTION_ID"
     
@@ -5120,6 +5398,9 @@ transaction_rollback() {
     # Mark as rolled back
     portable_sed_inplace 's/status=active/status=rolled_back/' "$trans_dir/metadata/info"
     printf 'rollback_time=%s\n' "$(portable_timestamp)" >> "$trans_dir/metadata/info"
+    
+    # Free the backup space
+    rm -rf "$trans_dir/backup" 2>/dev/null || true
     
     info ""
     info "✓ Transaction rolled back successfully"
@@ -5240,16 +5521,50 @@ recover_transactions() {
 fetch_remote_recipe() {
     _pkg="$1"
     _force_repo="${2:-$REPO_CONTEXT}"
+    category_pkg=""
 
     info "Attempting to fetch or refresh recipe for '$_pkg' from $_force_repo..."
 
-    # Check if recipe already exists locally
+    # Check if recipe already exists locally and is usable
     existing_rpath=$(recipe_path "$_pkg") 2>/dev/null || existing_rpath=""
 
     if [ -n "$existing_rpath" ]; then
-        category_pkg=$(printf '%s' "$existing_rpath" | sed "s|^${RECIPES_DIR}/||")
-        local_dir="$RECIPES_DIR/$category_pkg"
-    else
+        # Determine if the existing recipe is complete enough to use
+        _is_complete=0
+        case "$existing_rpath" in
+            *.stars)
+                # It's a .stars file — check it has content
+                [ -s "$existing_rpath" ] && _is_complete=1
+                ;;
+            *)
+                # It's an expanded directory — check for a build script
+                [ -f "$existing_rpath/build" ] && _is_complete=1
+                ;;
+        esac
+
+        if [ "$_is_complete" -eq 1 ]; then
+            info "  ✓ Recipe already present locally: $existing_rpath"
+            # Ensure it's expanded into a directory if it's still a raw .stars
+            case "$existing_rpath" in
+                *.stars)
+                    _expanded_dir="${existing_rpath%.stars}"
+                    _expanded_dir=$(printf '%s' "$_expanded_dir" | sed 's|-[^-]*-[^-]*$||')
+                    mkdir -p "$_expanded_dir"
+                    expand_stars_recipe "$existing_rpath" "$_expanded_dir" 2>/dev/null || true
+                    ;;
+            esac
+            return 0
+        fi
+
+        # Recipe exists but is incomplete — re-derive category and re-download
+        warn "  ⚠ Existing recipe for '$_pkg' is incomplete, re-fetching..."
+        _raw=$(printf '%s' "$existing_rpath" | sed "s|^${RECIPES_DIR}/||")
+        _cat=$(printf '%s' "$_raw" | cut -d'/' -f1)
+        _pkgbase=$(basename "$_pkg")
+        category_pkg="${_cat}/${_pkgbase}"
+    fi
+
+    if [ -z "$category_pkg" ]; then
         # Determine which index to search based on repo context
         case "$_force_repo" in
             asura)
@@ -5270,28 +5585,31 @@ fetch_remote_recipe() {
             *)
                 category=""
                 if [ -f "$search_index" ]; then
-                    category=$(grep "^${_pkg}[[:space:]]" "$search_index" | awk '{print $3}' | head -n1)
+                    _match=$(parse_index_v2 "$search_index" | awk -v p="$_pkg" -F'[/ ]' '$2 == p {print; exit}')
+                    [ -n "$_match" ] && category=$(printf '%s' "$_match" | cut -d'/' -f1)
                 fi
 
                 if [ -z "$category" ] && [ "$_force_repo" = "asura" ] && [ -f "$INDEX_FILE_AOHARU" ]; then
-                    category=$(grep "^${_pkg}[[:space:]]" "$INDEX_FILE_AOHARU" | awk '{print $3}' | head -n1)
+                    _match=$(parse_index_v2 "$INDEX_FILE_AOHARU" | awk -v p="$_pkg" -F'[/ ]' '$2 == p {print; exit}')
+                    [ -n "$_match" ] && category=$(printf '%s' "$_match" | cut -d'/' -f1)
                 fi
 
                 if [ -z "$category" ] && [ "$_force_repo" = "aoharu" ] && [ -f "$INDEX_FILE_ASURA" ]; then
-                    category=$(grep "^${_pkg}[[:space:]]" "$INDEX_FILE_ASURA" | awk '{print $3}' | head -n1)
+                    _match=$(parse_index_v2 "$INDEX_FILE_ASURA" | awk -v p="$_pkg" -F'[/ ]' '$2 == p {print; exit}')
+                    [ -n "$_match" ] && category=$(printf '%s' "$_match" | cut -d'/' -f1)
                 fi
 
                 if [ -n "$category" ]; then
                     category_pkg="${category}/${_pkg}"
                 else
+                    warn "  ⚠ Could not find '$_pkg' in index — trying without category"
                     category_pkg="$_pkg"
                 fi
                 ;;
         esac
-
-        local_dir="$RECIPES_DIR/$category_pkg"
     fi
 
+    local_dir="$RECIPES_DIR/$category_pkg"
     mkdir -p "$local_dir"
 
     # Build remote URL based on repo context
@@ -5304,47 +5622,85 @@ fetch_remote_recipe() {
             ;;
     esac
 
-    # Try downloading .stars file (two possible locations)
+    # Try downloading .stars file — three URL patterns:
+    #   1. flat:    .../recipes/category/pkg.stars
+    #   2. nested:  .../recipes/category/pkg/pkg.stars
+    #   3. versioned: .../recipes/category/pkg/pkg-VER-ARCH.stars  (most common in AOHARU)
     stars_url_flat="${remote_base}.stars"
     stars_url_nested="${remote_base}/$(basename "$category_pkg").stars"
     stars_dest="${local_dir}.stars"
 
-    # Try flat structure first (category/package.stars)
-    if curl -fsSL --progress-bar "$stars_url_flat" -o "$stars_dest" 2>/dev/null; then
-        info "Downloaded .stars recipe (flat): $stars_dest"
+    # Derive versioned filename from index if possible
+    stars_url_versioned=""
+    _idx_to_search="$INDEX_FILE_AOHARU"
+    [ "$_force_repo" = "asura" ] && _idx_to_search="$INDEX_FILE_ASURA"
+    if [ -f "$_idx_to_search" ]; then
+        _imatch=$(parse_index_v2 "$_idx_to_search" | awk -v p="$(basename "$category_pkg")" -F'[/ ]' '$2 == p {print; exit}')
+        if [ -n "$_imatch" ]; then
+            _iver=$(printf '%s' "$_imatch" | awk '{print $3}')
+            _iarch=$(printf '%s' "$_imatch" | awk '{print $2}')
+            _iarch="${_iarch:-any}"
+            _vname="$(basename "$category_pkg")-${_iver}-${_iarch}.stars"
+            stars_url_versioned="${remote_base}/${_vname}"
+            stars_dest_versioned="${local_dir}/${_vname}"
+        fi
+    fi
+
+    # Try flat first
+    if curl -fsSL "$stars_url_flat" -o "$stars_dest" 2>/dev/null && [ -s "$stars_dest" ]; then
+        info "  ✓ Downloaded .stars recipe (flat): $stars_dest"
         mkdir -p "$local_dir"
         expand_stars_recipe "$stars_dest" "$local_dir"
         return 0
     fi
+    rm -f "$stars_dest"
 
-    # Try nested structure (category/package/package.stars)
-    if curl -f#SL "$stars_url_nested" -o "$stars_dest" 2>/dev/null; then
-        info "Downloaded .stars recipe (nested): $stars_dest"
+    # Try versioned (most common AOHARU layout: category/pkg/pkg-ver-arch.stars)
+    if [ -n "$stars_url_versioned" ]; then
+        mkdir -p "$local_dir"
+        if curl -fsSL "$stars_url_versioned" -o "$stars_dest_versioned" 2>/dev/null && [ -s "$stars_dest_versioned" ]; then
+            info "  ✓ Downloaded .stars recipe (versioned): $stars_dest_versioned"
+            expand_stars_recipe "$stars_dest_versioned" "$local_dir"
+            return 0
+        fi
+        rm -f "$stars_dest_versioned"
+    fi
+
+    # Try nested (category/pkg/pkg.stars)
+    if curl -fsSL "$stars_url_nested" -o "$stars_dest" 2>/dev/null && [ -s "$stars_dest" ]; then
+        info "  ✓ Downloaded .stars recipe (nested): $stars_dest"
         mkdir -p "$local_dir"
         expand_stars_recipe "$stars_dest" "$local_dir"
         return 0
     fi
+    rm -f "$stars_dest"
 
-    # Fallback to directory-based recipe if .stars not found
+    # Fallback to directory-based recipe (legacy format)
     info "  → .stars not found, trying directory-based recipe..."
 
     required_files="version build"
     optional_files="depends bdepends rdepends package pre_install pre_remove post_install post_remove checksums conflicts info sources"
+    _fetch_ok=1
 
-    # Download directory-based files
     for file in $required_files $optional_files; do
         url="$remote_base/$file"
         dest="$local_dir/$file"
 
-        if curl -f#SL "$url" -o "$dest" 2>/dev/null; then
+        if curl -fsSL "$url" -o "$dest" 2>/dev/null && [ -s "$dest" ]; then
             :
         else
-            if printf '%s' "$required_files" | grep -qw "$file"; then
-                err "Failed to fetch mandatory file '$file' for package '$_pkg' from $url ($_force_repo repo)"
-            fi
             rm -f "$dest"
+            if printf '%s' "$required_files" | grep -qw "$file"; then
+                warn "  ✗ Could not fetch required file '$file' for '$_pkg'"
+                _fetch_ok=0
+            fi
         fi
     done
+
+    if [ "$_fetch_ok" -eq 0 ]; then
+        warn "Recipe fetch failed for '$_pkg' from $_force_repo"
+        return 1
+    fi
 
     # Make scripts executable
     chmod +x "$local_dir/build" 2>/dev/null || true
@@ -5365,7 +5721,12 @@ fetch_remote_recipe_stars() {
     # Determine category
     category=""
     if [ -f "$INDEX_FILE_AOHARU" ]; then
-        category=$(grep "^${_pkg}[[:space:]]" "$INDEX_FILE_AOHARU" | awk '{print $3}' | head -n1)
+        _match=$(parse_index_v2 "$INDEX_FILE_AOHARU" | awk -v p="$_pkg" -F'[ /]' '$2 == p {print; exit}')
+        [ -n "$_match" ] && category=$(printf '%s' "$_match" | cut -d'/' -f1)
+    fi
+    if [ -z "$category" ] && [ -f "$INDEX_FILE_ASURA" ]; then
+        _match=$(parse_index_v2 "$INDEX_FILE_ASURA" | awk -v p="$_pkg" -F'[ /]' '$2 == p {print; exit}')
+        [ -n "$_match" ] && category=$(printf '%s' "$_match" | cut -d'/' -f1)
     fi
 
     # Try to fetch .stars file first
@@ -5386,6 +5747,33 @@ fetch_remote_recipe_stars() {
 # §3 — Parallel source downloader (pure POSIX sh, FIFO job pool)
 # Replaces serial download_sources() as the primary downloader.
 # Falls back to serial download_sources() if mkfifo is unavailable.
+# Suggestion: recoverable download with retry logic
+# Usage: download_with_retry <url> <dest> [max_retries]
+# Retries transient failures (network blip, server hiccup) with exponential backoff.
+# Gives up and returns 1 after max_retries — caller decides whether to err() or warn().
+download_with_retry() {
+    _url="$1"
+    _dest="$2"
+    _max="${3:-${DOWNLOAD_RETRIES:-3}}"
+    _attempt=0
+    _wait=2
+
+    while [ "$_attempt" -lt "$_max" ]; do
+        _attempt=$((_attempt + 1))
+        if curl -fSL --retry 0 --connect-timeout 30 --max-time 300                 "$_url" -o "$_dest" 2>/dev/null; then
+            return 0
+        fi
+        if [ "$_attempt" -lt "$_max" ]; then
+            warn "  ↻ Download failed (attempt $_attempt/$_max), retrying in ${_wait}s: $(basename "$_dest")"
+            sleep "$_wait"
+            _wait=$((_wait * 2))  # exponential backoff: 2s, 4s, 8s...
+        fi
+    done
+
+    warn "  ✗ Download failed after $_max attempts: $(basename "$_dest")"
+    return 1
+}
+
 parallel_download_sources() {
     _rpath="$1"
     _buildtmp="$2"
@@ -5438,12 +5826,26 @@ parallel_download_sources() {
                     ;;
                 *)
                     info "  → [$_fname] downloading..."
-                    if curl -fSL "$_url" -o "$_dest" 2>/dev/null; then
+                    if download_with_retry "$_url" "$_dest"; then
                         info "  ✓ [$_fname] done"
-                        # Try optional signature download
+                        # Signature verification
                         sig_url="${_url}.sig"
                         sig_file="${_dest}.sig"
-                        curl -fsSL "$sig_url" -o "$sig_file" 2>/dev/null || true
+                        if curl -fsSL "$sig_url" -o "$sig_file" 2>/dev/null; then
+                            if ! verify_signature "$_dest" "$sig_file" 2>/dev/null; then
+                                warn "  ✗ [$_fname] signature INVALID"
+                                printf '%s\n' "$_url" >> "$_dl_error_file"
+                            fi
+                        else
+                            rm -f "$sig_file"
+                            debug "sig check: SAFETY_SIGNATURE_VERIFY=$SAFETY_SIGNATURE_VERIFY"
+                            if [ "$SAFETY_SIGNATURE_VERIFY" -eq 1 ]; then
+                                warn "  ✗ [$_fname] no signature found (SAFETY_SIGNATURE_VERIFY=1)"
+                                printf '%s\n' "$_url" >> "$_dl_error_file"
+                            else
+                                warn "  ⚠ [$_fname] no signature (SAFETY_SIGNATURE_VERIFY=0, continuing)"
+                            fi
+                        fi
                     else
                         warn "  ✗ [$_fname] download failed"
                         printf '%s\n' "$_url" >> "$_dl_error_file"
@@ -5512,15 +5914,25 @@ download_sources() {
                 
                 info "  → Downloading: $filename"
                 
-                if ! curl -f#SL "$line" -o "$dest_file" 2>&1; then
-                    err "Failed to download: $line"
+                if ! download_with_retry "$line" "$dest_file"; then
+                    err "Failed to download after retries: $line"
                 fi
                 
-                # Try to download signature
+                # Signature verification: attempt to download .sig
+                # If SAFETY_SIGNATURE_VERIFY=1, a missing or invalid sig is fatal.
                 sig_url="${line}.sig"
                 sig_file="${dest_file}.sig"
                 if curl -fsSL "$sig_url" -o "$sig_file" 2>/dev/null; then
-                    verify_signature "$dest_file" "$sig_file" || warn "Signature verification failed"
+                    if ! verify_signature "$dest_file" "$sig_file"; then
+                        err "Signature verification FAILED for $filename"
+                    fi
+                else
+                    rm -f "$sig_file"
+                    if [ "$SAFETY_SIGNATURE_VERIFY" -eq 1 ]; then
+                        err "No signature found for $filename and SAFETY_SIGNATURE_VERIFY=1 — refusing to proceed. Disable with SAFETY_SIGNATURE_VERIFY=0 if upstream does not publish signatures."
+                    else
+                        warn "No signature file for $filename (SAFETY_SIGNATURE_VERIFY=0, continuing)"
+                    fi
                 fi
                 
                 info "  ✓ Downloaded: $filename"
@@ -6408,31 +6820,86 @@ collect_constraints_recursive() {
 }
 
 # --- BUILD / SYNC ---
+# Depth counter for sync_pkg_recursive call stack
+_SYNC_DEPTH=0
+
+# Save current frame at depth N
+_sync_push() {
+    _d="$_SYNC_DEPTH"
+    eval "_sf_${_d}_this_pkg=\"\$_this_pkg\""
+    eval "_sf_${_d}_this_force=\"\$_this_force\""
+    eval "_sf_${_d}_this_explicit=\"\$_this_explicit\""
+    eval "_sf_${_d}_this_repo=\"\$_this_repo\""
+    eval "_sf_${_d}_CALL_PKG=\"\${CALL_PKG:-}\""
+    eval "_sf_${_d}_CALL_FORCE=\"\${CALL_FORCE:-}\""
+    eval "_sf_${_d}_CALL_EXPLICIT=\"\${CALL_EXPLICIT:-}\""
+    eval "_sf_${_d}_CALL_REPO=\"\${CALL_REPO:-}\""
+    eval "_sf_${_d}_CALL_PKG_CLEAN=\"\${CALL_PKG_CLEAN:-}\""
+    eval "_sf_${_d}_CURRENT_PKG=\"\${CURRENT_PKG:-}\""
+    eval "_sf_${_d}_recipe_dir=\"\${recipe_dir:-}\""
+    eval "_sf_${_d}_expanded_rpath=\"\${expanded_rpath:-}\""
+    eval "_sf_${_d}_stars_temp=\"\${stars_temp:-}\""
+    eval "_sf_${_d}_recipe_ver=\"\${recipe_ver:-}\""
+    eval "_sf_${_d}_REPO_CONTEXT=\"\$REPO_CONTEXT\""
+    _SYNC_DEPTH=$((_SYNC_DEPTH + 1))
+}
+
+# Restore frame and return
+_sync_restore() {
+    _rc="${1:-0}"
+    _SYNC_DEPTH=$((_SYNC_DEPTH - 1))
+    _d="$_SYNC_DEPTH"
+    eval "_this_pkg=\"\$_sf_${_d}_this_pkg\""
+    eval "_this_force=\"\$_sf_${_d}_this_force\""
+    eval "_this_explicit=\"\$_sf_${_d}_this_explicit\""
+    eval "_this_repo=\"\$_sf_${_d}_this_repo\""
+    eval "CALL_PKG=\"\$_sf_${_d}_CALL_PKG\""
+    eval "CALL_FORCE=\"\$_sf_${_d}_CALL_FORCE\""
+    eval "CALL_EXPLICIT=\"\$_sf_${_d}_CALL_EXPLICIT\""
+    eval "CALL_REPO=\"\$_sf_${_d}_CALL_REPO\""
+    eval "CALL_PKG_CLEAN=\"\$_sf_${_d}_CALL_PKG_CLEAN\""
+    eval "CURRENT_PKG=\"\$_sf_${_d}_CURRENT_PKG\""
+    eval "recipe_dir=\"\$_sf_${_d}_recipe_dir\""
+    eval "expanded_rpath=\"\$_sf_${_d}_expanded_rpath\""
+    eval "stars_temp=\"\$_sf_${_d}_stars_temp\""
+    eval "recipe_ver=\"\$_sf_${_d}_recipe_ver\""
+    eval "REPO_CONTEXT=\"\$_sf_${_d}_REPO_CONTEXT\""
+    return "$_rc"
+}
+
 sync_pkg_recursive() {
     LOG="$LOG_SYNC_FILE"
     info "View astral logs in $LOG"
-    
+
+    # Push parent frame BEFORE overwriting _this_* with our args
+    _sync_push
+
+    # Capture positional args for this invocation
+    _this_pkg="$1"
+    _this_force="${2:-$FORCE_BUILD}"
+    _this_explicit="${3:-0}"
+    _this_repo="${4:-$REPO_CONTEXT}"
     # Log entry with all parameters
     {
         echo "==== ENTER sync_pkg_recursive ===="
         echo "Timestamp: $(date '+%H:%M:%S.%N')"
         echo "PID: $$"
         echo "Parameters:"
-        echo "  \$1 (pkg):      '$1'"
-        echo "  \$2 (force):    '${2:-$FORCE_BUILD}'"
-        echo "  \$3 (explicit): '${3:-0}'"
-        echo "  \$4 (repo):     '${4:-$REPO_CONTEXT}'"
+        echo "  \$1 (pkg):      '$_this_pkg'"
+        echo "  \$2 (force):    '$_this_force'"
+        echo "  \$3 (explicit): '$_this_explicit'"
+        echo "  \$4 (repo):     '$_this_repo'"
         echo "Global state:"
         echo "  VISITED_PACKAGES: '$VISITED_PACKAGES'"
         echo "  REPO_CONTEXT: '$REPO_CONTEXT'"
         echo ""
     } >> "$LOG"
     
-    # Save parameters immediately
-    CALL_PKG="$1"
-    CALL_FORCE="${2:-$FORCE_BUILD}"
-    CALL_EXPLICIT="${3:-0}"
-    CALL_REPO="${4:-$REPO_CONTEXT}"
+    # Set frame variables from captured args
+    CALL_PKG="$_this_pkg"
+    CALL_FORCE="$_this_force"
+    CALL_EXPLICIT="$_this_explicit"
+    CALL_REPO="$_this_repo"
 
     if [ "$CALL_EXPLICIT" -eq 1 ] && [ "${SKIP_CONFIRMATION:-0}" -eq 0 ]; then
         interactive_dep_menu "$CALL_PKG" 0
@@ -6449,22 +6916,30 @@ sync_pkg_recursive() {
     echo "" >> "$LOG"
     
     if check_if_user_skipped "$CALL_PKG_CLEAN"; then
-        return 0
+        _sync_restore 0; return
     fi
-    
-    # Circular dependency check
+
+    # Already visited this package in a prior branch — skip, don't error (diamond dep)
     case " $VISITED_PACKAGES " in
+        *" $CALL_PKG_CLEAN "*) _sync_restore 0; return ;;
+    esac
+
+    # True circular dependency check — is this pkg currently on the active call stack?
+    case " $DEP_CALL_STACK " in
         *" $CALL_PKG_CLEAN "*)
             echo "ERROR: Circular dependency!" >> "$LOG"
-            err "[$CALL_PKG_CLEAN] CIRCULAR DEPENDENCY DETECTED! Chain: $VISITED_PACKAGES -> $CALL_PKG_CLEAN"
+            err "[$CALL_PKG_CLEAN] CIRCULAR DEPENDENCY DETECTED! Stack: $DEP_CALL_STACK -> $CALL_PKG_CLEAN"
             ;;
     esac
+
     VISITED_PACKAGES="$VISITED_PACKAGES $CALL_PKG_CLEAN"
+    DEP_CALL_STACK="$DEP_CALL_STACK $CALL_PKG_CLEAN"
     echo "Updated VISITED_PACKAGES: '$VISITED_PACKAGES'" >> "$LOG"
+    echo "Updated DEP_CALL_STACK:   '$DEP_CALL_STACK'" >> "$LOG"
     echo "" >> "$LOG"
     
     # Set repo context
-    if [ "${3:-0}" -eq 0 ]; then
+    if [ "$_this_explicit" -eq 0 ]; then
         REPO_CONTEXT="aoharu"
         info "[$CALL_PKG_CLEAN] Dependency - using AOHARU repository"
         echo "Set REPO_CONTEXT=aoharu (dependency)" >> "$LOG"
@@ -6480,7 +6955,7 @@ sync_pkg_recursive() {
     
     # === EARLY EXIT CONDITIONS ===
     echo "Checking early exit conditions (CALL_EXPLICIT=$CALL_EXPLICIT)..." >> "$LOG"
-    if [ "${3:-0}" -eq 0 ]; then
+    if [ "$_this_explicit" -eq 0 ]; then
         echo "  This is a dependency, checking early exits..." >> "$LOG"
         
         # Already installed?
@@ -6490,7 +6965,7 @@ sync_pkg_recursive() {
             echo "  EARLY EXIT: Already installed" >> "$LOG"
             echo "==== EXIT (already installed) ====" >> "$LOG"
             echo "" >> "$LOG"
-            return 0
+            _sync_restore 0; return
         fi
         
         # Virtual?
@@ -6498,7 +6973,7 @@ sync_pkg_recursive() {
             echo "  EARLY EXIT: Virtual satisfied" >> "$LOG"
             echo "==== EXIT (virtual) ====" >> "$LOG"
             echo "" >> "$LOG"
-            return 0
+            _sync_restore 0; return
         fi
         
         # Host provided?
@@ -6507,7 +6982,7 @@ sync_pkg_recursive() {
             echo "  EARLY EXIT: Host provided" >> "$LOG"
             echo "==== EXIT (host provided) ====" >> "$LOG"
             echo "" >> "$LOG"
-            return 0
+            _sync_restore 0; return
         fi
         
         echo "  No early exit, continuing..." >> "$LOG"
@@ -6516,7 +6991,17 @@ sync_pkg_recursive() {
     fi
     
     # === FETCH RECIPE ===
-    if ! recipe_path "$CALL_PKG_CLEAN" >/dev/null 2>&1; then
+    # Check if a complete, usable recipe exists locally
+    _existing_rpath=$(recipe_path "$CALL_PKG_CLEAN" 2>/dev/null) || _existing_rpath=""
+    _recipe_ok=0
+    if [ -n "$_existing_rpath" ]; then
+        case "$_existing_rpath" in
+            *.stars) [ -s "$_existing_rpath" ] && _recipe_ok=1 ;;
+            *)       [ -f "$_existing_rpath/build" ] && _recipe_ok=1 ;;
+        esac
+    fi
+
+    if [ "$_recipe_ok" -eq 0 ]; then
         if ! fetch_remote_recipe "$CALL_PKG_CLEAN" "$REPO_CONTEXT"; then
             if [ "$CALL_EXPLICIT" -eq 0 ] && [ "$REPO_CONTEXT" = "asura" ]; then
                 info "[$CALL_PKG_CLEAN] Not found in ASURA, falling back to AOHARU..."
@@ -6573,11 +7058,16 @@ sync_pkg_recursive() {
         
         dep_count=$((dep_count + 1))
         
-        # Check for circular dependency
+        # Skip if already installed or visited in another branch (diamond dep — not a cycle)
         case " $VISITED_PACKAGES " in
+            *" $dep "*) continue ;;
+        esac
+
+        # True cycle: dep is on the active call stack right now
+        case " $DEP_CALL_STACK " in
             *" $dep "*)
                 [ -n "$stars_temp" ] && rm -rf "$stars_temp"
-                err "[$CALL_PKG_CLEAN] Would create circular dependency with: $dep"
+                err "[$CALL_PKG_CLEAN] Circular dependency detected: $dep is an ancestor (stack: $DEP_CALL_STACK)"
                 ;;
         esac
         
@@ -6589,9 +7079,9 @@ sync_pkg_recursive() {
     done
     
     # === CHECK IF THIS WAS A DEPENDENCY CALL ===
-    if [ "${3:-0}" -eq 0 ]; then
+    if [ "$_this_explicit" -eq 0 ]; then
         [ -n "$stars_temp" ] && rm -rf "$stars_temp"
-        return 0
+        _sync_restore 0; return
     fi
     
     # === CHECK IF ALREADY INSTALLED ===
@@ -6603,7 +7093,7 @@ sync_pkg_recursive() {
         if [ "$CALL_EXPLICIT" -eq 1 ]; then
             is_in_world "$CALL_PKG" || add_to_world "$CALL_PKG"
         fi
-        return 0
+        _sync_restore 0; return
     fi
     
     # === BUILD THE PACKAGE ===
@@ -6615,19 +7105,22 @@ sync_pkg_recursive() {
         export INSTALLING_CCACHE
     fi
 
-    build_from_recipe_enhanced "$1" "$CALL_FORCE"
+    build_from_recipe_enhanced "$_this_pkg" "$CALL_FORCE"
     
     unset INSTALLING_CCACHE
     
     # Cleanup
     [ -n "$stars_temp" ] && rm -rf "$stars_temp"
     
+    # Pop this package from the active call stack now that we're done
+    DEP_CALL_STACK=$(printf '%s' "$DEP_CALL_STACK" | sed "s/ $CALL_PKG_CLEAN\b//g" | sed 's/  */ /g')
+
     # Add to world if explicit
-    if [ "${3:-0}" -eq 1 ]; then
-        add_to_world "$1"
+    if [ "$_this_explicit" -eq 1 ]; then
+        add_to_world "$_this_pkg"
     fi
-    
-    return 0
+
+    _sync_restore 0; return
 }
 
 # === ASURA OVERLAY SYSTEM ===
@@ -6717,17 +7210,29 @@ build_from_recipe_enhanced() {
         info "Installing '$_pkg' version $recipe_ver..."
     fi
     
-    # Safety checks
-    check_script_safety "$rpath/build" "$_pkg"
-    [ -f "$rpath/package" ] && check_script_safety "$rpath/package" "$_pkg"
-    [ -f "$rpath/pre_install" ] && check_script_safety "$rpath/pre_install" "$_pkg"
-    [ -f "$rpath/post_install" ] && check_script_safety "$rpath/post_install" "$_pkg"
+    # Safety checks — print banner once
+    cat >&2 <<SAFETY_WARNING
+───────────────────────────────────────────────────────────────
+⚠️  SAFETY CHECK: $_pkg
+───────────────────────────────────────────────────────────────
+WARNING: These checks provide BASIC protection only.
+They can be bypassed by determined attackers.
+DO NOT run untrusted packages without review.
+───────────────────────────────────────────────────────────────
+SAFETY_WARNING
+    check_script_safety "$rpath/build" "$_pkg" "verbose"
+    { [ -f "$rpath/package" ] && check_script_safety "$rpath/package" "$_pkg"; } || true
+    { [ -f "$rpath/pre_install" ] && check_script_safety "$rpath/pre_install" "$_pkg"; } || true
+    { [ -f "$rpath/post_install" ] && check_script_safety "$rpath/post_install" "$_pkg"; } || true
 
     # Deep safety check
     if ! deep_recipe_check "$_pkg" "$rpath"; then
         transaction_rollback
         err "Safety checks failed for $_pkg"
     fi
+
+    # Advanced security analysis (opt-in: SAFETY_ADVANCED_SCRIPT_CHECK=1 in astral.stars)
+    advanced_script_safety_check "$_pkg" "$rpath"
 
     # Setup sandbox
     buildtmp="$TMPDIR/astral-build-$_pkg-$$"
@@ -6779,11 +7284,6 @@ build_from_recipe_enhanced() {
     fi
 
         info "Building in isolated sandbox..."
-    
-    if ! sandbox_exec "$buildtmp" ". ./build"; then
-        transaction_rollback
-        err "Build failed in sandbox for $_pkg"
-    fi
 
     if [ -f "./build" ]; then
         chmod +x ./build || true
@@ -6794,43 +7294,28 @@ build_from_recipe_enhanced() {
         
         save_build_state "$_pkg" "configure" "$buildtmp" "$recipe_ver"
         
-        # Create wrapper that auto-cds into first subdirectory
+        # Run build script from buildtmp root — recipes do their own cd
         (
+            cd "$buildtmp" || exit 1
             export DESTDIR="$PKGDIR"
-            
-            # Find first directory (Git clone or extracted archive)
-            first_dir=$(find . -maxdepth 1 -type d ! -name . ! -name pkg | head -n1)
-            
-            if [ -n "$first_dir" ]; then
-                dir_name=$(basename "$first_dir")
-                info "Entering directory: $dir_name"
-                cd "$first_dir" || exit 1
-            fi
-            
-            # Run build script from parent directory
-            . ../build
-        ) || err "build failed for $_pkg"
+            export PKGDIR="$PKGDIR"
+            export MAKEFLAGS="$MAKEFLAGS"
+            export CFLAGS="$CFLAGS"
+            export CXXFLAGS="$CXXFLAGS"
+            export LDFLAGS="$LDFLAGS"
+            . ./build
+        ) || { transaction_rollback; err "build failed for $_pkg"; }
         
         save_build_state "$_pkg" "build" "$buildtmp" "$recipe_ver"
 
-        if [ -f "./package" ]; then
+        if [ -f "$buildtmp/package" ]; then
             info "Running package hook for $_pkg..."
-            
             (
+                cd "$buildtmp" || exit 1
                 export DESTDIR="$PKGDIR"
                 export PKGDIR="$PKGDIR"
-                
-                # Same logic for package script
-                first_dir=$(find . -maxdepth 1 -type d ! -name . ! -name pkg | head -n1)
-                
-                if [ -n "$first_dir" ]; then
-                    dir_name=$(basename "$first_dir")
-                    info "Entering directory: $dir_name"
-                    cd "$first_dir" || exit 1
-                fi
-                
-                . ../package
-            ) || err "package() failed for $_pkg"
+                . ./package
+            ) || { transaction_rollback; err "package() failed for $_pkg"; }
         fi
         
         save_build_state "$_pkg" "package" "$buildtmp" "$recipe_ver"
@@ -8033,12 +8518,13 @@ removedep_pkg() {
                 # Get subdeps before removal
                 subdeps=$(get_pkg_deps "$dep_path" 2>/dev/null || true)
 
-                # Remove the package
-                remove_pkg_only "$dep_path"
-
-                # Add subdeps to queue
-                if [ -n "$subdeps" ]; then
-                    dep_queue="$dep_queue $subdeps"
+                # Bug fix: check removal succeeded before queuing subdeps
+                if remove_pkg_only "$dep_path"; then
+                    if [ -n "$subdeps" ]; then
+                        dep_queue="$dep_queue $subdeps"
+                    fi
+                else
+                    warn "Failed to remove orphan $dep_path — skipping its subdeps"
                 fi
             else
                 info "Keeping dependency $dep_path (still required)."
@@ -9152,17 +9638,23 @@ interactive_dep_menu() {
             local all_deps="$required_deps $build_deps $runtime_deps"
             local dep_list=""
             local dep_count=0
-            
+            local seen_deps=""
+
             for d in $all_deps; do
                 d=$(printf '%s' "$d" | tr -d '[:space:]')
                 [ -z "$d" ] && continue
+                # Skip duplicates
+                case " $seen_deps " in *" $d "*) continue ;; esac
+                seen_deps="$seen_deps $d"
                 dep_list="$dep_list required:$d"
                 dep_count=$((dep_count + 1))
             done
-            
+
             for d in $optional_deps; do
                 d=$(printf '%s' "$d" | tr -d '[:space:]')
                 [ -z "$d" ] && continue
+                case " $seen_deps " in *" $d "*) continue ;; esac
+                seen_deps="$seen_deps $d"
                 dep_list="$dep_list optional:$d"
                 dep_count=$((dep_count + 1))
             done
@@ -10560,18 +11052,24 @@ ensure_config_perms
 parse_astral_stars_config
 load_config
 apply_tool_config
+debug "config loaded: SAFETY_SIGNATURE_VERIFY=$SAFETY_SIGNATURE_VERIFY"
 
 case "$1" in
 -S|--Sync)
     [ $# -gt 1 ] || err "package name required"
-    VISITED_PACKAGES=""
+    # Save and restore VISITED_PACKAGES so nested/parallel calls don't stomp state
+    _vp_saved="$VISITED_PACKAGES"; _cs_saved="$DEP_CALL_STACK"
+    VISITED_PACKAGES=""; DEP_CALL_STACK=""
     sync_pkg_recursive "$2" "$FORCE_BUILD" 1
+    VISITED_PACKAGES="$_vp_saved"; DEP_CALL_STACK="$_cs_saved"
     FORCE_BUILD=0
     ;;
 -C|--Compile)
     [ $# -gt 1 ] || err "package name required"
-    VISITED_PACKAGES=""
+    _vp_saved="$VISITED_PACKAGES"; _cs_saved="$DEP_CALL_STACK"
+    VISITED_PACKAGES=""; DEP_CALL_STACK=""
     build_from_recipe_enhanced "$2" "$FORCE_BUILD"
+    VISITED_PACKAGES="$_vp_saved"; DEP_CALL_STACK="$_cs_saved"
     FORCE_BUILD=0
     ;;
 
@@ -10582,8 +11080,10 @@ case "$1" in
 
 -SA|--Sync-Asura)
     [ $# -gt 1 ] || err "package name required"
-    VISITED_PACKAGES=""
+    _vp_saved="$VISITED_PACKAGES"; _cs_saved="$DEP_CALL_STACK"
+    VISITED_PACKAGES=""; DEP_CALL_STACK=""
     sync_pkg_asura "$2" "$FORCE_BUILD" 1 
+    VISITED_PACKAGES="$_vp_saved"; DEP_CALL_STACK="$_cs_saved"
     FORCE_BUILD=0
     ;;
 
