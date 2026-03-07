@@ -2,7 +2,7 @@
 
 > *"Because compiling from source should be less painful than a root canal"*
 
-Version: 5.0.1.0 Main  
+Version: 5.1.0.0 Main  
 Last Updated: 06 March 2026 (GMT+8)  
 Maintained by: One Maniac (yes, just one)
 
