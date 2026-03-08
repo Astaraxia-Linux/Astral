@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v5.3.1.0 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
+# Astral v5.3.1.1 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
 # SOURCE-ONLY
-# V: 5 - Major . 3 - Minor . 1 - Patches . 0 - hotfixes
+# V: 5 - Major . 3 - Minor . 1 - Patches . 1 - hotfixes
 
-version="5.3.1.0 Main"
+version="5.3.1.1 Main"
 ASTRAL_PRODUCTION_DATE="2025-11-26"
 now_seconds=$(date +%s)
 prod_seconds=$(date -d "$ASTRAL_PRODUCTION_DATE" +%s)
@@ -4648,12 +4648,72 @@ check_host_dependency() {
         debug "  ✗ Not found in pkg-config"
     fi
 
-    # Priority 4: Check if it's a binary in PATH
-    if command -v "$dep" >/dev/null 2>&1; then
-        dep_path=$(command -v "$dep")
-        [ -x "$dep_path" ] && return 0
+    # Priority 4: Binary name translation — package name often ≠ binary name
+    _dep_bin="$dep"
+    case "$dep" in
+        texinfo)           _dep_bin="makeinfo" ;;
+        autoconf)          _dep_bin="autoconf" ;;
+        automake)          _dep_bin="automake" ;;
+        libtool)           _dep_bin="libtoolize" ;;
+        pkg-config|pkgconf)_dep_bin="pkg-config" ;;
+        flex)              _dep_bin="flex" ;;
+        bison)             _dep_bin="bison" ;;
+        m4)                _dep_bin="m4" ;;
+        perl)              _dep_bin="perl" ;;
+        python|python3)    _dep_bin="python3" ;;
+        python2)           _dep_bin="python2" ;;
+        ruby)              _dep_bin="ruby" ;;
+        cmake)             _dep_bin="cmake" ;;
+        ninja|ninja-build) _dep_bin="ninja" ;;
+        meson)             _dep_bin="meson" ;;
+        nasm)              _dep_bin="nasm" ;;
+        yasm)              _dep_bin="yasm" ;;
+        gperf)             _dep_bin="gperf" ;;
+        gettext)           _dep_bin="msgfmt" ;;
+        diffutils)         _dep_bin="diff" ;;
+        findutils)         _dep_bin="find" ;;
+        util-linux)        _dep_bin="mount" ;;
+        procps|procps-ng)  _dep_bin="ps" ;;
+        e2fsprogs)         _dep_bin="mke2fs" ;;
+        shadow)            _dep_bin="useradd" ;;
+        iproute2)          _dep_bin="ip" ;;
+        wget)              _dep_bin="wget" ;;
+        curl)              _dep_bin="curl" ;;
+        git)               _dep_bin="git" ;;
+        rsync)             _dep_bin="rsync" ;;
+        patch)             _dep_bin="patch" ;;
+        bc)                _dep_bin="bc" ;;
+        gzip)              _dep_bin="gzip" ;;
+        bzip2-tools|bzip2) _dep_bin="bzip2" ;;
+        xz-utils|xz)       _dep_bin="xz" ;;
+        unzip)             _dep_bin="unzip" ;;
+        zip)               _dep_bin="zip" ;;
+        tar)               _dep_bin="tar" ;;
+        sed)               _dep_bin="sed" ;;
+        awk|gawk)          _dep_bin="awk" ;;
+        grep)              _dep_bin="grep" ;;
+        which)             _dep_bin="which" ;;
+        file)              _dep_bin="file" ;;
+        sudo)              _dep_bin="sudo" ;;
+        binutils)          _dep_bin="ld" ;;
+        gcc)               _dep_bin="gcc" ;;
+        g++|gcc-c++)       _dep_bin="g++" ;;
+        clang)             _dep_bin="clang" ;;
+        make)              _dep_bin="make" ;;
+        gmake)             _dep_bin="gmake" ;;
+    esac
+
+    # Check translated binary name in PATH
+    if command -v "$_dep_bin" >/dev/null 2>&1; then
+        debug "  ✓ Found binary '$_dep_bin' in PATH (package: $dep)"
+        return 0
     fi
-    debug "  ✗ Not in PATH"
+    # Also check original name in PATH
+    if [ "$_dep_bin" != "$dep" ] && command -v "$dep" >/dev/null 2>&1; then
+        debug "  ✓ Found '$dep' in PATH"
+        return 0
+    fi
+    debug "  ✗ Not in PATH (tried: $dep, $_dep_bin)"
 
     # Priority 5: Library check using resolved name
     case "$_dep_resolved" in
@@ -7574,17 +7634,21 @@ SAFETY_WARNING
         info "Starting isolated build for $_pkg..."
         
         save_build_state "$_pkg" "configure" "$buildtmp" "$recipe_ver"
+
+        # Use git_dir as working dir if this is a git source, otherwise buildtmp root
+        _build_workdir="$buildtmp"
+        [ -n "$git_dir" ] && [ -d "$git_dir" ] && _build_workdir="$git_dir"
         
-        # Run build script from buildtmp root — recipes do their own cd
+        # Run build script from correct dir — recipes do their own cd for tarballs
         (
-            cd "$buildtmp" || exit 1
+            cd "$_build_workdir" || exit 1
             export DESTDIR="$PKGDIR"
             export PKGDIR="$PKGDIR"
             export MAKEFLAGS="$MAKEFLAGS"
             export CFLAGS="$CFLAGS"
             export CXXFLAGS="$CXXFLAGS"
             export LDFLAGS="$LDFLAGS"
-            . ./build
+            . "$buildtmp/build"
         ) || { transaction_rollback; err "build failed for $_pkg"; }
         
         save_build_state "$_pkg" "build" "$buildtmp" "$recipe_ver"
@@ -7592,10 +7656,10 @@ SAFETY_WARNING
         if [ -f "$buildtmp/package" ]; then
             info "Running package hook for $_pkg..."
             (
-                cd "$buildtmp" || exit 1
+                cd "$_build_workdir" || exit 1
                 export DESTDIR="$PKGDIR"
                 export PKGDIR="$PKGDIR"
-                . ./package
+                . "$buildtmp/package"
             ) || { transaction_rollback; err "package() failed for $_pkg"; }
         fi
         
