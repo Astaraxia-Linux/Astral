@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v5.3.0.0 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
+# Astral v5.3.1.0 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
 # SOURCE-ONLY
-# V: 5 - Major . 3 - Minor . 0 - Patches . 0 - hotfixes
+# V: 5 - Major . 3 - Minor . 1 - Patches . 0 - hotfixes
 
-version="5.3.0.0 Main"
+version="5.3.1.0 Main"
 ASTRAL_PRODUCTION_DATE="2025-11-26"
 now_seconds=$(date +%s)
 prod_seconds=$(date -d "$ASTRAL_PRODUCTION_DATE" +%s)
@@ -129,6 +129,8 @@ log_msg() {
 
 # Global state variables
 INSTALL_ROOT="/"    # Installation target directory
+STORE_DIR=${STORE_DIR:-/astral/store}   # Content-addressed package store
+STORE_MODE=${STORE_MODE:-0}             # 0=merge-to-root 1=store+symlink
 FORCE_BUILD=0
 DRY_RUN=0
 VISITED_PACKAGES=""
@@ -450,6 +452,7 @@ CONFIG_FILE=${CONFIG_FILE:-/etc/astral/make.conf}
 VIRTUALS_DIR=${VIRTUALS_DIR:-/etc/astral/virtuals}
 mkdir -p "$VIRTUALS_DIR"
 MASK_FILE=${MASK_FILE:-/etc/astral/package.mask}
+PROVIDED_FILE=${PROVIDED_FILE:-/etc/astral/package.provided}
 USE_FLAGS=""
 CFLAGS="-O2 -pipe"
 CXXFLAGS=""
@@ -586,6 +589,108 @@ show_use_flags() {
         active_use=$(parse_use_flags "$pkg")
         printf '%s\n' "$active_use" | tr ' ' '\n' | sort
     fi
+}
+
+# Create package.provided template
+ensure_package_provided() {
+    if [ ! -f "$PROVIDED_FILE" ]; then
+        mkdir -p /etc/astral
+        cat > "$PROVIDED_FILE" <<EOF
+# Provider aliases — maps bare package names to canonical category/pkg forms.
+# This file is ONLY needed when two recipes in different categories share the
+# same bare name. Astral will refuse to resolve the bare name until you
+# declare a winner here.
+#
+# Syntax:  bare_name = category/pkg
+# Example: gcc = sys-devel/gcc
+#          python = dev-lang/python3
+
+EOF
+        info "Created default $PROVIDED_FILE"
+    fi
+}
+
+# Resolve a bare package name via package.provided.
+# Returns the canonical category/pkg form, or the original name if not listed.
+resolve_provided() {
+    _rp_name="$1"
+    [ -f "$PROVIDED_FILE" ] || { printf '%s\n' "$_rp_name"; return 0; }
+    _rp_result=$(grep -E "^[[:space:]]*${_rp_name}[[:space:]]*=" "$PROVIDED_FILE" \
+        | head -n1 | sed 's/.*=[[:space:]]*//' | tr -d ' \t')
+    if [ -n "$_rp_result" ]; then
+        debug "resolve_provided: '$_rp_name' -> '$_rp_result'"
+        printf '%s\n' "$_rp_result"
+    else
+        printf '%s\n' "$_rp_name"
+    fi
+}
+
+# Scan RECIPES_DIR for bare-name conflicts and error if any bare name maps to
+# more than one category without a declaration in package.provided.
+# Called during sync (astral -Sy).
+check_provided_conflicts() {
+    info "Checking for bare-name conflicts in recipe tree..."
+    _conflicts=0
+
+    # Build a list of all bare package names with their category paths
+    _seen_file="$TMPDIR/astral-seen-$$"
+    _conflict_file="$TMPDIR/astral-conflicts-$$"
+    rm -f "$_seen_file" "$_conflict_file"
+    touch "$_seen_file" "$_conflict_file"
+
+    find "$RECIPES_DIR" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | while read -r _rdir; do
+        _bare=$(basename "$_rdir")
+        _catpkg=$(printf '%s' "$_rdir" | sed "s|^$RECIPES_DIR/||")
+        # Check if we've seen this bare name from a different category
+        _prev=$(grep -E "^${_bare}=" "$_seen_file" | head -n1 | cut -d= -f2-)
+        if [ -n "$_prev" ] && [ "$_prev" != "$_catpkg" ]; then
+            # Only flag if not resolved in package.provided
+            _declared=$(grep -E "^[[:space:]]*${_bare}[[:space:]]*=" "$PROVIDED_FILE" \
+                2>/dev/null | head -n1)
+            if [ -z "$_declared" ]; then
+                printf '%s\n' "$_bare: $_prev  vs  $_catpkg" >> "$_conflict_file"
+            fi
+        else
+            printf '%s=%s\n' "$_bare" "$_catpkg" >> "$_seen_file"
+        fi
+    done
+
+    # Also check .stars files
+    find "$RECIPES_DIR" -mindepth 2 -maxdepth 3 -name "*.stars" 2>/dev/null | while read -r _sf; do
+        _bare=$(basename "$_sf" | sed 's/-[0-9].*//' | sed 's/\.stars$//')
+        _catpkg=$(dirname "$_sf" | sed "s|^$RECIPES_DIR/||")
+        _prev=$(grep -E "^${_bare}=" "$_seen_file" | head -n1 | cut -d= -f2-)
+        if [ -n "$_prev" ] && [ "$_prev" != "$_catpkg" ]; then
+            _declared=$(grep -E "^[[:space:]]*${_bare}[[:space:]]*=" "$PROVIDED_FILE" \
+                2>/dev/null | head -n1)
+            if [ -z "$_declared" ]; then
+                printf '%s\n' "$_bare: $_prev  vs  $_catpkg" >> "$_conflict_file"
+            fi
+        else
+            printf '%s=%s\n' "$_bare" "$_catpkg" >> "$_seen_file"
+        fi
+    done
+
+    if [ -s "$_conflict_file" ]; then
+        warn "────────────────────────────────────────────────────────"
+        warn "⚠  BARE NAME CONFLICTS DETECTED in recipe tree:"
+        warn "   These bare names exist in multiple categories."
+        warn "   Add entries to $PROVIDED_FILE to resolve:"
+        warn ""
+        while IFS= read -r _line; do
+            warn "   $_line"
+        done < "$_conflict_file"
+        warn ""
+        warn "   Example fix in package.provided:"
+        warn "     bare_name = category/pkg"
+        warn "────────────────────────────────────────────────────────"
+        _conflicts=1
+    else
+        info "  ✓ No bare-name conflicts found"
+    fi
+
+    rm -f "$_seen_file" "$_conflict_file"
+    return $_conflicts
 }
 
 # Create package.use template
@@ -1634,6 +1739,24 @@ parse_astral_stars_config() {
                 continue
                 ;;
         esac
+
+        # Strip inline comments (anything after unquoted #)
+        value=$(printf '%s' "$value" | sed 's/[[:space:]]*#.*$//')
+        # Strip surrounding quotes (single or double)
+        value=$(printf '%s' "$value" | sed 's/^["'"'"']//;s/["'"'"']$//')
+        # Strip any trailing whitespace left after above
+        value=$(printf '%s' "$value" | sed 's/[[:space:]]*$//')
+        # Normalize yes/no/true/false to 1/0 for known boolean keys
+        case "$key" in
+            SANDBOX_ENABLED|SANDBOX_NETWORK|TRANSACTION_ENABLED|\
+            STRIP_BINARIES|STRIP_LIBS|STRIP_STATIC|\
+            COLLISION_DETECT|GHOST_FILE_CHECK)
+                case "$value" in
+                    yes|true|1)  value=1 ;;
+                    no|false|0)  value=0 ;;
+                esac
+                ;;
+        esac
         
         # Remove quotes from value
         value=$(printf '%s' "$value" | sed "s/^['\"]//;s/['\"]$//")
@@ -1679,6 +1802,17 @@ parse_astral_stars_config() {
                             *) ASTRAL_DEBUG=0 ;;
                         esac
                         [ "$ASTRAL_DEBUG" = "1" ] && info "    → debug mode: enabled"
+                        ;;
+                    STORE_MODE)
+                        case "$value" in
+                            1|yes|true|store) STORE_MODE=1 ;;
+                            *) STORE_MODE=0 ;;
+                        esac
+                        info "    → store mode: $([ "$STORE_MODE" = "1" ] && echo enabled || echo disabled)"
+                        ;;
+                    STORE_DIR)
+                        STORE_DIR="$value"
+                        info "    → store dir: $STORE_DIR"
                         ;;
                 esac
                 ;;
@@ -1752,7 +1886,11 @@ parse_astral_stars_config() {
                         info "    → ghost file check: $value"
                         ;;
                     TRANSACTION_ENABLED)
-                        TRANSACTION_ENABLED="$value"
+                        case "$value" in
+                            1|yes|true)  TRANSACTION_ENABLED=1 ;;
+                            0|no|false)  TRANSACTION_ENABLED=0 ;;
+                            *)           TRANSACTION_ENABLED="$value" ;;
+                        esac
                         info "    → transactions: $value"
                         ;;
                     LOCK_TIMEOUT)
@@ -1760,7 +1898,11 @@ parse_astral_stars_config() {
                         info "    → lock timeout: ${value}s"
                         ;;
                     SANDBOX_ENABLED)
-                        SANDBOX_ENABLED="$value"
+                        case "$value" in
+                            1|yes|true)  SANDBOX_ENABLED=1 ;;
+                            0|no|false)  SANDBOX_ENABLED=0 ;;
+                            *)           SANDBOX_ENABLED="$value" ;;
+                        esac
                         info "    → sandbox: $value"
                         ;;
                     SANDBOX_NETWORK)
@@ -4022,13 +4164,37 @@ recipe_path() {
                 return 0
             fi
         fi
-        # Search whole recipes dir without category hint — prefer expanded dirs
+    # If no category was given, check package.provided for a canonical alias.
+    # This ensures bare names like 'gcc' always resolve to the declared provider
+    # (e.g. sys-devel/gcc) even if multiple categories contain a recipe named gcc.
+    if [ -z "$_category" ]; then
+        _resolved=$(resolve_provided "$_pkg")
+        if [ "$_resolved" != "$_pkg" ]; then
+            debug "recipe_path: bare '$_pkg' -> provided '$_resolved'"
+            recipe_path "$_resolved" "$_version" "$_arch"
+            return $?
+        fi
+    fi
+
+    # Search whole recipes dir without category hint — but first check for
+    # ambiguity: if multiple VALID categories match, error loudly instead of
+    # silently taking a random result. Only consider proper category/pkg paths
+    # (exactly 2 levels deep) that have a build script or .stars file.
+    _all_matches=$(find "$RECIPES_DIR" -mindepth 2 -maxdepth 2 -type d -name "$_search_name" 2>/dev/null | \
+        while read -r d; do
+            { [ -f "$d/build" ] || ls "$d"/*.stars 2>/dev/null | grep -q .; } && printf '%s\n' "$d"
+        done)
+    _match_count=$(printf '%s\n' "$_all_matches" | grep -c . 2>/dev/null || echo 0)
+    if [ "$_match_count" -gt 1 ]; then
+        warn "Ambiguous package '$_pkg' — found in multiple categories:"
+        printf '%s\n' "$_all_matches" | sed "s|$RECIPES_DIR/||" | while read -r _m; do
+            warn "  $_m"
+        done
+        err "Specify the full category/pkg form, or declare a provider in $PROVIDED_FILE"
+    fi
+    # Single match (or none) — proceed with the find
         _found=$(find "$RECIPES_DIR" -maxdepth 3 -type d -name "$_search_name" 2>/dev/null | \
             while read -r d; do [ -f "$d/build" ] && printf '%s\n' "$d" && break; done | head -n1)
-        if [ -n "$_found" ]; then
-            printf '%s\n' "$_found"
-            return 0
-        fi
         _found=$(find "$RECIPES_DIR" -maxdepth 3 \
             \( -name "${_search_name}.stars" -o -name "${_search_name}-*.stars" \) \
             2>/dev/null | while read -r f; do
@@ -4138,6 +4304,102 @@ arch=$arch
 M
 }
 
+# === PACKAGE STORE ===
+# Compute a content hash for a built package directory.
+# Uses sha256 over sorted file contents — same files = same hash always.
+store_hash() {
+    _sh_pkgdir="$1"
+    find "$_sh_pkgdir" -type f | sort | xargs sha256sum 2>/dev/null | sha256sum | cut -c1-40
+}
+
+# Return the store path for a given pkg+ver+hash.
+# Format: $STORE_DIR/pkg-ver-hash
+store_path() {
+    _sp_pkg="$1"
+    _sp_ver="$2"
+    _sp_hash="$3"
+    _sp_name=$(printf '%s' "$_sp_pkg" | tr '/' '-')
+    printf '%s/%s-%s-%s\n' "$STORE_DIR" "$_sp_name" "$_sp_ver" "$_sp_hash"
+}
+
+# Install a built package into the store and symlink into INSTALL_ROOT.
+# Returns the store path used.
+store_install() {
+    _si_pkg="$1"
+    _si_pkgdir="$2"
+    _si_ver="$3"
+
+    mkdir -p "$STORE_DIR"
+
+    # Content-address the package
+    _si_hash=$(store_hash "$_si_pkgdir")
+    _si_spath=$(store_path "$_si_pkg" "$_si_ver" "$_si_hash")
+
+    if [ -d "$_si_spath" ]; then
+        info "  ✓ [$_si_pkg] already in store: $_si_spath"
+    else
+        info "  → [$_si_pkg] adding to store..."
+        mkdir -p "$_si_spath"
+        tar -C "$_si_pkgdir" -cf - . | tar -C "$_si_spath" -xf - || {
+            rm -rf "$_si_spath"
+            err "[$_si_pkg] Failed to copy to store"
+        }
+        # Write a store manifest
+        cat > "$_si_spath/.astral-store" <<EOF
+pkg=$_si_pkg
+version=$_si_ver
+hash=$_si_hash
+installed=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+EOF
+        info "  ✓ [$_si_pkg] stored at $_si_spath"
+    fi
+
+    # Symlink store contents into INSTALL_ROOT
+    info "  → [$_si_pkg] linking store into $INSTALL_ROOT..."
+    find "$_si_spath" -not -name ".astral-store" | while read -r _src; do
+        _rel=$(printf '%s' "$_src" | sed "s|^$_si_spath||")
+        [ -z "$_rel" ] && continue
+        _dst="$INSTALL_ROOT/$_rel"
+        if [ -d "$_src" ]; then
+            mkdir -p "$_dst"
+        else
+            # Remove old symlink/file if it points somewhere else
+            if [ -L "$_dst" ] || [ -f "$_dst" ]; then
+                rm -f "$_dst"
+            fi
+            ln -sf "$_src" "$_dst"
+        fi
+    done
+
+    # Record store path in DB
+    printf '%s\n' "$_si_spath" >> "$DB_DIR/.store-paths"
+
+    printf '%s\n' "$_si_spath"
+}
+
+# Remove a package from the store and unlink from INSTALL_ROOT.
+store_remove() {
+    _sr_pkg="$1"
+    _sr_spath="$2"
+
+    [ -d "$_sr_spath" ] || { warn "Store path not found: $_sr_spath"; return 1; }
+
+    info "  → [$_sr_pkg] unlinking from $INSTALL_ROOT..."
+    find "$_sr_spath" -not -name ".astral-store" | while read -r _src; do
+        _rel=$(printf '%s' "$_src" | sed "s|^$_sr_spath||")
+        [ -z "$_rel" ] && continue
+        _dst="$INSTALL_ROOT/$_rel"
+        # Only remove if it's our symlink
+        if [ -L "$_dst" ] && [ "$(readlink "$_dst")" = "$_src" ]; then
+            rm -f "$_dst"
+        fi
+    done
+
+    info "  → [$_sr_pkg] removing from store..."
+    rm -rf "$_sr_spath"
+    info "  ✓ [$_sr_pkg] removed from store"
+}
+
 atomic_install() {
     pkg="$1"
     pkgdir_src="$2"
@@ -4183,10 +4445,19 @@ atomic_install() {
     # ATOMIC COMMIT: Move files and DB together
     info "[$pkg] Committing installation atomically..."
 
-    # Move files from staging to real root (atomically)
-    if ! ( cd "$staging_root" && tar cf - . ) | ( cd "$INSTALL_ROOT" && tar xf - ); then
-        rm -rf "$staging_root" "$db_staging"
-        err "[$pkg] Failed to install files atomically"
+    if [ "${STORE_MODE:-0}" = "1" ]; then
+        # Store mode: content-address into $STORE_DIR, symlink into $INSTALL_ROOT
+        _spath=$(store_install "$pkg" "$staging_root" "$recipe_ver") || {
+            rm -rf "$staging_root" "$db_staging"
+            err "[$pkg] Store installation failed"
+        }
+        printf '%s\n' "$_spath" > "$db_staging/store_path"
+    else
+        # Traditional mode: merge directly into INSTALL_ROOT
+        if ! ( cd "$staging_root" && tar cf - . ) | ( cd "$INSTALL_ROOT" && tar xf - ); then
+            rm -rf "$staging_root" "$db_staging"
+            err "[$pkg] Failed to install files atomically"
+        fi
     fi
 
     # Finally, commit DB (last step - if this fails files are there but untracked)
@@ -4200,6 +4471,7 @@ atomic_install() {
     [ -f "$db_staging/depends" ] && mv "$db_staging/depends" "$db_target/depends"
     [ -f "$db_staging/bdepends" ] && mv "$db_staging/bdepends" "$db_target/bdepends"
     [ -f "$db_staging/rdepends" ] && mv "$db_staging/rdepends" "$db_target/rdepends"
+    [ -f "$db_staging/store_path" ] && mv "$db_staging/store_path" "$db_target/store_path"
     update_files_index_for_pkg "$db_path"
 
     # Cleanup
@@ -5585,17 +5857,21 @@ fetch_remote_recipe() {
             *)
                 category=""
                 if [ -f "$search_index" ]; then
-                    _match=$(parse_index_v2 "$search_index" | awk -v p="$_pkg" -F'[/ ]' '$2 == p {print; exit}')
+                    # parse_index_v2 outputs: category/pkg arch version
+                    # split on space: $1=category/pkg  $2=arch  $3=version
+                    # extract pkg from $1 by splitting on /
+                    _match=$(parse_index_v2 "$search_index" | awk -v p="$_pkg" '{n=split($1,a,"/"); if(a[n]==p) print $1}' | head -n1)
                     [ -n "$_match" ] && category=$(printf '%s' "$_match" | cut -d'/' -f1)
+                    debug "fetch_remote_recipe: category lookup '$_pkg' -> '$_match' (cat='$category')"
                 fi
 
                 if [ -z "$category" ] && [ "$_force_repo" = "asura" ] && [ -f "$INDEX_FILE_AOHARU" ]; then
-                    _match=$(parse_index_v2 "$INDEX_FILE_AOHARU" | awk -v p="$_pkg" -F'[/ ]' '$2 == p {print; exit}')
+                    _match=$(parse_index_v2 "$INDEX_FILE_AOHARU" | awk -v p="$_pkg" '{n=split($1,a,"/"); if(a[n]==p) print $1}' | head -n1)
                     [ -n "$_match" ] && category=$(printf '%s' "$_match" | cut -d'/' -f1)
                 fi
 
                 if [ -z "$category" ] && [ "$_force_repo" = "aoharu" ] && [ -f "$INDEX_FILE_ASURA" ]; then
-                    _match=$(parse_index_v2 "$INDEX_FILE_ASURA" | awk -v p="$_pkg" -F'[/ ]' '$2 == p {print; exit}')
+                    _match=$(parse_index_v2 "$INDEX_FILE_ASURA" | awk -v p="$_pkg" '{n=split($1,a,"/"); if(a[n]==p) print $1}' | head -n1)
                     [ -n "$_match" ] && category=$(printf '%s' "$_match" | cut -d'/' -f1)
                 fi
 
@@ -5635,14 +5911,19 @@ fetch_remote_recipe() {
     _idx_to_search="$INDEX_FILE_AOHARU"
     [ "$_force_repo" = "asura" ] && _idx_to_search="$INDEX_FILE_ASURA"
     if [ -f "$_idx_to_search" ]; then
-        _imatch=$(parse_index_v2 "$_idx_to_search" | awk -v p="$(basename "$category_pkg")" -F'[/ ]' '$2 == p {print; exit}')
+        _pkgbase=$(basename "$category_pkg")
+        # parse_index_v2 outputs: category/pkg arch version
+        # so fields split on '[/ ]': $1=category $2=pkg $3=arch $4=version
+        _imatch=$(parse_index_v2 "$_idx_to_search" | awk -v p="$_pkgbase" '{n=split($1,a,"/"); if(a[n]==p) print}' | head -n1)
+        debug "fetch_remote_recipe: index match for '$_pkgbase': '$_imatch'"
         if [ -n "$_imatch" ]; then
             _iver=$(printf '%s' "$_imatch" | awk '{print $3}')
             _iarch=$(printf '%s' "$_imatch" | awk '{print $2}')
             _iarch="${_iarch:-any}"
-            _vname="$(basename "$category_pkg")-${_iver}-${_iarch}.stars"
+            _vname="${_pkgbase}-${_iver}-${_iarch}.stars"
             stars_url_versioned="${remote_base}/${_vname}"
             stars_dest_versioned="${local_dir}/${_vname}"
+            debug "fetch_remote_recipe: versioned url='$stars_url_versioned'"
         fi
     fi
 
@@ -5721,11 +6002,11 @@ fetch_remote_recipe_stars() {
     # Determine category
     category=""
     if [ -f "$INDEX_FILE_AOHARU" ]; then
-        _match=$(parse_index_v2 "$INDEX_FILE_AOHARU" | awk -v p="$_pkg" -F'[ /]' '$2 == p {print; exit}')
+        _match=$(parse_index_v2 "$INDEX_FILE_AOHARU" | awk -v p="$_pkg" '{n=split($1,a,"/"); if(a[n]==p) print $1}' | head -n1)
         [ -n "$_match" ] && category=$(printf '%s' "$_match" | cut -d'/' -f1)
     fi
     if [ -z "$category" ] && [ -f "$INDEX_FILE_ASURA" ]; then
-        _match=$(parse_index_v2 "$INDEX_FILE_ASURA" | awk -v p="$_pkg" -F'[ /]' '$2 == p {print; exit}')
+        _match=$(parse_index_v2 "$INDEX_FILE_ASURA" | awk -v p="$_pkg" '{n=split($1,a,"/"); if(a[n]==p) print $1}' | head -n1)
         [ -n "$_match" ] && category=$(printf '%s' "$_match" | cut -d'/' -f1)
     fi
 
@@ -7467,6 +7748,9 @@ update_repo() {
     info "Database updated successfully."
     # §11.1 — Rebuild per-package lookup cache after index update
     build_pkg_cache
+    # Check for bare-name conflicts in local recipe tree
+    ensure_package_provided
+    check_provided_conflicts || warn "Fix conflicts in $PROVIDED_FILE before installing affected packages"
 }
 
 # §11.1 — Per-package lookup cache (avoids re-reading full index on every lookup)
@@ -7485,17 +7769,40 @@ build_pkg_cache() {
     rm -rf "$_cache_dir"
     mkdir -p "$_cache_dir"
 
-    # §8.1 — Use temp file to avoid pipe subshell
     _idx_tmpf="$TMPDIR/astral-idx-rebuild-$$"
     cat "$_index" > "$_idx_tmpf"
-    while IFS='|' read -r _entry _arch _ver; do
-        case "$_entry" in ''|'#'*) continue ;; esac
-        _entry=$(printf '%s' "$_entry" | tr -d ' ')
-        _ver=$(printf '%s' "$_ver" | tr -d ' ')
-        _arch=$(printf '%s' "$_arch" | tr -d ' ')
-        # Write tiny cache file: version on line 1, arch on line 2
-        printf '%s\n%s\n' "$_ver" "$_arch"             > "$_cache_dir/$(printf '%s' "$_entry" | tr '/' '__')"
+
+    _current_cat=""
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        # Strip whitespace
+        _line=$(printf '%s' "$_line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        # Skip empty and comments
+        [ -z "$_line" ] && continue
+        case "$_line" in '#'*) continue ;; esac
+        # Detect category header: "name: {" or "name:"
+        case "$_line" in
+            *':{'|*': {'|*':')
+                _current_cat=$(printf '%s' "$_line" | sed 's/:[[:space:]]*{.*//;s/:$//')
+                continue
+                ;;
+            '}') continue ;;
+        esac
+        # Parse package line: pkg | arch | version
+        _entry=$(printf '%s' "$_line" | cut -d'|' -f1 | tr -d ' ')
+        _arch=$(printf '%s'   "$_line" | cut -d'|' -f2 | tr -d ' ')
+        _ver=$(printf '%s'    "$_line" | cut -d'|' -f3 | tr -d ' ')
+        [ -z "$_entry" ] && continue
+        # Qualify with category if available
+        if [ -n "$_current_cat" ]; then
+            _cache_key="${_current_cat}/${_entry}"
+        else
+            _cache_key="$_entry"
+        fi
+        # Write cache file: version on line 1, arch on line 2
+        printf '%s\n%s\n' "$_ver" "${_arch:-any}" \
+            > "$_cache_dir/$(printf '%s' "$_cache_key" | tr '/' '__')"
     done < "$_idx_tmpf"
+
     rm -f "$_idx_tmpf"
     info "Package cache built ($(ls "$_cache_dir" | wc -l | tr -d ' ') entries)"
 }
@@ -7524,11 +7831,14 @@ parse_index_v2() {
         [ -z "$line" ] && continue
         case "$line" in \#*) continue ;; esac
         
-        # Detect category (ends with :)
-        if printf '%s' "$line" | grep -q ':$'; then
-            current_category=$(printf '%s' "$line" | sed 's/:$//')
-            continue
-        fi
+        # Detect category header: "name: {" or "name:"
+        case "$line" in
+            *':{'|*': {'|*':')
+                current_category=$(printf '%s' "$line" | sed 's/:[[:space:]]*{.*//;s/:$//')
+                continue
+                ;;
+            '}') continue ;;
+        esac
         
         # Parse package line: pkg | arch | version
         pkg=$(printf '%s' "$line" | cut -d'|' -f1 | tr -d ' ')
@@ -11049,6 +11359,7 @@ ensure_default_config
 ensure_default_virtuals
 ensure_default_mask
 ensure_config_perms
+ensure_package_provided
 parse_astral_stars_config
 load_config
 apply_tool_config
