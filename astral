@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v5.3.1.1 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
+# Astral v5.3.1.2 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
 # SOURCE-ONLY
-# V: 5 - Major . 3 - Minor . 1 - Patches . 1 - hotfixes
+# V: 5 - Major . 3 - Minor . 1 - Patches . 2 - hotfixes
 
-version="5.3.1.1 Main"
+version="5.3.1.2 Main"
 ASTRAL_PRODUCTION_DATE="2025-11-26"
 now_seconds=$(date +%s)
 prod_seconds=$(date -d "$ASTRAL_PRODUCTION_DATE" +%s)
@@ -2577,6 +2577,47 @@ create_directory_isolation() {
 }
 
 # Bubblewrap sandbox (most secure - keep from original)
+
+# Firejail sandbox
+create_firejail_sandbox() {
+    builddir="$1"
+    sandbox_root="$2"
+    mkdir -p "$sandbox_root"
+    info "  ✓ Firejail sandbox ready (isolation at exec time)"
+}
+
+# Unshare sandbox (Linux namespaces, no root needed with user ns)
+create_unshare_sandbox() {
+    builddir="$1"
+    sandbox_root="$2"
+    mkdir -p "$sandbox_root"
+    info "  ✓ Unshare sandbox ready (Linux namespaces)"
+}
+
+# Fakeroot sandbox (no root, fakes uid 0 for install steps)
+create_fakeroot_sandbox() {
+    builddir="$1"
+    sandbox_root="$2"
+    mkdir -p "$sandbox_root"
+    info "  ✓ Fakeroot sandbox ready"
+}
+
+# Chroot sandbox (requires root)
+create_chroot_sandbox() {
+    builddir="$1"
+    sandbox_root="$2"
+    mkdir -p "$sandbox_root"/{bin,lib,lib64,usr,tmp,proc,dev,etc}
+    info "  ✓ Chroot sandbox ready"
+}
+
+# Directory isolation (no real sandbox, just a clean dir)
+create_directory_isolation() {
+    builddir="$1"
+    sandbox_root="$2"
+    mkdir -p "$sandbox_root"
+    info "  ✓ Directory isolation ready (no sandbox — build has host access)"
+}
+
 create_bubblewrap_sandbox() {
     builddir="$1"
     sandbox_root="$2"
