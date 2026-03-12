@@ -17,6 +17,8 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
 NC='\033[0m'
 
 # === DEBUG MODE ===
@@ -87,7 +89,7 @@ LOG_SYNC_FILE=${LOG_SYNC_FILE:-/var/log/astral/sync.log}
 LOG_BUILD_FILE=${LOG_BUILD_FILE:-/var/log/astral/build.log}
 LOG_ENABLE=${LOG_ENABLE:-1}
 
-# Portable file size (GNU stat / BSD stat / wc -c fallback)
+# §8.3 — Portable file size (GNU stat / BSD stat / wc -c fallback)
 file_size_bytes() {
     _f="$1"
     _s=$(stat -c%s "$_f" 2>/dev/null) && { printf '%s' "$_s"; return 0; }
@@ -191,6 +193,10 @@ _original_info() { printf "${NC}%s\n" "$*"; }
 _original_warn() { printf "${YELLOW}[WARNING]${NC} %s\n" "$*" >&2; }
 _original_err() { printf "${RED}[ERROR]${NC} %s\n" "$*" >&2; exit 1; }
 
+# Colored [pkgname] label for install/build messages
+pkg_label() { printf "%b[%s]%b" "${CYAN}${BOLD}" "$1" "${NC}"; }
+
+# §5.2 — Structured error output with actionable hints
 err_hint() {
     _msg="$1"
     _hint="$2"
@@ -199,7 +205,7 @@ err_hint() {
     exit 1
 }
 
-# Machine-readable errors for astral-env (ASTRAL_JSON_OUTPUT=1)
+# §5.3 — Machine-readable errors for astral-env (ASTRAL_JSON_OUTPUT=1)
 err_structured() {
     _code="$1" _msg="$2" _pkg="${3:-}" _hint="${4:-}"
     if [ "${ASTRAL_JSON_OUTPUT:-0}" -eq 1 ]; then
@@ -663,7 +669,6 @@ check_provided_conflicts() {
         fi
     done
 
-    # Also check .stars files — depth 4 in new layout, depth 2-3 in legacy
     find "$RECIPES_DIR" -mindepth 2 -maxdepth 4 -name "*.stars" 2>/dev/null | while read -r _sf; do
         _bare=$(basename "$_sf" | sed 's/-[0-9].*//' | sed 's/\.stars$//')
         _rel=$(dirname "$_sf" | sed "s|^$RECIPES_DIR/||")
@@ -952,7 +957,7 @@ verify_signature() {
     fi
 }
 
-# Checksum-first, GPG-sig-optional verification
+# §4.2 — Checksum-first, GPG-sig-optional verification
 # Usage: verify_source_file <file> <checksums_file> [sig_file]
 # Always verifies checksum; GPG sig is optional bonus trust.
 verify_source_file() {
@@ -978,7 +983,7 @@ verify_source_file() {
             SHA512)
                 _actual=$(sha512sum "$_file" 2>/dev/null | awk '{print $1}') ;;
             BLAKE2B)
-                # BLAKE2B fallback alongside SHA256
+                # §4 — BLAKE2B fallback alongside SHA256
                 if command -v b2sum >/dev/null 2>&1; then
                     _actual=$(b2sum "$_file" 2>/dev/null | awk '{print $1}')
                 else
@@ -1824,6 +1829,7 @@ parse_astral_stars_config() {
                     DEBUG)
                         case "$value" in
                             1|yes|true|enable) ASTRAL_DEBUG=1 ;;
+                            0|no|false|disable) ASTRAL_DEBUG=0 ;;
                             *) ASTRAL_DEBUG=0 ;;
                         esac
                         [ "$ASTRAL_DEBUG" = "1" ] && info "    → debug mode: enabled"
@@ -2467,7 +2473,7 @@ advanced_script_safety_check() {
     # We check if the script references another installed package's files path
     if command -v find >/dev/null 2>&1 && [ -d "$DB_DIR" ]; then
         _other_pkgs_tmpf="$TMPDIR/astral-advsec-pkgs-$$"
-        find "$DB_DIR" -maxdepth 2 -name "version" 2>/dev/null | \
+        find "$DB_DIR" -maxdepth 5 -name "version" 2>/dev/null | \
             sed "s|/version$||" | xargs -I{} basename {} 2>/dev/null > "$_other_pkgs_tmpf"
 
         for _sf in $_scripts; do
@@ -2830,7 +2836,7 @@ conflicts_with() {
     grep -Fx "$pkg2" "$rpath1/conflicts" >/dev/null 2>&1
 }
 
-# Portable version resolution (subshell pipe bug fixed)
+# §2.3 — Portable version resolution (subshell pipe bug fixed)
 # The original used a pipe-fed while loop whose variable assignments were lost
 # in the parent shell. We now write constraints to a temp file instead.
 resolve_version_conflicts() {
@@ -2838,7 +2844,7 @@ resolve_version_conflicts() {
 
     info "Resolving version constraints for: $pkg"
 
-    # write constraints to a temp file to avoid subshell variable loss
+    # §2.3 fix: write constraints to a temp file to avoid subshell variable loss
     _constraints_file="$TMPDIR/astral-vc-$$"
     : > "$_constraints_file"
 
@@ -3830,8 +3836,12 @@ is_pkg_installed() {
     if [ -f "$DB_DIR/$pkg/version" ]; then
         return 0
     fi
-    # Also search by bare package name under category dirs
-    _found=$(find "$DB_DIR" -maxdepth 2 -name "version" -path "*/$_pkgbase/version" 2>/dev/null | head -n1)
+    # Search by package name across all known DB layouts:
+    #   legacy (pre-sharding): cat/pkg/version          depth 3
+    #   sharded:               cat/s/pkg/version         depth 4
+    #   interim sharded:       cat/s/pkg/pkg-ver/version depth 5
+    _found=$(find "$DB_DIR" -maxdepth 4 -name "version" -path "*/$_pkgbase/version" 2>/dev/null | head -n1)
+    [ -z "$_found" ] &&         _found=$(find "$DB_DIR" -maxdepth 5 -name "version" -path "*/$_pkgbase-*/version" 2>/dev/null | head -n1)
     if [ -n "$_found" ]; then
         return 0
     fi
@@ -3863,9 +3873,9 @@ resolve_installed_path() {
         return 0
     fi
 
-    # Search by basename under category dirs
-    found_path=$(find "$DB_DIR" -maxdepth 2 -name "version" \
-        -path "*/$_base/version" 2>/dev/null | head -n1)
+    # Search across all known DB layouts (legacy depth 3, sharded depth 4, interim depth 5)
+    found_path=$(find "$DB_DIR" -maxdepth 4 -name "version"         -path "*/$_base/version" 2>/dev/null | head -n1)
+    [ -z "$found_path" ] &&         found_path=$(find "$DB_DIR" -maxdepth 5 -name "version"             -path "*/$_base-*/version" 2>/dev/null | head -n1)
     if [ -n "$found_path" ]; then
         printf '%s\n' "$(dirname "$found_path" | sed "s|^${DB_DIR}/||")"
         return 0
@@ -4192,14 +4202,10 @@ recipe_path() {
     esac
 
     # === FILESYSTEM FIRST ===
-    # Checks both the new sharded layout (category/SHARD/pkgname/) and the
-    # legacy flat layout (category/pkgname.*) so old trees keep working.
-    # IMPORTANT: always prefer an expanded directory (has a 'build' script).
     for _search_name in "$_pkg" "$_pkg_bare"; do
         _shard=$(recipe_shard "$_search_name")
 
         if [ -n "$_category" ]; then
-            # ── New sharded layout: category/shard/pkgname/ ──────────────────
             _sharded_dir="$RECIPES_DIR/$_category/$_shard/$_search_name"
             if [ -d "$_sharded_dir" ]; then
                 if [ -f "$_sharded_dir/build" ]; then
@@ -4212,7 +4218,6 @@ recipe_path() {
                 fi
             fi
 
-            # ── Legacy layout: category/pkgname.stars or category/pkgname/ ──
             if [ -d "$RECIPES_DIR/$_category/$_search_name" ] && \
                [ -f "$RECIPES_DIR/$_category/$_search_name/build" ]; then
                 printf '%s\n' "$RECIPES_DIR/$_category/$_search_name"; return 0
@@ -4242,9 +4247,7 @@ recipe_path() {
             fi
         fi
 
-        # Search whole recipes dir — check for ambiguity across categories first.
-        # New layout: pkg dirs live at depth 3 (category/shard/pkgname).
-        # Legacy layout: pkg dirs live at depth 2 (category/pkgname).
+        # Search whole recipes dir — check for ambiguity across categories.
         _all_matches=$(find "$RECIPES_DIR" -mindepth 2 -maxdepth 3 -type d \
             -name "$_search_name" 2>/dev/null | \
             while read -r d; do
@@ -4312,7 +4315,6 @@ recipe_path() {
     _shard=$(recipe_shard "$pkg_name")
 
     recipe_name="${pkg_name}-${sel_ver}-${sel_arch}.stars"
-    # Prefer new sharded layout; fall back to flat for legacy repos
     recipe_full="$RECIPES_DIR/$category/$_shard/$pkg_name/$recipe_name"
     if [ ! -f "$recipe_full" ]; then
         recipe_full="$RECIPES_DIR/$category/$recipe_name"
@@ -4322,7 +4324,7 @@ recipe_path() {
         printf '%s\n' "$recipe_full"; return 0
     fi
 
-    # Recipe not on disk yet — return the expected (sharded) path so the caller can fetch it
+    # Recipe not on disk yet
     printf '%s\n' "$RECIPES_DIR/$category/$_shard/$pkg_name/$recipe_name"
     return 1
 }
@@ -4478,7 +4480,7 @@ atomic_install() {
     staging_root="$TMPDIR/astral-staging-$$"
     mkdir -p "$staging_root" || err "[$pkg] Failed to create staging directory"
 
-    info "[$pkg] Installing to staging area..."
+    info "$(pkg_label "$pkg") Installing to staging area..."
 
     # Install to staging first
     tar -C "$pkgdir_src" -cf - . | tar -C "$staging_root" -xf - || {
@@ -4486,14 +4488,11 @@ atomic_install() {
         err "[$pkg] Failed to extract to staging area"
     }
 
-    # FIX: Calculate db_path correctly (handle both directory and .stars expansion)
     db_path=""
     if [ -f "$rpath/.astral_original_recipe" ]; then
-        # This was expanded from .stars, read the original path
         original_rpath=$(cat "$rpath/.astral_original_recipe")
-        db_path=$(printf '%s' "$original_rpath" | sed "s|^${RECIPES_DIR}/||; s|\.stars$||")
+        db_path=$(dirname "$original_rpath" | sed "s|^${RECIPES_DIR}/||")
     else
-        # Regular directory recipe
         db_path=$(printf '%s' "$rpath" | sed "s|^${RECIPES_DIR}/||")
     fi
 
@@ -4510,7 +4509,7 @@ atomic_install() {
     [ -f "$buildtmp_parent/rdepends" ] && cp "$buildtmp_parent/rdepends" "$db_staging/rdepends"
 
     # ATOMIC COMMIT: Move files and DB together
-    info "[$pkg] Committing installation atomically..."
+    info "$(pkg_label "$pkg") Committing installation atomically..."
 
     if [ "${STORE_MODE:-0}" = "1" ]; then
         # Store mode: content-address into $STORE_DIR, symlink into $INSTALL_ROOT
@@ -4544,7 +4543,7 @@ atomic_install() {
     # Cleanup
     rm -rf "$staging_root" "$db_staging"
 
-    info "[$pkg] ✓ Atomic installation complete"
+    info "$(pkg_label "$pkg") ✓ Atomic installation complete"
 }
 
 # Extracts dependency names from the depends file, filtering comments and empty lines.
@@ -6015,16 +6014,14 @@ fetch_remote_recipe() {
     local_dir="$RECIPES_DIR/$category_pkg"
     mkdir -p "$local_dir"
 
-    # Compute sharded local dir: RECIPES_DIR/category/shard/pkg/
     _fp_pkgbase=$(basename "$category_pkg")
     _fp_cat=$(dirname "$category_pkg")
     _fp_shard=$(recipe_shard "$_fp_pkgbase")
     local_dir_sharded="$RECIPES_DIR/$_fp_cat/$_fp_shard/$_fp_pkgbase"
     mkdir -p "$local_dir_sharded"
-    # Canonical local dir is the sharded one; keep legacy as fallback for old trees
     local_dir="$local_dir_sharded"
 
-    # Build remote URL based on repo context — sharded layout on the server
+    # Build remote URL
     case "$_force_repo" in
         asura)
             remote_base="${USER_RECIPE_RAW_URL%/}/recipes/${_fp_cat}/${_fp_shard}/${_fp_pkgbase}"
@@ -6033,17 +6030,11 @@ fetch_remote_recipe() {
             remote_base="${RECIPE_RAW_URL%/}/recipes/${_fp_cat}/${_fp_shard}/${_fp_pkgbase}"
             ;;
     esac
-    # Also keep a legacy remote_base for flat fallback
     case "$_force_repo" in
         asura) _remote_base_legacy="${USER_RECIPE_RAW_URL%/}/recipes/${category_pkg}" ;;
         *)     _remote_base_legacy="${RECIPE_RAW_URL%/}/recipes/${category_pkg}" ;;
     esac
 
-    # Try downloading .stars file — four URL patterns (sharded preferred, flat legacy fallback):
-    #   1. sharded versioned:  .../recipes/cat/s/pkg/pkg-VER-ARCH.stars  (canonical)
-    #   2. sharded nested:     .../recipes/cat/s/pkg/pkg.stars
-    #   3. legacy flat:        .../recipes/cat/pkg.stars
-    #   4. legacy nested:      .../recipes/cat/pkg/pkg.stars
     stars_url_flat="${_remote_base_legacy}.stars"
     stars_url_nested="${remote_base}/$(basename "$category_pkg").stars"
     stars_dest="${local_dir}.stars"
@@ -6151,7 +6142,7 @@ fetch_remote_recipe_stars() {
         [ -n "$_match" ] && category=$(printf '%s' "$_match" | cut -d'/' -f1)
     fi
 
-    # Try to fetch .stars file first — store in sharded location
+    # Try to fetch .stars file first
     _fss_shard=$(recipe_shard "$_pkg")
     remote_url="${RECIPE_RAW_URL%/}/recipes/${category:+$category/}${_fss_shard}/${_pkg}/${_pkg}.stars"
     local_path="$RECIPES_DIR/${category:+$category/}${_fss_shard}/${_pkg}/${_pkg}.stars"
@@ -6167,7 +6158,7 @@ fetch_remote_recipe_stars() {
     return 1
 }
 
-# Parallel source downloader (pure POSIX sh, FIFO job pool)
+# §3 — Parallel source downloader (pure POSIX sh, FIFO job pool)
 # Replaces serial download_sources() as the primary downloader.
 # Falls back to serial download_sources() if mkfifo is unavailable.
 # Suggestion: recoverable download with retry logic
@@ -6433,7 +6424,7 @@ store_file_checksums() {
 
     info "Storing file checksums for verification..."
 
-    # Avoid pipe subshell: use temp file so loop runs in current shell
+    # §8.1 — Avoid pipe subshell: use temp file so loop runs in current shell
     _cs_tmpf="$TMPDIR/astral-cs-$$"
     ( cd "$pkgdir" && find . -type f ) > "$_cs_tmpf"
     while IFS= read -r file; do
@@ -6622,7 +6613,7 @@ handle_regular_source() {
 }
 
 
-# Cached checksum to avoid re-hashing on build resume
+# §11.2 — Cached checksum to avoid re-hashing on build resume
 # Uses a .checksum_cache file in the same dir; invalidates if source file is newer.
 get_or_compute_checksum() {
     _file="$1"
@@ -7063,7 +7054,6 @@ find_satisfying_version() {
     # Find all available versions in recipes
     available_versions=""
 
-    # Check RECIPES_DIR for versioned directories — try sharded layout first, then legacy
     pkg_base=$(basename "$pkg")
     category=$(dirname "$pkg" | sed "s|^${RECIPES_DIR}/||")
     _vs_shard=$(recipe_shard "$pkg_base")
@@ -7151,7 +7141,7 @@ resolve_sat_dependencies() {
     printf '%s\n' "$packages_to_install"
 }
 
-# Two-phase flat dependency resolver
+# §2.2 — Two-phase flat dependency resolver
 # Replaces the recursive VISITED_PACKAGES approach which misidentifies shared
 # deps as circular (diamond dep problem). Uses an iterative queue instead.
 #
@@ -7378,7 +7368,7 @@ sync_pkg_recursive() {
     # Set repo context
     if [ "$_this_explicit" -eq 0 ]; then
         REPO_CONTEXT="aoharu"
-        info "[$CALL_PKG_CLEAN] Dependency - using AOHARU repository"
+        info "$(pkg_label "$CALL_PKG_CLEAN") Dependency - using AOHARU repository"
         echo "Set REPO_CONTEXT=aoharu (dependency)" >> "$LOG"
     else
         EXPLICIT_PKG_REPO="$REPO_CONTEXT"
@@ -7398,7 +7388,7 @@ sync_pkg_recursive() {
         # Already installed?
         if is_pkg_installed "$CALL_PKG_CLEAN"; then
             installed_ver=$(get_installed_ver "$CALL_PKG_CLEAN")
-            info "Dependency '$CALL_PKG_CLEAN' already installed ($installed_ver). Skipping."
+            info "$(pkg_label "$CALL_PKG_CLEAN") already installed ($installed_ver) — skipping"
             echo "  EARLY EXIT: Already installed" >> "$LOG"
             echo "==== EXIT (already installed) ====" >> "$LOG"
             echo "" >> "$LOG"
@@ -7441,7 +7431,7 @@ sync_pkg_recursive() {
     if [ "$_recipe_ok" -eq 0 ]; then
         if ! fetch_remote_recipe "$CALL_PKG_CLEAN" "$REPO_CONTEXT"; then
             if [ "$CALL_EXPLICIT" -eq 0 ] && [ "$REPO_CONTEXT" = "asura" ]; then
-                info "[$CALL_PKG_CLEAN] Not found in ASURA, falling back to AOHARU..."
+                info "$(pkg_label "$CALL_PKG_CLEAN") Not found in ASURA, falling back to AOHARU..."
                 fetch_remote_recipe "$CALL_PKG_CLEAN" "aoharu" || err "[$CALL_PKG_CLEAN] Recipe not found"
             else
                 err "[$CALL_PKG_CLEAN] Recipe not found in $REPO_CONTEXT"
@@ -7534,7 +7524,7 @@ sync_pkg_recursive() {
     fi
 
     # === BUILD THE PACKAGE ===
-    info "[$CALL_PKG] Building version $recipe_ver (from $REPO_CONTEXT)..."
+    info "$(pkg_label "$CALL_PKG") Building version $recipe_ver (from $REPO_CONTEXT)..."
 
     # Special handling for ccache
     if [ "$CALL_PKG_CLEAN" = "ccache" ] || [ "$CALL_PKG_CLEAN" = "dev-util/ccache" ]; then
@@ -7591,7 +7581,7 @@ sync_pkg_asura() {
     info "✓ ASURA sync complete, context reset to AOHARU"
 }
 
-# Inject use() helper into build environment for optional deps
+# §7.2 — Inject use() helper into build environment for optional deps
 # Must be called just before sourcing the build script.
 # Writes a use() function definition to a temp file that the build script sources.
 astral_inject_use_helpers() {
@@ -7620,7 +7610,7 @@ build_from_recipe_enhanced() {
         case "$rpath" in
             *.stars)
                 is_stars_recipe=1
-                info "[$_pkg] Using .stars recipe format"
+                info "$(pkg_label "$_pkg") Using .stars recipe format"
                 stars_temp="$TMPDIR/astral-stars-$_pkg-$$"
                 expand_stars_recipe "$rpath" "$stars_temp"
                 rpath="$stars_temp"
@@ -7687,7 +7677,7 @@ SAFETY_WARNING
 
     create_sandbox "$buildtmp" "$sandbox_root"
 
-    # Use parallel downloader; falls back to serial if mkfifo unavailable
+    # §3 — Use parallel downloader; falls back to serial if mkfifo unavailable
     parallel_download_sources "$rpath" "$buildtmp"
     verify_checksums_and_extract "$_pkg" "$rpath" "$buildtmp"
 
@@ -7914,14 +7904,14 @@ update_repo() {
 
     mv -f "$temp_index" "$INDEX_FILE"
     info "Database updated successfully."
-    # Rebuild per-package lookup cache after index update
+    # §11.1 — Rebuild per-package lookup cache after index update
     build_pkg_cache
     # Check for bare-name conflicts in local recipe tree
     ensure_package_provided
     check_provided_conflicts || warn "Fix conflicts in $PROVIDED_FILE before installing affected packages"
 }
 
-# Per-package lookup cache (avoids re-reading full index on every lookup)
+# §11.1 — Per-package lookup cache (avoids re-reading full index on every lookup)
 # Called at end of update_repo(); can also be run with astral --rebuild-cache.
 build_pkg_cache() {
     _index="$INDEX_FILE_AOHARU"
@@ -8123,7 +8113,7 @@ _json_escape() {
 _list_installed_json() {
     first=1
     printf '{\n  "command": "list-installed",\n  "packages": [\n'
-    find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null |
+    find "$DB_DIR" -type f -name "version" -maxdepth 5 2>/dev/null |
     sed "s|^${DB_DIR}/||" | sed 's|/version$||' |
     while IFS= read -r pkg_path; do
         pkg_name=$(basename "$pkg_path")
@@ -8226,7 +8216,7 @@ show_pkg_info_json() {
 }
 
 # rewritten... hopes that it doesnt fucking explode
-# Enhanced search with fuzzy match and filter flags
+# §10 — Enhanced search with fuzzy match and filter flags
 # Usage: astral_search_enhanced <query> [--installed] [--category <cat>]
 astral_search_enhanced() {
     _query="$1"
@@ -8243,7 +8233,7 @@ astral_search_enhanced() {
 
     _results=0
 
-    # Read index via temp file to avoid pipe subshell
+    # §8.1 — Read index via temp file to avoid pipe subshell
     _idx_tmpf="$TMPDIR/astral-search-idx-$$"
     [ -f "$INDEX_FILE_AOHARU" ] && cat "$INDEX_FILE_AOHARU" > "$_idx_tmpf" || : > "$_idx_tmpf"
 
@@ -8642,10 +8632,10 @@ upgrade_all() {
     # Create holds file if it doesn't exist
     touch "$HOLDS_FILE" 2>/dev/null || true
 
-    # Avoid pipe subshell: count vars inside a pipe-fed while-loop are
+    # §8.1 — Avoid pipe subshell: count vars inside a pipe-fed while-loop are
     # invisible after the loop on dash/ash. Write pkg list to a temp file first.
     _upgrade_tmpf="$TMPDIR/astral-upgrade-list-$$"
-    find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null |
+    find "$DB_DIR" -type f -name "version" -maxdepth 5 2>/dev/null |
         sed "s|^${DB_DIR}/||" | sed 's|/version$||' > "$_upgrade_tmpf"
 
     while IFS= read -r pkg_path; do
@@ -8921,7 +8911,7 @@ remove_pkg_only() {
 
     rpath=$(recipe_path "$(basename "$pkg_path")") 2>/dev/null || rpath=""
 
-    # Correct hook order: pre_remove → remove files → remove DB → post_remove
+    # §9 — Correct hook order: pre_remove → remove files → remove DB → post_remove
     # post_remove must only run AFTER files and DB entry are gone.
     # Previously post_remove ran before file removal, which was wrong.
 
@@ -9075,7 +9065,7 @@ list_installed() {
 
     # Group packages by category
     temp_list="$TMPDIR/astral-list-$$"
-    find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null |
+    find "$DB_DIR" -type f -name "version" -maxdepth 5 2>/dev/null |
     sed "s|^${DB_DIR}/||" | sed 's|/version$||' | sort > "$temp_list"
 
     # Get unique categories
@@ -9120,7 +9110,7 @@ list_installed() {
 
     rm -f "$temp_list"
 
-    total=$(find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null | wc -l)
+    total=$(find "$DB_DIR" -type f -name "version" -maxdepth 5 2>/dev/null | wc -l)
     info "╭─╮"
     info "╰─┴─ Total: $total packages installed"
 }
@@ -9340,7 +9330,7 @@ check_system_deps() {
     broken_count=0
 
     pkgs_tmp=$(mktemp "$TMPDIR/astral-depcheck.XXXXXX") || err "mktemp failed"
-    find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null | \
+    find "$DB_DIR" -type f -name "version" -maxdepth 5 2>/dev/null | \
         sed "s|^${DB_DIR}/||" | sed 's|/version$||' > "$pkgs_tmp"
 
     while IFS= read -r pkg_path; do
@@ -9389,7 +9379,7 @@ TIMESTAMP=$(date +%s)
 VERSION=$version
 EOF
 
-    info "[$pkg] Build state saved: $stage"
+    info "$(pkg_label "$pkg") Build state saved: $stage"
 }
 
 # Load build state
@@ -11220,7 +11210,6 @@ check_circular_deps() {
     return 0
 }
 
-# FIX: Atomic file operations for database updates
 atomic_db_write() {
     target_file="$1"
     content="$2"
@@ -11605,7 +11594,7 @@ case "$1" in
     if [ "$JSON_OUTPUT" -eq 1 ]; then
         search_pkg_json "$2"
     else
-        # Use enhanced search (fuzzy match + installed status + category filter)
+        # §10 — Use enhanced search (fuzzy match + installed status + category filter)
         astral_search_enhanced "$2"
         search_pkg "$2"  # also run legacy local recipe search
     fi
@@ -12120,5 +12109,4 @@ start|stop|restart|enable|disable|status)
 
 esac
 
-# Call this in main initialization
 export_astral_stats &  # Run in background
