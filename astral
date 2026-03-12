@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v5.3.1.4 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
+# Astral v5.3.1.5 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
 # SOURCE-ONLY
-# V: 5 - Major . 3 - Minor . 1 - Patches . 4 - hotfixes
+# V: 5 - Major . 3 - Minor . 1 - Patches . 5 - hotfixes
 
-version="5.3.1.4 Main"
+version="5.3.1.5 Main"
 ASTRAL_PRODUCTION_DATE="2025-11-26"
 now_seconds=$(date +%s)
 prod_seconds=$(date -d "$ASTRAL_PRODUCTION_DATE" +%s)
@@ -87,7 +87,7 @@ LOG_SYNC_FILE=${LOG_SYNC_FILE:-/var/log/astral/sync.log}
 LOG_BUILD_FILE=${LOG_BUILD_FILE:-/var/log/astral/build.log}
 LOG_ENABLE=${LOG_ENABLE:-1}
 
-# §8.3 — Portable file size (GNU stat / BSD stat / wc -c fallback)
+# Portable file size (GNU stat / BSD stat / wc -c fallback)
 file_size_bytes() {
     _f="$1"
     _s=$(stat -c%s "$_f" 2>/dev/null) && { printf '%s' "$_s"; return 0; }
@@ -191,7 +191,6 @@ _original_info() { printf "${NC}%s\n" "$*"; }
 _original_warn() { printf "${YELLOW}[WARNING]${NC} %s\n" "$*" >&2; }
 _original_err() { printf "${RED}[ERROR]${NC} %s\n" "$*" >&2; exit 1; }
 
-# §5.2 — Structured error output with actionable hints
 err_hint() {
     _msg="$1"
     _hint="$2"
@@ -200,7 +199,7 @@ err_hint() {
     exit 1
 }
 
-# §5.3 — Machine-readable errors for astral-env (ASTRAL_JSON_OUTPUT=1)
+# Machine-readable errors for astral-env (ASTRAL_JSON_OUTPUT=1)
 err_structured() {
     _code="$1" _msg="$2" _pkg="${3:-}" _hint="${4:-}"
     if [ "${ASTRAL_JSON_OUTPUT:-0}" -eq 1 ]; then
@@ -638,13 +637,22 @@ check_provided_conflicts() {
     rm -f "$_seen_file" "$_conflict_file"
     touch "$_seen_file" "$_conflict_file"
 
-    find "$RECIPES_DIR" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | while read -r _rdir; do
+    # Pkg dirs: depth 2 in legacy layout, depth 3 in sharded layout (category/shard/pkgname)
+    find "$RECIPES_DIR" -mindepth 2 -maxdepth 3 -type d 2>/dev/null | while read -r _rdir; do
+        # Only consider dirs that actually contain a recipe (build script or .stars)
+        { [ -f "$_rdir/build" ] || ls "$_rdir"/*.stars 2>/dev/null | grep -q .; } || continue
         _bare=$(basename "$_rdir")
-        _catpkg=$(printf '%s' "$_rdir" | sed "s|^$RECIPES_DIR/||")
-        # Check if we've seen this bare name from a different category
+        # _catpkg is always category/pkgname — strip the shard layer if present
+        _rel=$(printf '%s' "$_rdir" | sed "s|^$RECIPES_DIR/||")
+        _depth=$(printf '%s' "$_rel" | tr -cd '/' | wc -c)
+        if [ "$_depth" -eq 2 ]; then
+            # new layout: category/shard/pkgname → strip shard → category/pkgname
+            _catpkg="$(dirname "$(dirname "$_rel")")/$(basename "$_rel")"
+        else
+            _catpkg="$_rel"
+        fi
         _prev=$(grep -E "^${_bare}=" "$_seen_file" | head -n1 | cut -d= -f2-)
         if [ -n "$_prev" ] && [ "$_prev" != "$_catpkg" ]; then
-            # Only flag if not resolved in package.provided
             _declared=$(grep -E "^[[:space:]]*${_bare}[[:space:]]*=" "$PROVIDED_FILE" \
                 2>/dev/null | head -n1)
             if [ -z "$_declared" ]; then
@@ -655,10 +663,16 @@ check_provided_conflicts() {
         fi
     done
 
-    # Also check .stars files
-    find "$RECIPES_DIR" -mindepth 2 -maxdepth 3 -name "*.stars" 2>/dev/null | while read -r _sf; do
+    # Also check .stars files — depth 4 in new layout, depth 2-3 in legacy
+    find "$RECIPES_DIR" -mindepth 2 -maxdepth 4 -name "*.stars" 2>/dev/null | while read -r _sf; do
         _bare=$(basename "$_sf" | sed 's/-[0-9].*//' | sed 's/\.stars$//')
-        _catpkg=$(dirname "$_sf" | sed "s|^$RECIPES_DIR/||")
+        _rel=$(dirname "$_sf" | sed "s|^$RECIPES_DIR/||")
+        _depth=$(printf '%s' "$_rel" | tr -cd '/' | wc -c)
+        if [ "$_depth" -eq 2 ]; then
+            _catpkg="$(dirname "$(dirname "$_rel")")/$(basename "$_rel")"
+        else
+            _catpkg="$_rel"
+        fi
         _prev=$(grep -E "^${_bare}=" "$_seen_file" | head -n1 | cut -d= -f2-)
         if [ -n "$_prev" ] && [ "$_prev" != "$_catpkg" ]; then
             _declared=$(grep -E "^[[:space:]]*${_bare}[[:space:]]*=" "$PROVIDED_FILE" \
@@ -938,7 +952,7 @@ verify_signature() {
     fi
 }
 
-# §4.2 — Checksum-first, GPG-sig-optional verification
+# Checksum-first, GPG-sig-optional verification
 # Usage: verify_source_file <file> <checksums_file> [sig_file]
 # Always verifies checksum; GPG sig is optional bonus trust.
 verify_source_file() {
@@ -964,7 +978,7 @@ verify_source_file() {
             SHA512)
                 _actual=$(sha512sum "$_file" 2>/dev/null | awk '{print $1}') ;;
             BLAKE2B)
-                # §4 — BLAKE2B fallback alongside SHA256
+                # BLAKE2B fallback alongside SHA256
                 if command -v b2sum >/dev/null 2>&1; then
                     _actual=$(b2sum "$_file" 2>/dev/null | awk '{print $1}')
                 else
@@ -2816,7 +2830,7 @@ conflicts_with() {
     grep -Fx "$pkg2" "$rpath1/conflicts" >/dev/null 2>&1
 }
 
-# §2.3 — Portable version resolution (subshell pipe bug fixed)
+# Portable version resolution (subshell pipe bug fixed)
 # The original used a pipe-fed while loop whose variable assignments were lost
 # in the parent shell. We now write constraints to a temp file instead.
 resolve_version_conflicts() {
@@ -2824,7 +2838,7 @@ resolve_version_conflicts() {
 
     info "Resolving version constraints for: $pkg"
 
-    # §2.3 fix: write constraints to a temp file to avoid subshell variable loss
+    # write constraints to a temp file to avoid subshell variable loss
     _constraints_file="$TMPDIR/astral-vc-$$"
     : > "$_constraints_file"
 
@@ -3116,33 +3130,30 @@ check_versioned_deps() {
 detect_recipe_format() {
     pkg="$1"
 
-    # Check for .stars file first (faster)
+    # Check for .stars file first (faster) — legacy flat path
     if [ -f "$RECIPES_DIR/$pkg.stars" ]; then
-        printf 'stars\n'
-        return 0
+        printf 'stars\n'; return 0
     fi
 
-    # Check for category/pkg.stars
-    stars_path=$(find "$RECIPES_DIR" -type f -name "$pkg.stars" -maxdepth 2 2>/dev/null | head -n1)
+    # Search up to depth 4: covers category/shard/pkgname/pkgname-ver-arch.stars
+    stars_path=$(find "$RECIPES_DIR" -type f -name "$pkg.stars" -maxdepth 4 2>/dev/null | head -n1)
+    if [ -z "$stars_path" ]; then
+        stars_path=$(find "$RECIPES_DIR" -type f -name "$pkg-*.stars" -maxdepth 4 2>/dev/null | head -n1)
+    fi
     if [ -n "$stars_path" ]; then
-        printf 'stars\n'
-        return 0
+        printf 'stars\n'; return 0
     fi
 
-    # Check for directory-based recipe
+    # Legacy directory-based recipe
     if [ -d "$RECIPES_DIR/$pkg" ]; then
-        printf 'directory\n'
-        return 0
+        printf 'directory\n'; return 0
     fi
-
-    # Check in subdirectories
-    dir_path=$(find "$RECIPES_DIR" -type d -name "$pkg" -maxdepth 2 2>/dev/null | head -n1)
+    # Pkg dir: depth 2 (legacy) or depth 3 (sharded: category/shard/pkgname)
+    dir_path=$(find "$RECIPES_DIR" -type d -name "$pkg" -maxdepth 3 2>/dev/null | head -n1)
     if [ -n "$dir_path" ]; then
-        printf 'directory\n'
-        return 0
+        printf 'directory\n'; return 0
     fi
 
-    # Not found
     return 1
 }
 
@@ -4157,6 +4168,10 @@ parallel_removedep() {
 
 
 
+# Return the single-letter shard directory for a package name.
+# e.g. "nano" -> "n",  "GCC" -> "g",  "xorg-server" -> "x"
+recipe_shard() { printf '%s' "$1" | cut -c1 | tr 'A-Z' 'a-z'; }
+
 # helper: find recipe path - search subdirectories
 recipe_path() {
     _pkg="$1"
@@ -4166,104 +4181,100 @@ recipe_path() {
     # Separate category from package name if provided as category/pkg
     _category=""
     case "$_pkg" in
-        */*)
-            _category="$(dirname "$_pkg")"
-            _pkg="$(basename "$_pkg")"
-            ;;
+        */*) _category="$(dirname "$_pkg")"; _pkg="$(basename "$_pkg")" ;;
     esac
 
     # Strip -git suffix for filesystem search but remember it
     is_git=0
     _pkg_bare="$_pkg"
     case "$_pkg" in
-        *-git)
-            _pkg_bare=$(printf '%s' "$_pkg" | sed 's/-git$//')
-            is_git=1
-            _version="git"
-            ;;
+        *-git) _pkg_bare=$(printf '%s' "$_pkg" | sed 's/-git$//'); is_git=1; _version="git" ;;
     esac
 
     # === FILESYSTEM FIRST ===
-    # Check all reasonable on-disk locations before touching the index.
-    # IMPORTANT: always prefer an expanded directory (has a 'build' script) over
-    # a raw .stars file, so callers get a usable path directly.
+    # Checks both the new sharded layout (category/SHARD/pkgname/) and the
+    # legacy flat layout (category/pkgname.*) so old trees keep working.
+    # IMPORTANT: always prefer an expanded directory (has a 'build' script).
     for _search_name in "$_pkg" "$_pkg_bare"; do
-        # Expanded directory recipe at category/pkg/ (most useful — check first)
-        if [ -n "$_category" ] && [ -d "$RECIPES_DIR/$_category/$_search_name" ] && \
-           [ -f "$RECIPES_DIR/$_category/$_search_name/build" ]; then
-            printf '%s\n' "$RECIPES_DIR/$_category/$_search_name"
-            return 0
-        fi
-        # Exact .stars file at category/pkg.stars
-        if [ -n "$_category" ] && [ -f "$RECIPES_DIR/$_category/$_search_name.stars" ] && \
-           [ -s "$RECIPES_DIR/$_category/$_search_name.stars" ]; then
-            printf '%s\n' "$RECIPES_DIR/$_category/$_search_name.stars"
-            return 0
-        fi
-        # Versioned .stars: category/pkg/pkg-VER-ARCH.stars
-        # But first check if the expanded dir beside it has a build script
+        _shard=$(recipe_shard "$_search_name")
+
         if [ -n "$_category" ]; then
-            _glob=$(find "$RECIPES_DIR/$_category" -maxdepth 2 \
-                -name "${_search_name}-*.stars" 2>/dev/null | head -n1)
+            # ── New sharded layout: category/shard/pkgname/ ──────────────────
+            _sharded_dir="$RECIPES_DIR/$_category/$_shard/$_search_name"
+            if [ -d "$_sharded_dir" ]; then
+                if [ -f "$_sharded_dir/build" ]; then
+                    printf '%s\n' "$_sharded_dir"; return 0
+                fi
+                _sv=$(find "$_sharded_dir" -maxdepth 1 -name "${_search_name}-*.stars" \
+                    2>/dev/null | sort -V | tail -n1)
+                if [ -n "$_sv" ] && [ -s "$_sv" ]; then
+                    printf '%s\n' "$_sv"; return 0
+                fi
+            fi
+
+            # ── Legacy layout: category/pkgname.stars or category/pkgname/ ──
+            if [ -d "$RECIPES_DIR/$_category/$_search_name" ] && \
+               [ -f "$RECIPES_DIR/$_category/$_search_name/build" ]; then
+                printf '%s\n' "$RECIPES_DIR/$_category/$_search_name"; return 0
+            fi
+            if [ -f "$RECIPES_DIR/$_category/$_search_name.stars" ] && \
+               [ -s "$RECIPES_DIR/$_category/$_search_name.stars" ]; then
+                printf '%s\n' "$RECIPES_DIR/$_category/$_search_name.stars"; return 0
+            fi
+            # Versioned .stars anywhere under category (depth 3 covers both layouts)
+            _glob=$(find "$RECIPES_DIR/$_category" -maxdepth 3 \
+                -name "${_search_name}-*.stars" 2>/dev/null | sort -V | tail -n1)
             if [ -n "$_glob" ]; then
-                # Prefer expanded dir in same location
                 _expanded_candidate=$(dirname "$_glob")
                 if [ -f "$_expanded_candidate/build" ]; then
-                    printf '%s\n' "$_expanded_candidate"
-                    return 0
+                    printf '%s\n' "$_expanded_candidate"; return 0
                 fi
-                printf '%s\n' "$_glob"
-                return 0
+                printf '%s\n' "$_glob"; return 0
             fi
         fi
-    # If no category was given, check package.provided for a canonical alias.
-    # This ensures bare names like 'gcc' always resolve to the declared provider
-    # (e.g. sys-devel/gcc) even if multiple categories contain a recipe named gcc.
-    if [ -z "$_category" ]; then
-        _resolved=$(resolve_provided "$_pkg")
-        if [ "$_resolved" != "$_pkg" ]; then
-            debug "recipe_path: bare '$_pkg' -> provided '$_resolved'"
-            recipe_path "$_resolved" "$_version" "$_arch"
-            return $?
-        fi
-    fi
 
-    # Search whole recipes dir without category hint — but first check for
-    # ambiguity: if multiple VALID categories match, error loudly instead of
-    # silently taking a random result. Only consider proper category/pkg paths
-    # (exactly 2 levels deep) that have a build script or .stars file.
-    _all_matches=$(find "$RECIPES_DIR" -mindepth 2 -maxdepth 2 -type d -name "$_search_name" 2>/dev/null | \
-        while read -r d; do
-            { [ -f "$d/build" ] || ls "$d"/*.stars 2>/dev/null | grep -q .; } && printf '%s\n' "$d"
-        done)
-    _match_count=$(printf '%s\n' "$_all_matches" | grep -c . 2>/dev/null || echo 0)
-    if [ "$_match_count" -gt 1 ]; then
-        warn "Ambiguous package '$_pkg' — found in multiple categories:"
-        printf '%s\n' "$_all_matches" | sed "s|$RECIPES_DIR/||" | while read -r _m; do
-            warn "  $_m"
-        done
-        err "Specify the full category/pkg form, or declare a provider in $PROVIDED_FILE"
-    fi
-    # Single match (or none) — proceed with the find
-        _found=$(find "$RECIPES_DIR" -maxdepth 3 -type d -name "$_search_name" 2>/dev/null | \
-            while read -r d; do [ -f "$d/build" ] && printf '%s\n' "$d" && break; done | head -n1)
-        _found=$(find "$RECIPES_DIR" -maxdepth 3 \
-            \( -name "${_search_name}.stars" -o -name "${_search_name}-*.stars" \) \
-            2>/dev/null | while read -r f; do
-                [ -s "$f" ] || continue
-                # Check if there's an expanded dir beside this .stars
-                _exp=$(dirname "$f")
-                [ -f "$_exp/build" ] && printf '%s\n' "$_exp" && break
-                printf '%s\n' "$f" && break
-            done | head -n1)
-        if [ -n "$_found" ]; then
-            printf '%s\n' "$_found"
-            return 0
+        # If no category was given, check package.provided for a canonical alias.
+        if [ -z "$_category" ]; then
+            _resolved=$(resolve_provided "$_pkg")
+            if [ "$_resolved" != "$_pkg" ]; then
+                debug "recipe_path: bare '$_pkg' -> provided '$_resolved'"
+                recipe_path "$_resolved" "$_version" "$_arch"; return $?
+            fi
         fi
+
+        # Search whole recipes dir — check for ambiguity across categories first.
+        # New layout: pkg dirs live at depth 3 (category/shard/pkgname).
+        # Legacy layout: pkg dirs live at depth 2 (category/pkgname).
+        _all_matches=$(find "$RECIPES_DIR" -mindepth 2 -maxdepth 3 -type d \
+            -name "$_search_name" 2>/dev/null | \
+            while read -r d; do
+                { [ -f "$d/build" ] || ls "$d"/*.stars 2>/dev/null | grep -q .; } && printf '%s\n' "$d"
+            done)
+        _match_count=$(printf '%s\n' "$_all_matches" | grep -c . 2>/dev/null || echo 0)
+        if [ "$_match_count" -gt 1 ]; then
+            warn "Ambiguous package '$_pkg' — found in multiple categories:"
+            printf '%s\n' "$_all_matches" | sed "s|$RECIPES_DIR/||" | while read -r _m; do
+                warn "  $_m"
+            done
+            err "Specify the full category/pkg form, or declare a provider in $PROVIDED_FILE"
+        fi
+        # Single match — prefer expanded dir, then .stars
+        _found=$(find "$RECIPES_DIR" -maxdepth 4 -type d -name "$_search_name" 2>/dev/null | \
+            while read -r d; do [ -f "$d/build" ] && printf '%s\n' "$d" && break; done | head -n1)
+        if [ -z "$_found" ]; then
+            _found=$(find "$RECIPES_DIR" -maxdepth 4 \
+                \( -name "${_search_name}.stars" -o -name "${_search_name}-*.stars" \) \
+                2>/dev/null | while read -r f; do
+                    [ -s "$f" ] || continue
+                    _exp=$(dirname "$f")
+                    [ -f "$_exp/build" ] && printf '%s\n' "$_exp" && break
+                    printf '%s\n' "$f" && break
+                done | head -n1)
+        fi
+        if [ -n "$_found" ]; then printf '%s\n' "$_found"; return 0; fi
     done
 
     # === INDEX LOOKUP ===
-    # Try exact name, then bare name (without -git), then prefix-match for foo-git when searching foo
     for _lookup in "$_pkg" "$_pkg_bare"; do
         available=$(query_index_v2 "$_lookup" "$_arch" "$REPO_CONTEXT")
         [ -z "$available" ] && available=$(query_index_v2 "$_lookup" "any" "$REPO_CONTEXT")
@@ -4298,17 +4309,21 @@ recipe_path() {
 
     category=$(dirname "$fullpkg")
     pkg_name=$(basename "$fullpkg")
+    _shard=$(recipe_shard "$pkg_name")
 
     recipe_name="${pkg_name}-${sel_ver}-${sel_arch}.stars"
-    recipe_full="$RECIPES_DIR/$category/$recipe_name"
-
-    if [ -f "$recipe_full" ] && [ -s "$recipe_full" ]; then
-        printf '%s\n' "$recipe_full"
-        return 0
+    # Prefer new sharded layout; fall back to flat for legacy repos
+    recipe_full="$RECIPES_DIR/$category/$_shard/$pkg_name/$recipe_name"
+    if [ ! -f "$recipe_full" ]; then
+        recipe_full="$RECIPES_DIR/$category/$recipe_name"
     fi
 
-    # Recipe not on disk yet — return the expected path so the caller can fetch it
-    # (do NOT fetch here; recipe_path is a pure lookup function)
+    if [ -f "$recipe_full" ] && [ -s "$recipe_full" ]; then
+        printf '%s\n' "$recipe_full"; return 0
+    fi
+
+    # Recipe not on disk yet — return the expected (sharded) path so the caller can fetch it
+    printf '%s\n' "$RECIPES_DIR/$category/$_shard/$pkg_name/$recipe_name"
     return 1
 }
 
@@ -6000,21 +6015,36 @@ fetch_remote_recipe() {
     local_dir="$RECIPES_DIR/$category_pkg"
     mkdir -p "$local_dir"
 
-    # Build remote URL based on repo context
+    # Compute sharded local dir: RECIPES_DIR/category/shard/pkg/
+    _fp_pkgbase=$(basename "$category_pkg")
+    _fp_cat=$(dirname "$category_pkg")
+    _fp_shard=$(recipe_shard "$_fp_pkgbase")
+    local_dir_sharded="$RECIPES_DIR/$_fp_cat/$_fp_shard/$_fp_pkgbase"
+    mkdir -p "$local_dir_sharded"
+    # Canonical local dir is the sharded one; keep legacy as fallback for old trees
+    local_dir="$local_dir_sharded"
+
+    # Build remote URL based on repo context — sharded layout on the server
     case "$_force_repo" in
         asura)
-            remote_base="${USER_RECIPE_RAW_URL%/}/recipes/${category_pkg}"
+            remote_base="${USER_RECIPE_RAW_URL%/}/recipes/${_fp_cat}/${_fp_shard}/${_fp_pkgbase}"
             ;;
         aoharu|*)
-            remote_base="${RECIPE_RAW_URL%/}/recipes/${category_pkg}"
+            remote_base="${RECIPE_RAW_URL%/}/recipes/${_fp_cat}/${_fp_shard}/${_fp_pkgbase}"
             ;;
     esac
+    # Also keep a legacy remote_base for flat fallback
+    case "$_force_repo" in
+        asura) _remote_base_legacy="${USER_RECIPE_RAW_URL%/}/recipes/${category_pkg}" ;;
+        *)     _remote_base_legacy="${RECIPE_RAW_URL%/}/recipes/${category_pkg}" ;;
+    esac
 
-    # Try downloading .stars file — three URL patterns:
-    #   1. flat:    .../recipes/category/pkg.stars
-    #   2. nested:  .../recipes/category/pkg/pkg.stars
-    #   3. versioned: .../recipes/category/pkg/pkg-VER-ARCH.stars  (most common in AOHARU)
-    stars_url_flat="${remote_base}.stars"
+    # Try downloading .stars file — four URL patterns (sharded preferred, flat legacy fallback):
+    #   1. sharded versioned:  .../recipes/cat/s/pkg/pkg-VER-ARCH.stars  (canonical)
+    #   2. sharded nested:     .../recipes/cat/s/pkg/pkg.stars
+    #   3. legacy flat:        .../recipes/cat/pkg.stars
+    #   4. legacy nested:      .../recipes/cat/pkg/pkg.stars
+    stars_url_flat="${_remote_base_legacy}.stars"
     stars_url_nested="${remote_base}/$(basename "$category_pkg").stars"
     stars_dest="${local_dir}.stars"
 
@@ -6024,8 +6054,6 @@ fetch_remote_recipe() {
     [ "$_force_repo" = "asura" ] && _idx_to_search="$INDEX_FILE_ASURA"
     if [ -f "$_idx_to_search" ]; then
         _pkgbase=$(basename "$category_pkg")
-        # parse_index_v2 outputs: category/pkg arch version
-        # so fields split on '[/ ]': $1=category $2=pkg $3=arch $4=version
         _imatch=$(parse_index_v2 "$_idx_to_search" | awk -v p="$_pkgbase" '{n=split($1,a,"/"); if(a[n]==p) print}' | head -n1)
         debug "fetch_remote_recipe: index match for '$_pkgbase': '$_imatch'"
         if [ -n "$_imatch" ]; then
@@ -6033,35 +6061,36 @@ fetch_remote_recipe() {
             _iarch=$(printf '%s' "$_imatch" | awk '{print $2}')
             _iarch="${_iarch:-any}"
             _vname="${_pkgbase}-${_iver}-${_iarch}.stars"
+            # Sharded versioned URL (canonical) and its local destination
             stars_url_versioned="${remote_base}/${_vname}"
             stars_dest_versioned="${local_dir}/${_vname}"
             debug "fetch_remote_recipe: versioned url='$stars_url_versioned'"
         fi
     fi
 
-    # Try flat first
-    if curl -fsSL "$stars_url_flat" -o "$stars_dest" 2>/dev/null && [ -s "$stars_dest" ]; then
-        info "  ✓ Downloaded .stars recipe (flat): $stars_dest"
-        mkdir -p "$local_dir"
-        expand_stars_recipe "$stars_dest" "$local_dir"
-        return 0
-    fi
-    rm -f "$stars_dest"
-
-    # Try versioned (most common AOHARU layout: category/pkg/pkg-ver-arch.stars)
+    # Try sharded versioned first (canonical new layout)
     if [ -n "$stars_url_versioned" ]; then
         mkdir -p "$local_dir"
         if curl -fsSL "$stars_url_versioned" -o "$stars_dest_versioned" 2>/dev/null && [ -s "$stars_dest_versioned" ]; then
-            info "  ✓ Downloaded .stars recipe (versioned): $stars_dest_versioned"
+            info "  ✓ Downloaded .stars recipe (sharded): $stars_dest_versioned"
             expand_stars_recipe "$stars_dest_versioned" "$local_dir"
             return 0
         fi
         rm -f "$stars_dest_versioned"
     fi
 
-    # Try nested (category/pkg/pkg.stars)
+    # Try sharded nested (cat/s/pkg/pkg.stars)
     if curl -fsSL "$stars_url_nested" -o "$stars_dest" 2>/dev/null && [ -s "$stars_dest" ]; then
-        info "  ✓ Downloaded .stars recipe (nested): $stars_dest"
+        info "  ✓ Downloaded .stars recipe (sharded nested): $stars_dest"
+        mkdir -p "$local_dir"
+        expand_stars_recipe "$stars_dest" "$local_dir"
+        return 0
+    fi
+    rm -f "$stars_dest"
+
+    # Try legacy flat (cat/pkg.stars) for repos not yet migrated
+    if curl -fsSL "$stars_url_flat" -o "$stars_dest" 2>/dev/null && [ -s "$stars_dest" ]; then
+        info "  ✓ Downloaded .stars recipe (legacy flat): $stars_dest"
         mkdir -p "$local_dir"
         expand_stars_recipe "$stars_dest" "$local_dir"
         return 0
@@ -6122,9 +6151,10 @@ fetch_remote_recipe_stars() {
         [ -n "$_match" ] && category=$(printf '%s' "$_match" | cut -d'/' -f1)
     fi
 
-    # Try to fetch .stars file first
-    remote_url="${RECIPE_RAW_URL%/}/recipes/${category:+$category/}${_pkg}.stars"
-    local_path="$RECIPES_DIR/${category:+$category/}${_pkg}.stars"
+    # Try to fetch .stars file first — store in sharded location
+    _fss_shard=$(recipe_shard "$_pkg")
+    remote_url="${RECIPE_RAW_URL%/}/recipes/${category:+$category/}${_fss_shard}/${_pkg}/${_pkg}.stars"
+    local_path="$RECIPES_DIR/${category:+$category/}${_fss_shard}/${_pkg}/${_pkg}.stars"
 
     mkdir -p "$(dirname "$local_path")"
 
@@ -6137,7 +6167,7 @@ fetch_remote_recipe_stars() {
     return 1
 }
 
-# §3 — Parallel source downloader (pure POSIX sh, FIFO job pool)
+# Parallel source downloader (pure POSIX sh, FIFO job pool)
 # Replaces serial download_sources() as the primary downloader.
 # Falls back to serial download_sources() if mkfifo is unavailable.
 # Suggestion: recoverable download with retry logic
@@ -6403,7 +6433,7 @@ store_file_checksums() {
 
     info "Storing file checksums for verification..."
 
-    # §8.1 — Avoid pipe subshell: use temp file so loop runs in current shell
+    # Avoid pipe subshell: use temp file so loop runs in current shell
     _cs_tmpf="$TMPDIR/astral-cs-$$"
     ( cd "$pkgdir" && find . -type f ) > "$_cs_tmpf"
     while IFS= read -r file; do
@@ -6592,7 +6622,7 @@ handle_regular_source() {
 }
 
 
-# §11.2 — Cached checksum to avoid re-hashing on build resume
+# Cached checksum to avoid re-hashing on build resume
 # Uses a .checksum_cache file in the same dir; invalidates if source file is newer.
 get_or_compute_checksum() {
     _file="$1"
@@ -7033,13 +7063,16 @@ find_satisfying_version() {
     # Find all available versions in recipes
     available_versions=""
 
-    # Check RECIPES_DIR for versioned directories
-    # Format: /recipes/category/pkg/pkg-vX.Y.Z
+    # Check RECIPES_DIR for versioned directories — try sharded layout first, then legacy
     pkg_base=$(basename "$pkg")
     category=$(dirname "$pkg" | sed "s|^${RECIPES_DIR}/||")
+    _vs_shard=$(recipe_shard "$pkg_base")
 
-    if [ -d "$RECIPES_DIR/$category/$pkg_base" ]; then
-        for version_dir in "$RECIPES_DIR/$category/$pkg_base"/*; do
+    for _vs_dir in \
+        "$RECIPES_DIR/$category/$_vs_shard/$pkg_base" \
+        "$RECIPES_DIR/$category/$pkg_base"; do
+    if [ -d "$_vs_dir" ]; then
+        for version_dir in "$_vs_dir"/*; do
             [ -d "$version_dir" ] || continue
             version_name=$(basename "$version_dir")
 
@@ -7052,7 +7085,9 @@ find_satisfying_version() {
 
             available_versions="$available_versions $version_num"
         done
+        break  # found a dir, don't check the other layout
     fi
+    done
 
     # No constraints? Return latest
     if [ -z "$sat_constraints" ]; then
@@ -7116,7 +7151,7 @@ resolve_sat_dependencies() {
     printf '%s\n' "$packages_to_install"
 }
 
-# §2.2 — Two-phase flat dependency resolver
+# Two-phase flat dependency resolver
 # Replaces the recursive VISITED_PACKAGES approach which misidentifies shared
 # deps as circular (diamond dep problem). Uses an iterative queue instead.
 #
@@ -7556,7 +7591,7 @@ sync_pkg_asura() {
     info "✓ ASURA sync complete, context reset to AOHARU"
 }
 
-# §7.2 — Inject use() helper into build environment for optional deps
+# Inject use() helper into build environment for optional deps
 # Must be called just before sourcing the build script.
 # Writes a use() function definition to a temp file that the build script sources.
 astral_inject_use_helpers() {
@@ -7652,7 +7687,7 @@ SAFETY_WARNING
 
     create_sandbox "$buildtmp" "$sandbox_root"
 
-    # §3 — Use parallel downloader; falls back to serial if mkfifo unavailable
+    # Use parallel downloader; falls back to serial if mkfifo unavailable
     parallel_download_sources "$rpath" "$buildtmp"
     verify_checksums_and_extract "$_pkg" "$rpath" "$buildtmp"
 
@@ -7879,14 +7914,14 @@ update_repo() {
 
     mv -f "$temp_index" "$INDEX_FILE"
     info "Database updated successfully."
-    # §11.1 — Rebuild per-package lookup cache after index update
+    # Rebuild per-package lookup cache after index update
     build_pkg_cache
     # Check for bare-name conflicts in local recipe tree
     ensure_package_provided
     check_provided_conflicts || warn "Fix conflicts in $PROVIDED_FILE before installing affected packages"
 }
 
-# §11.1 — Per-package lookup cache (avoids re-reading full index on every lookup)
+# Per-package lookup cache (avoids re-reading full index on every lookup)
 # Called at end of update_repo(); can also be run with astral --rebuild-cache.
 build_pkg_cache() {
     _index="$INDEX_FILE_AOHARU"
@@ -8109,7 +8144,7 @@ search_pkg_json() {
 
     # Local recipes - .stars files
     stars_list="$TMPDIR/astral-json-stars-$$"
-    find "$RECIPES_DIR" -type f -name '*.stars' -maxdepth 3 2>/dev/null > "$stars_list"
+    find "$RECIPES_DIR" -type f -name '*.stars' -maxdepth 4 2>/dev/null > "$stars_list"
     while IFS= read -r sf; do
         base=$(basename "$sf"); base=${base%.stars}
         pkg_name=$(printf '%s' "$base" | sed 's/-[0-9].*//')
@@ -8191,7 +8226,7 @@ show_pkg_info_json() {
 }
 
 # rewritten... hopes that it doesnt fucking explode
-# §10 — Enhanced search with fuzzy match and filter flags
+# Enhanced search with fuzzy match and filter flags
 # Usage: astral_search_enhanced <query> [--installed] [--category <cat>]
 astral_search_enhanced() {
     _query="$1"
@@ -8208,7 +8243,7 @@ astral_search_enhanced() {
 
     _results=0
 
-    # §8.1 — Read index via temp file to avoid pipe subshell
+    # Read index via temp file to avoid pipe subshell
     _idx_tmpf="$TMPDIR/astral-search-idx-$$"
     [ -f "$INDEX_FILE_AOHARU" ] && cat "$INDEX_FILE_AOHARU" > "$_idx_tmpf" || : > "$_idx_tmpf"
 
@@ -8224,7 +8259,9 @@ astral_search_enhanced() {
 
         # Fuzzy match: query appears anywhere in path or description
         _desc=""
-        _info_file="$RECIPES_DIR/$_cat/$_pkg.stars"
+        _info_shard=$(recipe_shard "$_pkg")
+        _info_file="$RECIPES_DIR/$_cat/$_info_shard/$_pkg/$_pkg.stars"
+        [ ! -f "$_info_file" ] && _info_file="$RECIPES_DIR/$_cat/$_pkg.stars"
         [ -f "$_info_file" ] && _desc=$(grep '^description:' "$_info_file" | cut -d: -f2-)
 
         case "${_entry}${_desc}" in
@@ -8274,7 +8311,7 @@ search_pkg() {
     # Use pipe but avoid subshell by using lastpipe (not POSIX) or process substitution
     # POSIX-safe approach: redirect find output to temp file, then read
     stars_list="$TMPDIR/astral-stars-list-$$"
-    find "$RECIPES_DIR" -type f -name '*.stars' -maxdepth 3 2>/dev/null > "$stars_list"
+    find "$RECIPES_DIR" -type f -name '*.stars' -maxdepth 4 2>/dev/null > "$stars_list"
 
     while read -r stars_file; do
         # Extract package name from filename (POSIX-compliant way, remove .stars suffix)
@@ -8298,7 +8335,7 @@ search_pkg() {
     # Search for directory-based recipes (legacy format)
     # Only if not already found as .stars
     dir_list="$TMPDIR/astral-dirs-list-$$"
-    find "$RECIPES_DIR" -type d -mindepth 1 -maxdepth 2 2>/dev/null > "$dir_list"
+    find "$RECIPES_DIR" -type d -mindepth 1 -maxdepth 3 2>/dev/null > "$dir_list"
     while read -r r; do
         pkg_name=$(basename "$r")
         # Skip if already found as .stars file
@@ -8526,8 +8563,12 @@ get_file_owner() {
         return 1
     fi
 
-    # Fallback: slow path (warns to rebuild index)
-    warn "File index missing - using slow lookup. Run: astral --rebuild-index"
+    # Fallback: slow path (warns to rebuild index — once per session only)
+    _warn_flag="${TMPDIR:-/tmp}/.astral-fileidx-warned-$$"
+    if [ ! -f "$_warn_flag" ]; then
+        warn "File index missing - using slow lookup. Run: astral --rebuild-index"
+        touch "$_warn_flag" 2>/dev/null || true
+    fi
 
     for pkgdir in "$DB_DIR"/*/* "$DB_DIR"/*; do
         [ -d "$pkgdir" ] || continue
@@ -8601,7 +8642,7 @@ upgrade_all() {
     # Create holds file if it doesn't exist
     touch "$HOLDS_FILE" 2>/dev/null || true
 
-    # §8.1 — Avoid pipe subshell: count vars inside a pipe-fed while-loop are
+    # Avoid pipe subshell: count vars inside a pipe-fed while-loop are
     # invisible after the loop on dash/ash. Write pkg list to a temp file first.
     _upgrade_tmpf="$TMPDIR/astral-upgrade-list-$$"
     find "$DB_DIR" -type f -name "version" -maxdepth 3 2>/dev/null |
@@ -8880,7 +8921,7 @@ remove_pkg_only() {
 
     rpath=$(recipe_path "$(basename "$pkg_path")") 2>/dev/null || rpath=""
 
-    # §9 — Correct hook order: pre_remove → remove files → remove DB → post_remove
+    # Correct hook order: pre_remove → remove files → remove DB → post_remove
     # post_remove must only run AFTER files and DB entry are gone.
     # Previously post_remove ran before file removal, which was wrong.
 
@@ -8988,7 +9029,7 @@ clean_cache() {
     info "Starting recipe cache cleanup in $RECIPES_DIR..."
 
     # Clean up directory-based recipes (legacy format)
-    find "$RECIPES_DIR" -type d -mindepth 2 -maxdepth 2 2>/dev/null | while IFS= read -r recipe_dir; do
+    find "$RECIPES_DIR" -type d -mindepth 3 -maxdepth 3 2>/dev/null | while IFS= read -r recipe_dir; do
         pkg_name=$(basename "$recipe_dir")
         if is_pkg_installed "$pkg_name"; then
             info "Recipe for '$pkg_name' is installed. Skipping."
@@ -11564,7 +11605,7 @@ case "$1" in
     if [ "$JSON_OUTPUT" -eq 1 ]; then
         search_pkg_json "$2"
     else
-        # §10 — Use enhanced search (fuzzy match + installed status + category filter)
+        # Use enhanced search (fuzzy match + installed status + category filter)
         astral_search_enhanced "$2"
         search_pkg "$2"  # also run legacy local recipe search
     fi
