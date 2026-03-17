@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v5.3.1.6 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
+# Astral v5.3.1.7 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
 # SOURCE-ONLY
-# V: 5 - Major . 3 - Minor . 1 - Patches . 6 - hotfixes
+# V: 5 - Major . 3 - Minor . 1 - Patches . 7 - hotfixes
 
-version="5.3.1.6 Main"
+version="5.3.1.7 Main"
 ASTRAL_PRODUCTION_DATE="2025-11-26"
 now_seconds=$(date +%s)
 prod_seconds=$(date -d "$ASTRAL_PRODUCTION_DATE" +%s)
@@ -8116,9 +8116,8 @@ _list_installed_json() {
     find "$DB_DIR" -type f -name "version" -maxdepth 5 2>/dev/null |
     sed "s|^${DB_DIR}/||" | sed 's|/version$||' |
     while IFS= read -r pkg_path; do
-        # Extract package name (second-to-last component of path)
-        pkg_dir=$(dirname "$pkg_path")
-        pkg_name=$(basename "$pkg_dir")
+        # Extract package name (e.g., app-misc/n/neofetch/neofetch-7.1.0-any -> neofetch)
+        pkg_name=$(printf '%s' "$pkg_path" | sed 's|.*/||; s/-[0-9].*//')
         # Extract category (first component of path)
         pkg_category=$(printf '%s' "$pkg_path" | cut -d'/' -f1)
         [ "$pkg_category" = "$pkg_path" ] && pkg_category=""
@@ -9097,9 +9096,8 @@ list_installed() {
         current=0
         printf '%s\n' "$pkgs" | while IFS= read -r pkg_path; do
             current=$((current + 1))
-            # Extract just the package name (second-to-last component of the path)
-            pkg_dir=$(dirname "$pkg_path")
-            pkg_name=$(basename "$pkg_dir")
+            # Extract just the package name from the path (e.g., app-misc/n/neofetch/neofetch-7.1.0-any -> neofetch)
+            pkg_name=$(printf '%s' "$pkg_path" | sed 's|.*/||; s/-[0-9].*//')
             pkg_ver=$(cat "$DB_DIR/$pkg_path/version" 2>/dev/null || echo "unknown")
 
             # Determine if last package in category
