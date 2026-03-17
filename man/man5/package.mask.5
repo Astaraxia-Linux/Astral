@@ -1,0 +1,68 @@
+.TH PACKAGE.MASK 5 "2025-11-26" "Astral 5.3.1.6" "Astral Package Manager"
+.SH NAME
+package.mask \- Astral package masking file
+.SH SYNOPSIS
+\fB/etc/astral/package.mask\fR
+.SH DESCRIPTION
+The \fBpackage.mask\fR file is used to mask (block) specific package versions from being installed. This is useful for blocking broken or unstable packages.
+.SH FILE FORMAT
+Each line contains a package specification:
+
+.nf
+# Comment
+package_name
+package_name >= version
+package_name <= version
+package_name = version
+package_name > version
+package_name < version
+.fi
+
+.SH OPERATORS
+.TP
+\fB>\fR
+Greater than
+.TP
+\fB>=\fR
+Greater than or equal to
+.TP
+\fB=\fR
+Equal to
+.TP
+\fB<=\fR
+Less than or equal to
+.TP
+\fB<\fR
+Less than
+
+.SH EXAMPLE
+.nf
+# Mask specific versions
+firefox >= 120.0
+broken-package-1.2.3
+
+# Mask all versions of a package
+broken-library
+
+# Mask version ranges
+python < 3.11
+gcc > 13.0.0
+.fi
+
+.SH COMMANDS
+Use \fBastral --mask\fR and \fBastral --unmask\fR to add/remove entries programmatically.
+
+.SH FILES
+.TP
+\fB/etc/astral/package.mask\fR
+Masked packages file
+.TP
+\fB/etc/astral/package.provided\fR
+Provided packages file
+
+.SH SEE ALSO
+.BR astral (1),
+.BR astral.stars (5)
+.SH AUTHOR
+Maintained under N3ZT POSSIBLE G3N
+Made by One Maniac™

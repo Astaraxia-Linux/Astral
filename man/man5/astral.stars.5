@@ -1,0 +1,83 @@
+.TH ASTRAL.STARS 5 "2025-11-26" "Astral 5.3.1.6" "Astral Package Manager"
+.SH NAME
+astral.stars \- Astral advanced configuration file
+.SH SYNOPSIS
+\fB/etc/astral/astral.stars\fR
+.SH DESCRIPTION
+\fBastral.stars\fR is an advanced configuration file for the Astral package manager. It uses the .stars format to define complex configuration options.
+.SH FILE FORMAT
+The file uses the .stars format:
+
+.nf
+# Boolean values
+option = yes
+option = no
+
+# String values
+option = "value"
+
+# Comments start with #
+.fi
+
+.SH OPTIONS
+.SS General
+.TP
+\fBUSAGE_MODE\fR
+Controls help output length: \fBcompact\fR or \fBfull\fR (default: full)
+
+.SS Debug
+.TP
+\fBdebug\fR
+Enable debug mode: \fByes\fR or \fBno\fR (default: no)
+
+.SS Astral-env
+.TP
+\fBastral_env\fR
+Enable astral-env support: \fBenabled\fR or \fBdisabled\fR (default: disabled)
+
+.SS Safety Features
+Individual safety features can be toggled:
+
+.nf
+safety = {
+    script_check = yes
+    collision_detect = yes
+    checksum_verify = yes
+};
+.fi
+
+.SH EXAMPLE
+.nf
+# Usage mode
+USAGE_MODE = "full"
+
+# Debug mode
+debug = no
+
+# Astral-env support
+astral_env = "disabled"
+
+# Safety features
+safety = {
+    script_check = yes
+    collision_detect = yes
+    ghost_detect = yes
+    checksum_verify = yes
+    mask_check = yes
+};
+.fi
+
+.SH FILES
+.TP
+\fB/etc/astral/make.conf\fR
+Main configuration file
+.TP
+\fB/etc/astral/package.mask\fR
+Masked packages
+
+.SH SEE ALSO
+.BR astral (1),
+.BR make.conf (5)
+.SH AUTHOR
+Maintained under N3ZT POSSIBLE G3N
+Made by One Maniac™

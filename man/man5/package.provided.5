@@ -1,0 +1,44 @@
+.TH PACKAGE.PROVIDED 5 "2025-11-26" "Astral 5.3.1.6" "Astral Package Manager"
+.SH NAME
+package.provided \- Astral provided packages file
+.SH SYNOPSIS
+\fB/etc/astral/package.provided\fR
+.SH DESCRIPTION
+The \fBpackage.provided\fR file declares packages that are provided by the system (host) and should not be installed by Astral. This is useful for packages that are part of the base system or installed manually.
+.SH FILE FORMAT
+Each line contains a package name:
+
+.nf
+# Comment
+package_name
+package_name version
+.fi
+
+.SH EXAMPLE
+.nf
+# System packages provided by host
+glibc
+bash
+coreutils
+
+# Specific versions
+linux-6.1.0
+.fi
+
+.SH USAGE
+When Astral checks dependencies, it will skip any package listed in \fBpackage.provided\fR if it finds the package on the host system.
+
+.SH FILES
+.TP
+\fB/etc/astral/package.provided\fR
+Provided packages file
+.TP
+\fB/etc/astral/package.mask\fR
+Masked packages file
+
+.SH SEE ALSO
+.BR astral (1),
+.BR package.mask (5)
+.SH AUTHOR
+Maintained under N3ZT POSSIBLE G3N
+Made by One Maniac™

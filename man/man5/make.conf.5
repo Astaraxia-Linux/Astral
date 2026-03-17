@@ -1,0 +1,86 @@
+.TH MAKE.CONF 5 "2025-11-26" "Astral 5.3.1.6" "Astral Package Manager"
+.SH NAME
+make.conf \- Astral build configuration file
+.SH SYNOPSIS
+\fB/etc/astral/make.conf\fR
+.SH DESCRIPTION
+\fBmake.conf\fR is the main configuration file for the Astral package manager. It controls build flags, compiler options, and various features.
+
+This file is sourced by \fBastral\fR at startup and affects all package builds.
+.SH FILE FORMAT
+The file uses simple shell variable assignments:
+
+.nf
+# Comments start with #
+VARIABLE="value"
+VARIABLE=$OTHER_VARIABLE
+.fi
+
+.SH VARIABLES
+.SS Build Flags
+.TP
+\fBCFLAGS\fR
+C compiler flags (default: \fB-O2 -pipe\fR)
+.TP
+\fBCXXFLAGS\fR
+C++ compiler flags (default: same as CFLAGS)
+.TP
+\fBLDFLAGS\fR
+Linker flags
+.TP
+\fBMAKEFLAGS\fR
+Make flags (default: \fB-j$(nproc)\fR)
+
+.SS Features
+.TP
+\fBFEATURES\fR
+Space-separated list of features:
+\fBccache\fR, \fBparallel-make\fR, \fBstrip\fR
+
+.TP
+\fBCCACHE_ENABLED\fR
+Enable ccache support (\fByes\fR or \fBno\fR)
+
+.SS Directories
+.TP
+\fBSTORE_DIR\fR
+Content-addressed package store (default: \fB/astral/store\fR)
+.TP
+\fBRECIPES_DIR\fR
+Local recipes directory (default: \fB/usr/src/astral/recipes\fR)
+.TP
+\fBCACHE_SRC\fR
+Source cache directory (default: \fB/var/cache/astral/src\fR)
+.TP
+\fBDB_DIR\fR
+Database directory (default: \fB/var/lib/astral/db\fR)
+
+.SH EXAMPLE
+.nf
+# Build flags
+CFLAGS="-O2 -pipe -march=native"
+CXXFLAGS="$CFLAGS"
+LDFLAGS=""
+MAKEFLAGS="-j$(nproc)"
+
+# Enable ccache
+CCACHE_ENABLED="yes"
+
+# Features
+FEATURES="ccache parallel-make strip"
+.fi
+
+.SH FILES
+.TP
+\fB/etc/astral/make.conf\fR
+Main configuration file
+.TP
+\fB/etc/astral/astral.stars\fR
+Advanced configuration
+
+.SH SEE ALSO
+.BR astral (1),
+.BR astral.stars (5)
+.SH AUTHOR
+Maintained under N3ZT POSSIBLE G3N
+Made by One Maniac™
