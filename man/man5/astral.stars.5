@@ -48,14 +48,13 @@ safety = {
 
 .SH EXAMPLE
 .nf
-# Usage mode
-USAGE_MODE = "full"
-
-# Debug mode
-debug = no
-
-# Astral-env support
-astral_env = "disabled"
+$AST.core: {
+    MAKE_CONF = "/etc/astral/make.conf"
+    INSTALL_ROOT = "/"
+    USAGE_MODE = "full"
+    astral-env          = "disabled"
+    astral-env-system   = "disabled"
+};
 
 # Safety features
 safety = {
@@ -79,5 +78,7 @@ Masked packages
 .BR astral (1),
 .BR make.conf (5)
 .SH AUTHOR
+.nf
 Maintained under N3ZT POSSIBLE G3N
 Made by One Maniac™
+.fi
