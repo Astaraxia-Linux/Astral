@@ -1,0 +1,112 @@
+.TH ASTRAL-RECIPEGEN 1 "2026-03-17" "Astral Recipe Generator 3.0.0" "Astral Package Manager"
+.SH NAME
+astral-recipegen \- Recipe generator for Astral package manager
+.SH SYNOPSIS
+\fBastral-recipegen\fR [\fIoptions\fR] \fIcommand\fR [\fIarguments\fR]
+.SH DESCRIPTION
+astral-recipegen is a multi-format recipe generator for the Astral package manager. It supports generating, converting, and validating Astral package recipes in v1, v2, and v3 formats. It can also convert from other package managers' formats.
+.SH VERSION
+Astral Recipe Generator v3.0.0
+.SH COMMANDS
+.SS Generation Commands
+.TP
+\fBinteractive\fR [\fIv1\fR|\fIv2\fR|\fIv3\fR]
+Launch interactive recipe wizard. Prompts for package details and generates a complete recipe file.
+.TP
+\fBauto\fR \fIname\fR \fIurl\fR|\fIdir\fR
+Auto-detect build system and generate recipe. Accepts a package name and either a URL to download or a local directory.
+.TP
+\fBtemplate\fR \fItype\fR [\fIver\fR]
+Generate a build-system template. Available types: autotools, cmake, meson, python, cargo, go, npm, make.
+.TP
+\fBgit\fR \fIname\fR \fIurl\fR [\fIbranch\fR]
+Generate recipe from a Git repository.
+.SS Conversion Commands
+.TP
+\fBfrom-pkgbuild\fR \fIPKGBUILD\fR
+Convert Arch Linux PKGBUILD to .stars format.
+.TP
+\fBfrom-ebuild\fR \fIpkg.ebuild\fR
+Convert Gentoo ebuild to .stars format.
+.TP
+\fBfrom-spec\fR \fIpkg.spec\fR
+Convert RPM .spec file to .stars format.
+.TP
+\fBfrom-cargo\fR \fICargo.toml\fR
+Convert Rust Cargo.toml to .stars format.
+.TP
+\fBfrom-npm\fR \fIpackage.json\fR
+Convert Node.js package.json to .stars format.
+.TP
+\fBdir-to-stars\fR \fIdir\fR
+Convert directory-style recipe to .stars format.
+.TP
+\fBconvert\fR|\fBmigrate\fR \fIrecipe\fR [\fIver\fR]
+Convert recipe between versions (v1, v2, v3).
+.TP
+\fBbatch-convert\fR \fIdir\fR [\fIver\fR]
+Convert all recipes in a directory to specified version.
+.SS Utility Commands
+.TP
+\fBchecksum\fR \fIurl\fR [\fIalgo\fR]
+Download URL and print checksum. Supported algorithms: sha256, sha512, md5 (default: sha256).
+.TP
+\fBlint\fR \fIrecipe.stars\fR
+Validate recipe syntax.
+.TP
+\fBsearch\fR \fIterm\fR
+Search recipes in RECIPES_DIR.
+.SH OPTIONS
+.TP
+\fB-o\fR, \fB--output\fR \fIfile\fR
+Output file (default: auto-generated based on package name).
+.TP
+\fB-d\fR, \fB--dir\fR \fIdir\fR
+Recipe directory (default: /usr/src/astral/recipes).
+.TP
+\fB-f\fR, \fB--format\fR \fIver\fR
+Output format: v1, v2, or v3 (default: v3).
+.TP
+\fB-v\fR, \fB--version\fR
+Show version information.
+.TP
+\fB-h\fR, \fB--help\fR
+Show this help message.
+.SH ENVIRONMENT
+.TP
+\fBRECIPES_DIR\fR
+Recipe directory (default: /usr/src/astral/recipes).
+.TP
+\fBTMPDIR\fR
+Temporary directory (default: /tmp).
+.SH RECIPE FORMATS
+.SS v1 Format (Deprecated)
+Original format using @SECTION markers.
+.SS v2 Format (Legacy)
+Uses $PKG.* declarations but doesn't separate build/runtime dependencies.
+.SS v3 Format (Recommended)
+Separates build-time (BDepends) and runtime (RDepends) dependencies for cleaner systems.
+.SH EXAMPLES
+.SS Generate an interactive recipe
+\fBastral-recipegen interactive v3\fR
+.SS Auto-generate from URL
+\fBastral-recipegen auto nano https://nano-editor.org/dist/v8/nano-8.2.tar.xz\fR
+.SS Create a CMake template
+\fBastral-recipegen template cmake v3 -o mypackage.stars\fR
+.SS Convert from PKGBUILD
+\fBastral-recipegen from-pkgbuild /path/to/PKGBUILD\fR
+.SS Migrate existing recipe to v3
+\fBAstrol-recipegen migrate old-recipe.stars v3\fR
+.SS Batch convert directory
+\fBastral-recipegen batch-convert /usr/src/astral/recipes/app-editors\fR
+.SS Generate checksum
+\fBastral-recipegen checksum https://example.com/pkg-1.0.tar.gz sha256\fR
+.SS Validate recipe
+\fBastral-recipegen lint /usr/src/astral/recipes/app-misc/neofetch/neofetch.stars\fR
+.SH SEE ALSO
+.BR astral (1),
+.BR astral-sync (1),
+.BR astral (5)
+.SH AUTHOR
+Maintained under N3ZT POSSIBLE G3N
+Made by One Maniac™

@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v5.3.1.5 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
+# Astral v5.3.1.6 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
 # SOURCE-ONLY
-# V: 5 - Major . 3 - Minor . 1 - Patches . 5 - hotfixes
+# V: 5 - Major . 3 - Minor . 1 - Patches . 6 - hotfixes
 
-version="5.3.1.5 Main"
+version="5.3.1.6 Main"
 ASTRAL_PRODUCTION_DATE="2025-11-26"
 now_seconds=$(date +%s)
 prod_seconds=$(date -d "$ASTRAL_PRODUCTION_DATE" +%s)
@@ -8116,9 +8116,12 @@ _list_installed_json() {
     find "$DB_DIR" -type f -name "version" -maxdepth 5 2>/dev/null |
     sed "s|^${DB_DIR}/||" | sed 's|/version$||' |
     while IFS= read -r pkg_path; do
-        pkg_name=$(basename "$pkg_path")
-        pkg_category=$(dirname "$pkg_path")
-        [ "$pkg_category" = "." ] && pkg_category=""
+        # Extract package name (second-to-last component of path)
+        pkg_dir=$(dirname "$pkg_path")
+        pkg_name=$(basename "$pkg_dir")
+        # Extract category (first component of path)
+        pkg_category=$(printf '%s' "$pkg_path" | cut -d'/' -f1)
+        [ "$pkg_category" = "$pkg_path" ] && pkg_category=""
         pkg_ver=$(_json_escape "$(cat "$DB_DIR/$pkg_path/version" 2>/dev/null || printf 'unknown')")
         if [ "$first" -eq 1 ]; then first=0; else printf ',\n'; fi
         printf '    {"name": "%s", "category": "%s", "version": "%s"}' \
@@ -8315,7 +8318,7 @@ search_pkg() {
             # Extract version from filename
             ver=$(printf '%s\n' "$stars_basename" | sed 's/^[^0-9]*//; s/-.*//')
             [ -z "$ver" ] && ver="unknown"
-            printf "L: %-20s (v%s) [.stars %s]\n" "$pkg_name" "$ver" "$category"
+            printf "${CYAN}└──${NC} %-20s ${YELLOW}v%s${NC} [.stars %s]\n" "$pkg_name" "$ver" "$category"
             stars_found="$stars_found $pkg_name"
             found_local=1
         fi
@@ -8335,7 +8338,7 @@ search_pkg() {
         if printf '%s\n' "$pkg_name" | grep -iq "$query"; then
             ver="unknown"
             [ -f "$r/version" ] && ver=$(cat "$r/version")
-            printf "L: %-20s (v%s) [dir %s]\n" "$pkg_name" "$ver" "$(basename "$(dirname "$r")")"
+            printf "${CYAN}└──${NC} %-20s ${YELLOW}v%s${NC} [dir %s]\n" "$pkg_name" "$ver" "$(basename "$(dirname "$r")")"
             found_local=1
         fi
     done < "$dir_list"
@@ -8353,7 +8356,7 @@ search_pkg() {
             pkg_ver=$(printf '%s' "$line" | awk '{print $2}')
             repo_label=$(basename "$idx" | sed 's/index_//')
             if printf '%s\n' "$pkg_name" | grep -iq "$query"; then
-                printf "R(%s): %-20s (v%s)\n" "$repo_label" "$pkg_name" "$pkg_ver"
+                printf "${GREEN}R(${repo_label}):${NC} %-20s ${YELLOW}v%s${NC}\n" "$pkg_name" "$pkg_ver"
             fi
         done < "$idx"
     done
@@ -9094,15 +9097,16 @@ list_installed() {
         current=0
         printf '%s\n' "$pkgs" | while IFS= read -r pkg_path; do
             current=$((current + 1))
-            # Show full category/pkg format instead of just package name
-            pkg_full="$pkg_path"
+            # Extract just the package name (second-to-last component of the path)
+            pkg_dir=$(dirname "$pkg_path")
+            pkg_name=$(basename "$pkg_dir")
             pkg_ver=$(cat "$DB_DIR/$pkg_path/version" 2>/dev/null || echo "unknown")
 
             # Determine if last package in category
             if [ $current -eq $pkg_count ]; then
-                printf "${GREEN}└──${NC} %-40s ${YELLOW}v%s${NC}\n" "$pkg_full" "$pkg_ver"
+                printf "${GREEN}└──${NC} %-40s ${YELLOW}v%s${NC}\n" "$pkg_name" "$pkg_ver"
             else
-                printf "${GREEN}├──${NC} %-40s ${YELLOW}v%s${NC}\n" "$pkg_full" "$pkg_ver"
+                printf "${GREEN}├──${NC} %-40s ${YELLOW}v%s${NC}\n" "$pkg_name" "$pkg_ver"
             fi
         done
         printf "\n"
@@ -12109,4 +12113,5 @@ start|stop|restart|enable|disable|status)
 
 esac
 
+# Call this in main initialization
 export_astral_stats &  # Run in background

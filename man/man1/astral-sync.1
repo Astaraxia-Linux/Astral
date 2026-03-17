@@ -1,0 +1,133 @@
+.TH ASTRAL-SYNC 1 "2026-03-17" "Astral Sync 1.0.0" "Astral Package Manager"
+.SH NAME
+astral-sync \- Index generator and repository sync tool for AOHARU/ASURA
+.SH SYNOPSIS
+\fBastral-sync\fR \fIcommand\fR [\fIoptions\fR]
+.SH DESCRIPTION
+astral-sync is an index generator and repository sync tool for the Astral package manager. It scans recipe directories, builds astral.index files, optionally signs them with GPG, and can commit and push to GitHub repositories.
+.SH VERSION
+Astral Sync v1.0.0
+.SH COMMANDS
+.SS Index Commands
+.TP
+\fBgenerate\fR
+Scan recipes and write astral.index file.
+.TP
+\fBsign\fR [\fB--key\fR \fIid\fR]
+Sign astral.index with GPG.
+.TP
+\fBverify\fR
+Verify astral.index.sig signature.
+.TP
+\fBpush\fR
+Commit and push index to git repository.
+.TP
+\fBsync\fR [\fB--key\fR \fIid\fR]
+Generate + sign + push in one step.
+.SS Inspection Commands
+.TP
+\fBstatus\fR
+Show index stats, recipe counts, and checksum state.
+.TP
+\fBlist\fR [\fIcat\fR]
+List indexed packages, optionally filtered by category.
+.TP
+\fBdiff\fR
+Show packages added or removed since last index.
+.SS Maintenance Commands
+.TP
+\fBchecksum\fR
+Verify source checksums (skips already-verified packages).
+.TP
+\fBchecksum\fR \fB--fix\fR
+Automatically replace wrong checksums in .stars files.
+.TP
+\fBchecksum-reset\fR
+Clear checksum state, forcing full re-verify on next run.
+.TP
+\fBempty-checksums\fR
+Add checksums to recipes with empty or TODO blocks.
+.TP
+\fBmigrate\fR
+Migrate flat recipe tree to sharded layout.
+.TP
+\fBmigrate-organize\fR
+Auto-organize recipes into category/shard/pkg/ structure.
+.SH OPTIONS
+.TP
+\fB-r\fR, \fB--recipes\fR \fIdir\fR
+Recipes directory (default: ./recipes).
+.TP
+\fB-o\fR, \fB--output\fR \fIdir\fR
+Output directory for index (default: .).
+.TP
+\fB-k\fR, \fB--key\fR \fIid\fR
+GPG key ID for signing.
+.TP
+\fB-p\fR, \fB--push\fR
+Auto-push after generating (same as sync).
+.TP
+\fB-f\fR, \fB--fix\fR
+Automatically fix wrong checksums in .stars files.
+.TP
+\fB-n\fR, \fB--dry-run\fR
+Show what would happen, make no changes.
+.TP
+\fB-v\fR, \fB--verbose\fR
+Verbose output.
+.TP
+\fB-V\fR, \fB--version\fR
+Show version information.
+.SH ENVIRONMENT
+.TP
+\fBRECIPES_DIR\fR
+Recipes directory (default: ./recipes).
+.TP
+\fBOUTPUT_DIR\fR
+Output directory for index (default: .).
+.TP
+\fBGPG_KEY\fR
+GPG key ID.
+.TP
+\fBAUTO_PUSH\fR
+Set to 1 to auto-push after generate.
+.TP
+\fBFIX_CHECKSUMS\fR
+Set to 1 to auto-fix wrong checksums.
+.TP
+\fBDRY_RUN\fR
+Set to 1 for dry run mode.
+.SH EXAMPLES
+.SS Show index status
+\fBastral-sync status\fR
+.SS Generate index
+\fBastral-sync generate\fR
+.SS Full sync with GPG signing
+\fBastral-sync sync --key A1B2C3D4\fR
+.SS List packages in category
+\fBastral-sync list app-editors\fR
+.SS Show changes since last index
+\fBastral-sync diff\fR
+.SS Fix checksums automatically
+\fBastral-sync checksum --fix\fR
+.SS Migrate recipe structure
+\fBastral-sync migrate\fR
+.SS Dry run of generate
+\fBDRY_RUN=1 astral-sync generate\fR
+.SH FILES
+.TP
+\fBastrol.index\fR
+Generated package index file.
+.TP
+\fBastrol.index.sig\fR
+GPG signature for index.
+.TP
+\fB.astral-checksum-state\fR
+Checksum verification state file.
+.SH SEE ALSO
+.BR astral (1),
+.BR astral-recipegen (1),
+.BR astral (5)
+.SH AUTHOR
+Maintained under N3ZT POSSIBLE G3N
+Made by One Maniac™

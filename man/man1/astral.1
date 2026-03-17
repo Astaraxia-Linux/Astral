@@ -1,0 +1,379 @@
+.TH ASTRAL 1 "2025-11-26" "Astral 5.3.1.6" "Astral Package Manager"
+.SH NAME
+astral \- minimal POSIX package manager for Astaraxia
+.SH SYNOPSIS
+\fBastral\fR [\fIglobal options\fR] \fIcommand\fR [\fIarguments\fR]
+.SH DESCRIPTION
+Astral is a minimal POSIX-compliant package manager designed for Astaraxia Linux. It runs on any system with \fB/bin/sh\fR, from servers to embedded devices.
+.SH VERSION
+Astral v5.3.1.6 Main (2025-11-26)
+.SH COMMANDS
+.SS Package Management
+.TP
+\fB-S\fR, \fB--Sync\fR \fIpkg\fR
+Install or upgrade package from AOHARU repository
+.TP
+\fB-SA\fR, \fB--Sync-Asura\fR \fIpkg\fR
+Install package from ASURA community overlay
+.TP
+\fB-C\fR, \fB--Compile\fR \fIpkg\fR
+Build package from local recipe
+.TP
+\fB-R\fR, \fB--Remove\fR \fIpkg\fR
+Remove installed package
+.TP
+\fB-r\fR, \fB--RemoveDep\fR \fIpkg\fR
+Remove package and orphaned dependencies
+.TP
+\fB--autoremove\fR
+Remove all orphaned packages
+.TP
+\fB--resume\fR \fIpkg\fR
+Resume interrupted build
+.TP
+\fB--parallel-build\fR \fIpkgs\fR
+Build multiple packages in parallel
+.TP
+\fB--parallel-remove\fR \fIpkgs\fR
+Remove multiple packages in parallel
+.SS Query & Information
+.TP
+\fB-s\fR, \fB--search\fR \fIpkg\fR
+Search for packages in repositories
+.TP
+\fB-I\fR, \fB--info\fR \fIpkg\fR
+Show detailed package information
+.TP
+\fB--inspect\fR, \fB-Ins\fR \fIpkg\fR
+Inspect raw recipe contents
+.TP
+\fB-ll\fR, \fB--list-installed\fR
+List all installed packages
+.TP
+\fB-D\fR, \fB--Deps\fR \fIpkg\fR
+Show dependency tree for package
+.TP
+\fB-Dc\fR, \fB--DepCheck\fR
+Check for broken dependencies
+.TP
+\fB--preview\fR \fIpkg\fR
+Preview installation (packages + dependencies)
+.TP
+\fB-w\fR, \fB--why\fR \fIpkg\fR
+Show why package is installed
+.TP
+\fB-W\fR, \fB--world\fR
+List explicitly installed packages
+.TP
+\fB--host-check\fR \fIpkg\fR
+Test if package is provided by host system
+.TP
+\fB--host-deps\fR
+Show all host dependencies
+.SS Package Holds
+.TP
+\fB--hold\fR \fIpkg\fR
+Prevent package from being upgraded
+.TP
+\fB--unhold\fR \fIpkg\fR
+Remove hold from package
+.TP
+\fB--list-held\fR
+List all held packages
+.SS System Operations
+.TP
+\fB--Upgrade-All\fR
+Upgrade all installed packages
+.TP
+\fB-u\fR, \fB--Update\fR [\fIrepo\fR]
+Update repository index (aoharu, asura, or both)
+.TP
+\fB-Cc\fR, \fB--Clean-Cache\fR
+Clean uninstalled package cache
+.TP
+\fB-RI\fR, \fB--rebuild-index\fR
+Rebuild file ownership index
+.TP
+\fB--chroot\fR \fIdir\fR
+Chroot into specified directory
+.SS Safety & Security
+.TP
+\fB--on\fR \fIfeature\fR
+Enable safety feature (script-check, collision, ghost, checksum, mask, signature, audit, secure-download, file-integrity, merkle, cert-pin)
+.TP
+\fB--off\fR \fIfeature\fR
+Disable safety feature
+.TP
+\fB--safety-status\fR
+Show status of all safety features
+.TP
+\fB--import-key\fR \fIurl\fR
+Import GPG repository key
+.TP
+\fB--verify-sig\fR \fIfile\fR
+Verify GPG signature of file
+.SS Advanced GPG Security
+.TP
+\fB--gpg-gen-key\fR \fIn\fR
+Generate new GPG signing key
+.TP
+\fB--gpg-list-keys\fR
+List managed GPG keys
+.TP
+\fB--gpg-set-trust\fR \fIid\fR \fIlevel\fR
+Set key trust level (unknown|never|marginal|full|ultimate)
+.TP
+\fB--gpg-revoke\fR \fIkey\fR
+Generate revocation certificate
+.TP
+\fB--gpg-rotate\fR \fIold\fR \fInew\fR
+Rotate signing key
+.TP
+\fB--gpg-wot\fR
+Build Web of Trust trust graph
+.SS Certificate Pinning
+.TP
+\fB--pin-cert\fR \fIhost\fR[:\fIport\fR]
+Pin HTTPS certificate
+.TP
+\fB--verify-cert\fR \fIhost\fR
+Verify pinned certificate
+.SS File Integrity (FIM)
+.TP
+\fB--fim-record\fR \fIfile\fR
+Record file hash for integrity monitoring
+.TP
+\fB--fim-check\fR \fIfile\fR
+Check file integrity
+.TP
+\fB--fim-scan\fR
+Scan all tracked files
+.SS Audit Trail
+.TP
+\fB--audit-query\fR
+Query audit log
+.TP
+\fB--audit-verify\fR \fIrecipe\fR
+Verify recipe audit trail
+.SS Lock & Transactions
+.TP
+\fB--lock-info\fR
+Show current lock status
+.TP
+\fB--lock-test\fR
+Test lock system
+.TP
+\fB--transactions\fR [\fIstatus\fR]
+List transactions (all|active|committed)
+.TP
+\fB--rollback\fR \fIid\fR
+Rollback a transaction
+.TP
+\fB--recover\fR
+Recover incomplete transactions
+.SS Testing & Diagnostics
+.TP
+\fB--test\fR [\fImode\fR]
+Run test suite (all|quick)
+.TP
+\fB--validate\fR \fIpkg\fR
+Validate recipe file
+.TP
+\fB--verify-integrity\fR \fIpkg\fR
+Verify installed package file integrity
+.TP
+\fB--verify-reproducible\fR \fIpkg\fR
+Verify package builds reproducibly
+.TP
+\fB--graph-deps\fR \fIpkg\fR
+Generate .dot dependency graph
+.TP
+\fB--cleanup-temp\fR
+Clean temporary build directories
+.TP
+\fB--count\fR [\fIrepo\fR]
+Show package counts (aoharu|asura|local|installed|all)
+.TP
+\fB--use\fR [\fIpkg\fR]
+Show USE flags (global or for specific package)
+.SS Service Management
+.TP
+\fBstart\fR \fIservice\fR
+Start service (auto-detects init system)
+.TP
+\fBstop\fR \fIservice\fR
+Stop service
+.TP
+\fBrestart\fR \fIservice\fR
+Restart service
+.TP
+\fBenable\fR \fIservice\fR
+Enable service at boot
+.TP
+\fBdisable\fR \fIservice\fR
+Disable service at boot
+.TP
+\fBstatus\fR \fIservice\fR
+Show service status
+.SS Advanced Features
+.TP
+\fB--ccache-stats\fR
+Show ccache statistics
+.TP
+\fB--ccache-clear\fR
+Clear ccache
+.TP
+\fB--list-virtuals\fR
+Show virtual package providers
+.TP
+\fB--mask\fR \fIpkg\fR [\fIop ver\fR]
+Mask package version
+.TP
+\fB--unmask\fR \fIpkg\fR
+Unmask package
+.TP
+\fB--config\fR
+Show current configuration
+.TP
+\fB-SE\fR, \fB--show-env\fR
+Show build environment
+.SS Maintenance
+.TP
+\fB-U\fR, \fB--self-update\fR [\fIbranch\fR]
+Update Astral itself (main|testing|bleeding)
+.TP
+\fB-V\fR, \fB--Version\fR
+Show version information
+.SS World Set Management
+.TP
+\fB--world-add\fR \fIpkg\fR
+Add package to world set
+.TP
+\fB--world-remove\fR \fIpkg\fR
+Remove package from world set
+.TP
+\fB--world-show\fR
+Show world set
+.TP
+\fB--world-sets\fR
+Show available sets (@system, @world)
+.TP
+\fB--world-depclean\fR
+World-aware dependency cleaning
+.TP
+\fB--calc-system\fR
+Calculate @system set
+.SS Configuration
+.TP
+\fB--astral-stars-create\fR
+Create default astral.stars config
+.TP
+\fB--astral-stars-edit\fR \fIfile\fR
+Edit config and reload
+.SH GLOBAL OPTIONS
+.TP
+\fB--dir\fR \fIDIR\fR
+Installation root (default: /)
+.TP
+\fB-f\fR, \fB--force\fR
+Force operation (bypass conflicts)
+.TP
+\fB-n\fR, \fB--dry-run\fR
+Preview without making changes
+.TP
+\fB-y\fR, \fB--yes\fR
+Auto-confirm installation (skip prompt)
+.TP
+\fB-q\fR, \fB--quiet\fR
+Suppress informational output
+.TP
+\fB-p\fR, \fB--pretend\fR
+Show what would be done, no changes made
+.TP
+\fB-v\fR, \fB--verbose\fR
+Enable verbose output
+.TP
+\fB--json\fR
+Output in JSON format (works with -s, -I, -ll)
+.TP
+\fB--check-version\fR
+Check if astral itself has an update
+.SH ENVIRONMENT
+.TP
+\fBASTRAL_DEBUG\fR
+Enable debug mode (set to 1)
+.TP
+\fBVERBOSE\fR
+Enable verbose output (set to 1)
+.TP
+\fBDEBUG_MODE\fR
+Enable debug logging
+.TP
+\fBSTORE_DIR\fR
+Content-addressed package store (default: /astral/store)
+.TP
+\fBRECIPES_DIR\fR
+Local recipes directory (default: /usr/src/astral/recipes)
+.TP
+\fBCACHE_SRC\fR
+Source cache directory (default: /var/cache/astral/src)
+.TP
+\fBDB_DIR\fR
+Database directory (default: /var/lib/astral/db)
+.TP
+\fBCFLAGS\fR, \fBCXXFLAGS\fR, \fBLDFLAGS\fR
+Build flags
+.TP
+\fBMAKEFLAGS\fR
+Make flags (default: -j\fInproc\fR)
+.SH FILES
+.TP
+\fB/etc/astral/make.conf\fR
+Main configuration file
+.TP
+\fB/etc/astral/astral.stars\fR
+Advanced configuration
+.TP
+\fB/etc/astral/package.mask\fR
+Masked packages
+.TP
+\fB/etc/astral/package.provide\fR
+Provided packages
+.TP
+\fB/var/lib/astral/db/\fR
+Package database
+.TP
+\fB/var/cache/astral/src/\fR
+Source cache
+.TP
+\fB/var/log/astral/\fR
+Log files
+.SH EXAMPLES
+.SS Install a package
+\fBastral -S neofetch\fR
+.SS Search for packages
+\fBastral -s neofetch\fR
+.SS List installed packages
+\fBastral -ll\fR
+.SS Upgrade all packages
+\fBastral --Upgrade-All\fR
+.SS Update repository index
+\fBastral -u\fR
+.SS Remove a package
+\fBastral -R neofetch\fR
+.SS Show package info
+\fBastral -I neofetch\fR
+.SS View dependency tree
+\fBastral -D neofetch\fR
+.SS Enable verbose output
+\fBastral -v -S neofetch\fR
+.SS Dry-run install
+\fBastral -n -S neofetch\fR
+.SH SEE ALSO
+.BR astral-stars (5),
+.BR make.conf (5)
+.SH AUTHOR
+Maintained under N3ZT POSSIBLE G3N
+Made by One Maniac™
+.SH BUGS
+Report bugs at: https://github.com/Astaraxia-Linux/Astral/issues

@@ -1,0 +1,556 @@
+#!/bin/sh
+# astral-setup - Installation and initialization script for Astral package manager
+# Version: 1.1.0
+# POSIX-compliant: works with any /bin/sh
+
+set -eu
+
+# Configuration
+PREFIX="${PREFIX:-/usr}"
+LOCAL_PREFIX="${LOCAL_PREFIX:-/usr/local}"
+BIN_DIR="${BIN_DIR:-${PREFIX}/bin}"
+LIB_DIR="${LIB_DIR:-${PREFIX}/lib}"
+MAN_DIR="${MAN_DIR:-${PREFIX}/share/man}"
+ETC_DIR="${ETC_DIR:-/etc}"
+VAR_DIR="${VAR_DIR:-/var}"
+SHARE_DIR="${SHARE_DIR:-${PREFIX}/share}"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+# Script directory (where this script is located)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Documentation directory (check both DOCS and README for compatibility)
+if [ -d "${SCRIPT_DIR}/DOCS" ]; then
+    DOCS_DIR="${SCRIPT_DIR}/DOCS"
+elif [ -d "${SCRIPT_DIR}/README" ]; then
+    DOCS_DIR="${SCRIPT_DIR}/README"
+else
+    DOCS_DIR=""
+fi
+
+# Man pages directory
+MAN_PAGES_DIR="${SCRIPT_DIR}/man"
+
+# Version
+VERSION="1.1.0"
+
+# Print functions
+info() {
+    printf "${BLUE}◆${NC} %s\n" "$*"
+}
+
+success() {
+    printf "${GREEN}✓${NC} %s\n" "$*"
+}
+
+warn() {
+    printf "${YELLOW}⚠${NC} %s\n" "$*"
+}
+
+error() {
+    printf "${RED}✗${NC} %s\n" "$*" >&2
+}
+
+header() {
+    printf "\n${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+    printf "${CYAN}  %s${NC}\n" "$*"
+    printf "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n\n"
+}
+
+# Show version
+show_version() {
+    printf "astral-setup v%s\n" "$VERSION"
+    printf "Astral Package Manager Setup Script\n"
+    exit 0
+}
+
+# Show usage
+usage() {
+    cat <<USAGE
+astral-setup v${VERSION} - Installation and initialization script for Astral
+
+Usage: astral-setup [options] [command]
+
+Commands:
+    install          Install Astral and all utilities
+    init             Initialize directory structure and configuration
+    uninstall        Remove installed files
+    completions      Install shell completions
+
+Options:
+    -p, --prefix <path>     Installation prefix (default: /usr)
+    -l, --local             Install to /usr/local instead of /usr
+    -b, --bin <dir>         Binaries directory (default: \$PREFIX/bin)
+    -m, --man <dir>         Man pages directory (default: \$PREFIX/share/man)
+    -e, --etc <dir>         Config directory (default: /etc)
+    -v, --verbose           Verbose output
+    -h, --help             Show this help
+    -V, --version          Show version
+
+Environment:
+    PREFIX         Installation prefix (default: /usr)
+    BIN_DIR        Binaries directory
+    MAN_DIR        Man pages directory
+    ETC_DIR        Config directory
+    FORCE          Force installation (skip prompts)
+
+Examples:
+    # Install to default locations (/usr)
+    sudo astral-setup install
+
+    # Install to /usr/local
+    sudo astral-setup install --local
+
+    # Install with custom prefix
+    sudo PREFIX=/opt/astral astral-setup install
+
+    # Initialize after installation
+    sudo astral-setup init
+
+    # Install shell completions
+    sudo astral-setup completions
+USAGE
+    exit 0
+}
+
+# Check if running as root for system-wide install
+check_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        error "This command requires root privileges."
+        error "Please run with sudo or as root."
+        exit 1
+    fi
+}
+
+# Create directories
+create_directories() {
+    info "Creating directory structure..."
+
+    dirs="
+        ${BIN_DIR}
+        ${LIB_DIR}/astral
+        ${MAN_DIR}/man1
+        ${MAN_DIR}/man2
+        ${MAN_DIR}/man3
+        ${MAN_DIR}/man4
+        ${MAN_DIR}/man5
+        ${MAN_DIR}/man6
+        ${MAN_DIR}/man7
+        ${MAN_DIR}/man8
+        ${MAN_DIR}/man9
+        ${ETC_DIR}/astral
+        ${VAR_DIR}/lib/astral
+        ${VAR_DIR}/cache/astral
+        ${VAR_DIR}/log/astral
+        ${VAR_DIR}/lock
+        /usr/src/astral/recipes
+        /usr/src/astral/horizon
+    "
+
+    for dir in $dirs; do
+        if [ ! -d "$dir" ]; then
+            mkdir -p "$dir"
+            success "Created: $dir"
+        else
+            info "Exists: $dir"
+        fi
+    done
+}
+
+# Install binaries
+install_binaries() {
+    header "Installing Astral"
+
+    # Install main astral script
+    info "Installing astral..."
+    cp "${SCRIPT_DIR}/astral" "${BIN_DIR}/astral"
+    chmod 755 "${BIN_DIR}/astral"
+    success "Installed: ${BIN_DIR}/astral"
+
+    # Install astral-recipegen if exists
+    if [ -f "${SCRIPT_DIR}/astral-recipegen" ]; then
+        info "Installing astral-recipegen..."
+        cp "${SCRIPT_DIR}/astral-recipegen" "${BIN_DIR}/astral-recipegen"
+        chmod 755 "${BIN_DIR}/astral-recipegen"
+        success "Installed: ${BIN_DIR}/astral-recipegen"
+    fi
+
+    # Install astral-sync if exists
+    if [ -f "${SCRIPT_DIR}/astral-sync" ]; then
+        info "Installing astral-sync..."
+        cp "${SCRIPT_DIR}/astral-sync" "${BIN_DIR}/astral-sync"
+        chmod 755 "${BIN_DIR}/astral-sync"
+        success "Installed: ${BIN_DIR}/astral-sync"
+    fi
+}
+
+# Determine man directory based on prefix
+get_man_dir() {
+    _prefix="$1"
+    _section="$2"
+
+    # Check if using custom man directory
+    if [ -n "${MAN_DIR:-}" ] && [ "$MAN_DIR" != "${PREFIX}/share/man" ]; then
+        printf '%s/man%s' "$MAN_DIR" "$_section"
+        return
+    fi
+
+    # Standard /usr/share/man or /usr/local/share/man
+    if [ "$_prefix" = "/usr" ]; then
+        printf '/usr/share/man/man%s' "$_section"
+    elif [ "$_prefix" = "/usr/local" ]; then
+        printf '/usr/local/share/man/man%s' "$_section"
+    else
+        printf '%s/share/man/man%s' "$_prefix" "$_section"
+    fi
+}
+
+# Install man pages (supports .1 through .9)
+install_manpages() {
+    header "Installing Man Pages"
+
+    # Check if gzip is available
+    GZIP_CMD=""
+    if command -v gzip >/dev/null 2>&1; then
+        GZIP_CMD="gzip"
+        info "gzip found - will compress man pages"
+    else
+        warn "gzip not found - installing uncompressed"
+    fi
+
+    # Find all man page files (*.1 through *.9)
+    found_man=0
+
+    for section in 1 2 3 4 5 6 7 8 9; do
+        # Look for man pages in man/ directory (new structure) or script directory (legacy)
+        for search_dir in "${MAN_PAGES_DIR}/man${section}" "${SCRIPT_DIR}"; do
+            for man_file in "${search_dir}"/*.${section}; do
+                # Skip if no matches (glob expands literally when no match in some shells)
+                [ -f "$man_file" ] || continue
+
+                # Get base name
+                man_basename="$(basename "$man_file")"
+
+                # Skip non-man files
+                case "$man_basename" in
+                    *.${section}) ;;
+                    *) continue ;;
+                esac
+
+                found_man=1
+
+                # Get target man directory for this section
+                target_man_dir="$(get_man_dir "$PREFIX" "$section")"
+
+                # Create directory if needed
+                if [ ! -d "$target_man_dir" ]; then
+                    mkdir -p "$target_man_dir"
+                fi
+
+                # Install man page
+                if [ -n "$GZIP_CMD" ]; then
+                    # Install compressed
+                    ${GZIP_CMD} -c "$man_file" > "${target_man_dir}/${man_basename}.gz"
+                    success "Installed: ${target_man_dir}/${man_basename}.gz"
+                else
+                    # Install uncompressed
+                    cp "$man_file" "${target_man_dir}/"
+                    success "Installed: ${target_man_dir}/${man_basename}"
+                fi
+            done
+        done
+    done
+
+    if [ "$found_man" -eq 0 ]; then
+        info "No man pages found in ${SCRIPT_DIR}"
+    fi
+
+    # Update man database if available
+    if command -v mandb >/dev/null 2>&1; then
+        info "Updating man database..."
+        mandb >/dev/null 2>&1 || true
+        success "Man database updated"
+    elif command -v makewhatis >/dev/null 2>&1; then
+        info "Updating man database..."
+        makewhatis "${MAN_DIR}" >/dev/null 2>&1 || true
+        success "Man database updated"
+    fi
+}
+
+# Uninstall man pages
+uninstall_manpages() {
+    header "Uninstalling Man Pages"
+
+    for section in 1 2 3 4 5 6 7 8 9; do
+        target_man_dir="$(get_man_dir "$PREFIX" "$section")"
+
+        # Find man pages matching astral* in this section
+        for man_file in "${target_man_dir}"/astral*.${section}*; do
+            [ -f "$man_file" ] || continue
+            rm -f "$man_file"
+            success "Removed: $man_file"
+        done
+    done
+}
+
+# Create default configuration
+create_config() {
+    header "Creating Configuration"
+
+    config_file="${ETC_DIR}/astral/make.conf"
+
+    if [ ! -f "$config_file" ]; then
+        info "Creating ${config_file}..."
+        cat > "$config_file" <<'EOF'
+# Astral make.conf - Build configuration
+# See: man astral for available options
+
+# Build flags
+CFLAGS="-O2 -pipe"
+CXXFLAGS="$CFLAGS"
+LDFLAGS=""
+MAKEFLAGS="-j$(nproc)"
+
+# Features
+# FEATURES="ccache parallel-make strip"
+
+# ccache support (disabled by default)
+# CCACHE_ENABLED="yes"
+
+# Use flags
+# USE_FLAGS=""
+EOF
+        success "Created: ${config_file}"
+    else
+        info "Exists: ${config_file}"
+    fi
+}
+
+# Create astral.stars config
+create_stars_config() {
+    stars_config="${ETC_DIR}/astral/astral.stars"
+
+    if [ ! -f "$stars_config" ]; then
+        info "Creating ${stars_config}..."
+        cat > "$stars_config" <<'EOF'
+# Astral advanced configuration
+# See: https://github.com/Astaraxia-Linux/Astral
+
+# Use mode: compact or full (controls help output length)
+# USAGE_MODE = "full"
+
+# Debug mode (set debug = yes to enable)
+# debug = no
+
+# Astral-env support (experimental)
+# astral_env = "disabled"
+EOF
+        success "Created: ${stars_config}"
+    else
+        info "Exists: ${stars_config}"
+    fi
+}
+
+# Install shell completions
+install_completions() {
+    header "Installing Shell Completions"
+
+    # Determine completion dir based on prefix
+    if [ "$PREFIX" = "/usr/local" ] || [ "$LOCAL_PREFIX" = "/usr/local" ]; then
+        COMP_BASE="/usr/local/share/bash-completion"
+    else
+        COMP_BASE="/usr/share/bash-completion"
+    fi
+
+    # Install bash completions
+    if [ -f "${SCRIPT_DIR}/completions/bash" ]; then
+        info "Installing bash completions..."
+        mkdir -p "${COMP_BASE}/completions"
+        cp "${SCRIPT_DIR}/completions/bash" "${COMP_BASE}/completions/astral"
+        success "Installed: ${COMP_BASE}/completions/astral"
+    fi
+
+    # Install zsh completions
+    if [ -f "${SCRIPT_DIR}/completions/zsh" ]; then
+        info "Installing zsh completions..."
+        zsh_comp="/usr/share/zsh/site-functions/_astral"
+        mkdir -p "$(dirname "$zsh_comp")"
+        cp "${SCRIPT_DIR}/completions/zsh" "$zsh_comp"
+        success "Installed: $zsh_comp"
+    fi
+
+    # Install fish completions
+    if [ -f "${SCRIPT_DIR}/completions/fish" ]; then
+        info "Installing fish completions..."
+        fish_comp="/usr/share/fish/completions/astral.fish"
+        mkdir -p "$(dirname "$fish_comp")"
+        cp "${SCRIPT_DIR}/completions/fish" "$fish_comp"
+        success "Installed: $fish_comp"
+    fi
+}
+
+# Initialize astral
+initialize_astral() {
+    header "Initializing Astral"
+
+    # Create directories
+    create_directories
+
+    # Create configuration
+    create_config
+    create_stars_config
+
+    # Print version to initialize
+    info "Testing Astral installation..."
+    if "${BIN_DIR}/astral" --version >/dev/null 2>&1; then
+        success "Astral is ready!"
+    else
+        warn "Astral test failed - please check installation"
+    fi
+
+    # Summary
+    header "Installation Complete!"
+
+    printf "${GREEN}Astral has been installed successfully!${NC}\n\n"
+    printf "Binaries installed to: ${BIN_DIR}\n"
+    printf "Man pages installed to: ${MAN_DIR}/man[1-9]\n"
+    printf "Configuration: ${ETC_DIR}/astral/\n\n"
+
+    printf "${YELLOW}Next steps:${NC}\n"
+    printf "  1. Review configuration: ${ETC_DIR}/astral/make.conf\n"
+    printf "  2. Update repository: sudo astral -u\n"
+    printf "  3. Search for packages: astral -s <package>\n"
+    printf "  4. Install a package: sudo astral -S <package>\n\n"
+    printf "For help: astral --help\n"
+    printf "Man pages: man astral, man astral-recipegen, man astral-sync\n"
+}
+
+# Uninstall astral
+uninstall_astral() {
+    header "Uninstalling Astral"
+
+    warn "This will remove all installed files!"
+
+    if [ "${FORCE:-0}" != "1" ]; then
+        printf "Are you sure? [y/N] "
+        read -r confirm
+        case "$confirm" in
+            [yY]|[yY][eE][sS]) ;;
+            *) info "Cancelled."; exit 0 ;;
+        esac
+    fi
+
+    # Remove binaries
+    for bin in astral astral-recipegen astral-sync; do
+        if [ -f "${BIN_DIR}/$bin" ]; then
+            rm -f "${BIN_DIR}/$bin"
+            success "Removed: ${BIN_DIR}/$bin"
+        fi
+    done
+
+    # Remove man pages
+    uninstall_manpages
+
+    # Note: We don't remove config or data by default
+    warn "Configuration in ${ETC_DIR}/astral/ was NOT removed"
+    warn "Data in ${VAR_DIR}/lib/astral/ was NOT removed"
+
+    success "Uninstallation complete!"
+}
+
+# Parse arguments
+VERBOSE=0
+FORCE=0
+COMMAND=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -p|--prefix)
+            PREFIX="$2"
+            shift 2
+            ;;
+        -l|--local)
+            PREFIX="/usr/local"
+            shift
+            ;;
+        -b|--bin)
+            BIN_DIR="$2"
+            shift 2
+            ;;
+        -m|--man)
+            MAN_DIR="$2"
+            shift 2
+            ;;
+        -e|--etc)
+            ETC_DIR="$2"
+            shift 2
+            ;;
+        -v|--verbose)
+            VERBOSE=1
+            shift
+            ;;
+        -f|--force)
+            FORCE=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        -V|--version)
+            show_version
+            ;;
+        install|init|uninstall|completions)
+            COMMAND="$1"
+            shift
+            ;;
+        *)
+            error "Unknown option: $1"
+            usage
+            ;;
+    esac
+done
+
+# Default command
+if [ -z "$COMMAND" ]; then
+    COMMAND="install"
+fi
+
+# Execute command
+case "$COMMAND" in
+    install)
+        check_root
+        install_binaries
+        install_manpages
+        create_directories
+        create_config
+        create_stars_config
+
+        header "Installation Complete!"
+        success "Astral installed successfully!"
+        ;;
+    init)
+        check_root
+        initialize_astral
+        ;;
+    uninstall)
+        check_root
+        uninstall_astral
+        ;;
+    completions)
+        check_root
+        install_completions
+        success "Completions installed!"
+        ;;
+    *)
+        error "Unknown command: $COMMAND"
+        usage
+        ;;
+esac

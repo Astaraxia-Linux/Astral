@@ -2,8 +2,8 @@
 
 > *"Because compiling from source should be less painful than a root canal"*
 
-Version: 5.3.1.5 Main  
-Last Updated: 06 March 2026 (GMT+8)  
+Version: 5.3.1.6 Main  
+Last Updated: 17 March 2026 (GMT+8)  
 Maintained by: One Maniac (yes, just one)
 
 *Made in Malaysia, btw*
@@ -24,9 +24,10 @@ Maintained by: One Maniac (yes, just one)
 10. [Security Features](#security-features)
 11. [Transactions & Rollback](#transactions--rollback)
 12. [Recipe Generator](#recipe-generator)
-13. [Troubleshooting](#troubleshooting)
-14. [Contributing](#contributing)
-15. [FAQ](#faq)
+13. [Repository Sync Tool](#repository-sync-tool)
+14. [Troubleshooting](#troubleshooting)
+15. [Contributing](#contributing)
+16. [FAQ](#faq)
 
 ---
 
@@ -47,6 +48,8 @@ Astral is a minimal POSIX package manager for [Astaraxia Linux](https://github.c
 - **Atomic transactions with rollback**: Because mistakes happen
 - **Built-in service management**: init-system-agnostic, works everywhere
 - **Security features**: GPG signing, certificate pinning, FIM, audit trails
+- **Recipe generator**: Auto-generate recipes from URLs or convert from other formats
+- **Repository sync tool**: Index generation, checksum verification, GPG signing
 
 ### Why Not Astral?
 
@@ -68,16 +71,45 @@ You'll need:
 - Root access (because `sudo`/`doas` is your friend)
 - Coffee (not technically required, but highly recommended)
 
-### Quick Install
+### Steps.
+
+For a proper installation with all components and man pages, use the setup script:
 
 ```bash
-# Download the script
-curl -O https://raw.githubusercontent.com/Astaraxia-Linux/Astral/main/astral
-chmod +x astral
-sudo mv astral /usr/bin/
+# Self-explainatory
+git clone https://github.com/Astaraxia-Linux/Astaraxia/Astral
+cd Astral
+chmod +x ./astral-setup
 
-# Initialize directories (also prints version)
-sudo astral --version
+# Full installation (all tools + man pages)
+sudo ./astral-setup install
+
+# Install to /usr/local instead of /usr
+sudo ./astral-setup install --local
+
+# Initialize after installation
+sudo ./astral-setup init
+
+# Install shell completions
+sudo ./astral-setup completions
+```
+
+### Man Pages
+
+Astral includes comprehensive man pages for all commands:
+
+```bash
+# Read the main Astral man page
+man astral
+
+# Read the recipe generator documentation
+man astral-recipegen
+
+# Read the sync tool documentation
+man astral-sync
+
+# Configuration file format
+man astral-stars    # section 5
 ```
 
 ### Configuration
@@ -899,6 +931,70 @@ astral-recipegen git
 
 ---
 
+## Repository Sync Tool
+
+### astral-sync
+
+The repository sync tool generates package indexes, verifies checksums, and can sign/push to GitHub. Essential for maintaining AOHARU or ASURA repositories.
+
+### Index Generation
+
+```bash
+# Generate index from recipes
+astral-sync generate
+
+# Full sync with GPG signing
+astral-sync sync --key A1B2C3D4
+
+# Show index status
+astral-sync status
+
+# List packages in category
+astral-sync list app-editors
+
+# Show changes since last index
+astral-sync diff
+```
+
+### Checksum Management
+
+```bash
+# Verify source checksums (skips already-verified)
+astral-sync checksum
+
+# Auto-fix wrong checksums
+astral-sync checksum --fix
+
+# Add checksums to recipes with empty/TODO blocks
+astral-sync empty-checksums
+
+# Reset checksum verification state
+astral-sync checksum-reset
+```
+
+### Recipe Migration
+
+```bash
+# Migrate flat recipe tree to sharded layout
+astral-sync migrate
+
+# Auto-organize recipes into category/shard/pkg/ structure
+astral-sync migrate-organize
+```
+
+### Environment Variables
+
+```bash
+RECIPES_DIR    # Recipes directory (default: ./recipes)
+OUTPUT_DIR     # Output directory for index (default: .)
+GPG_KEY        # GPG key ID for signing
+AUTO_PUSH=1    # Auto-push after generate
+FIX_CHECKSUMS=1  # Auto-fix wrong checksums
+DRY_RUN=1      # Dry run mode
+```
+
+**Use when**: You're maintaining a repository and need to generate the package index, verify checksums, or push updates to GitHub.
+
 ## Troubleshooting
 
 ### "Another instance of astral is already running" / Stale Lock
@@ -1081,7 +1177,7 @@ For ASURA: **YES, ALWAYS.** Never run untrusted code as root.
 
 ### What's astral-env?
 
-It's the declarative system configuration layer that sits on top of Astral. It lets you describe your entire system - packages, services, dotfiles, snapshots - in a `.stars` file and apply it all at once. [Read the astral-env docs](https://github.com/Astaraxia-Linux/stral-env).
+It's the declarative system configuration layer that sits on top of Astral. It lets you describe your entire system - packages, services, dotfiles, snapshots - in a `.stars` file and apply it all at once. [Read the astral-env docs](https://github.com/Astaraxia-Linux/Astral-env).
 
 ### Who maintains this?
 
@@ -1114,6 +1210,6 @@ If you made it this far, congratulations. You're either very thorough, very bore
 
 ---
 
-**Last updated**: 06 March 2026 (GMT+8)  
-**Documentation version**: 5.0  
+**Last updated**: 17 March 2026 (GMT+8)  
+**Documentation version**: 5.1  
 **Sanity level**: Questionable, as always
