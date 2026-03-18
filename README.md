@@ -1129,7 +1129,7 @@ git push
 
 ### Contributing to Astral Core
 
-1. Read the code (good luck - it's 10k lines of sh)
+1. Read the code (good luck - it's 12k lines of sh)
 2. Test your changes (seriously)
 3. No bashisms - POSIX sh only
 4. Submit a PR
