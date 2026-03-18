@@ -2,7 +2,7 @@
 
 > *"Because compiling from source should be less painful than a root canal"*
 
-Version: 5.3.1.6 Main  
+Version: 5.3.1.7 Main  
 Last Updated: 17 March 2026 (GMT+8)  
 Maintained by: One Maniac (yes, just one)
 
@@ -273,7 +273,7 @@ Astral supports four recipe formats because we couldn't decide on one and now we
 
 The Ancient format. Messy, spaghetti and deprecated (who uses these?)
 
-- [Read here](https://github.com/Astaraxia-Linux/Astral/blob/main/Dir.md)
+- [Read here](https://github.com/Astaraxia-Linux/Astral/blob/main/DOCS/Astral/Dir.md)
 
 ### v1 Format (@SECTION)
 
@@ -1091,6 +1091,8 @@ sudo astral --test quick
 ---
 
 ## Contributing
+
+For contributing to `Astral`, `Astral-env` or anything that is *Astaraxia's Software*. Then refer to [CONTRIBUTING.md](DOCS/CONTRIBUTING.md)
 
 ### Writing Recipes
 

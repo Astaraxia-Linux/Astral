@@ -8,7 +8,7 @@
 
 set -eu
 
-VERSION="1.0.0"
+VERSION="1.1.6"
 RECIPES_DIR="${RECIPES_DIR:-./recipes}"
 OUTPUT_DIR="${OUTPUT_DIR:-.}"
 INDEX_FILE="${OUTPUT_DIR}/astral.index"
@@ -16,6 +16,9 @@ GPG_KEY="${GPG_KEY:-}"
 AUTO_PUSH="${AUTO_PUSH:-0}"
 REPO_NAME="${REPO_NAME:-AOHARU}"
 DRY_RUN="${DRY_RUN:-0}"
+PARALLEL_JOBS="${PARALLEL_JOBS:-8}"
+DOWNLOAD_RETRIES="${DOWNLOAD_RETRIES:-3}"
+JOB_DELAY="${JOB_DELAY:-0}"
 VERBOSE="${VERBOSE:-0}"
 FIX_CHECKSUMS="${FIX_CHECKSUMS:-0}"
 
@@ -74,6 +77,8 @@ Usage: astral-sync <command> [options]
   -k, --key <id>        GPG key ID for signing
   -p, --push            Auto-push after generating (same as sync)
   -f, --fix             Auto-fix wrong checksums in .stars files
+  -j, --jobs <n>        Parallel download jobs (default: 8)
+  -r, --retries <n>     Download retry attempts on failure (default: 3)
   -n, --dry-run         Show what would happen, make no changes
   -v, --verbose         Verbose output
   -V, --version         Show version
@@ -501,7 +506,7 @@ extract_checksums_from_stars() {
 checksum_is_done() {
     _cpkg="$1"
     [ -f "$CHECKSUM_STATE" ] || return 1
-    grep -qF "checksum-ok: ${_cpkg}" "$CHECKSUM_STATE" 2>/dev/null
+    grep -F "checksum-ok: ${_cpkg} " "$CHECKSUM_STATE" >/dev/null 2>&1
 }
 
 # Mark a package as verified in the state file
@@ -585,8 +590,8 @@ verify_stars_checksums() {
         _fname=$(basename "$_url" | sed 's/#.*//')
         _dest="$_tmpdir/$_fname"
 
-        info "  [$_label] → downloading: $_fname"
-        if ! curl -fsSL --retry 3 --retry-delay 2                 -o "$_dest" "$_url" 2>/dev/null; then
+        vinfo "  [$_label] → downloading: $_fname"
+        if ! curl -fsSL -A "Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0" --retry "$DOWNLOAD_RETRIES" --retry-delay 2 --retry-max-time 20 --connect-timeout 10 -o "$_dest" "$_url" 2>/dev/null; then
             warn "  [$_label] ✗ Failed to download: $_url"
             printf 'DOWNLOAD_FAILED\n' > "$_tmpdir/.failed"
             continue
@@ -633,7 +638,7 @@ verify_stars_checksums() {
             esac
 
             if [ "$_actual" = "$_hash" ]; then
-                ok "  [$_label] ✓ ${_algo}: $_fname"
+                : # checksum ok — reported at job level
             else
                 warn "  [$_label] ✗ MISMATCH (${_algo}): $_fname"
                 warn "    expected: $_hash"
@@ -676,33 +681,36 @@ cmd_checksum() {
     command -v curl >/dev/null 2>&1 || err "curl is required for checksum verification"
     command -v sha256sum >/dev/null 2>&1 || err "sha256sum is required"
 
-    info "Starting checksum verification..."
+    info "Starting checksum verification (parallel jobs: $PARALLEL_JOBS)..."
     [ "$FIX_CHECKSUMS" -eq 1 ] && info "Mode: auto-fix mismatched checksums in .stars files"
     info "State file: $CHECKSUM_STATE"
     info ""
 
-    # Use counter files — pipe subshell cannot propagate variables back to parent
     _cdir=$(mktemp -d "${TMPDIR:-/tmp}/astral-sync-counts.XXXXXX")
-    printf '0' > "$_cdir/total"
-    printf '0' > "$_cdir/skipped"
-    printf '0' > "$_cdir/passed"
-    printf '0' > "$_cdir/failed"
 
-    # Find all .stars files (sharded layout: depth 4; legacy: depth 2-3)
-    find "$RECIPES_DIR" -mindepth 2 -maxdepth 4 -name "*.stars" 2>/dev/null | sort | \
+    # Collect file list without pipe so we stay in parent shell
+    find "$RECIPES_DIR" -mindepth 2 -maxdepth 4 -name "*.stars" 2>/dev/null | sort \
+        > "$_cdir/filelist"
+
+    _total=$(wc -l < "$_cdir/filelist" | tr -d ' ')
+    _running=0
+
+    # Kill all background jobs cleanly on Ctrl-C
+    trap 'kill -- -$$ 2>/dev/null; rm -rf "$_cdir"; exit 130' INT TERM
+
+
     while IFS= read -r _sf; do
         _category=$(printf '%s' "$_sf" | sed "s|^${RECIPES_DIR}/||" | cut -d/ -f1)
         _basename=$(basename "$_sf" .stars)
-        # Strip version+arch suffix to get pkg name
         _pkgname=$(printf '%s' "$_basename" | sed 's/-[0-9][^-]*-[^-]*$//;s/-git-[^-]*$//')
         _label="${_category}/${_pkgname}"
+        _key=$(printf '%s' "$_label" | tr '/' '_')
 
-        printf '%d' $(( $(cat "$_cdir/total") + 1 )) > "$_cdir/total"
-
-        # Skip if already verified
+        # Already verified? Record and skip without backgrounding
         if checksum_is_done "$_label"; then
             vinfo "[$_label] already verified — skipping"
-            printf '%d' $(( $(cat "$_cdir/skipped") + 1 )) > "$_cdir/skipped"
+            printf 'skip
+' > "$_cdir/${_key}.result"
             continue
         fi
 
@@ -711,36 +719,65 @@ cmd_checksum() {
             continue
         fi
 
-        info "Verifying: $_label"
-        if verify_stars_checksums "$_sf" "$_label"; then
-            _ver=$(extract_version_from_stars "$_sf")
-            checksum_mark_done "$_label" "$_ver"
-            ok "  [$_label] all checksums passed"
-            printf '%d' $(( $(cat "$_cdir/passed") + 1 )) > "$_cdir/passed"
-        else
-            warn "  [$_label] one or more checksums FAILED"
-            printf '%d' $(( $(cat "$_cdir/failed") + 1 )) > "$_cdir/failed"
+        # Background job — buffer output, print ONE line per package atomically
+        [ "${JOB_DELAY:-0}" != "0" ] && sleep "$JOB_DELAY"
+        (
+            _out="$_cdir/${_key}.out"
+            if { verify_stars_checksums "$_sf" "$_label"; } > "$_out" 2>&1; then
+                _ver=$(extract_version_from_stars "$_sf")
+                # Write state immediately (atomic append) so Ctrl-C doesn't lose progress
+                checksum_mark_done "$_label" "$_ver"
+                printf 'pass\n' > "$_cdir/${_key}.result"
+                if grep '↻' "$_out" >/dev/null 2>&1; then
+                    printf "${YELLOW}↻${NC}  %-45s ${YELLOW}(fixed)${NC}\n" "$_label"
+                else
+                    printf "${GREEN}✓${NC}  %s\n" "$_label"
+                fi
+            else
+                printf 'fail\n' > "$_cdir/${_key}.result"
+                grep -v '^[[:space:]]*$' "$_out" || true
+                printf "${RED}✗${NC}  %s\n" "$_label"
+            fi
+        ) &
+
+        _running=$((_running + 1))
+        if [ "$_running" -ge "$PARALLEL_JOBS" ]; then
+            wait
+            _running=0
         fi
-        info ""
+    done < "$_cdir/filelist"
+
+    # Wait for remaining jobs
+    wait
+
+    # Tally results and write checksum state serially (no race)
+    _pass=0; _fail=0; _skip=0
+    for _r in "$_cdir"/*.result; do
+        [ -f "$_r" ] || continue
+        _val=$(cat "$_r")
+        case "$_val" in
+            pass)
+                _pass=$((_pass + 1))
+                ;;
+            fail:*) _fail=$((_fail + 1)) ;;
+            skip)   _skip=$((_skip + 1)) ;;
+        esac
     done
 
-    _t=$(cat "$_cdir/total")
-    _s=$(cat "$_cdir/skipped")
-    _p=$(cat "$_cdir/passed")
-    _f=$(cat "$_cdir/failed")
+    trap - INT TERM
     rm -rf "$_cdir"
 
     info "────────────────────────────────"
     info "Checksum verification complete"
-    info "  Total:    $_t"
-    info "  Skipped:  $_s (already verified)"
-    info "  Passed:   $_p"
+    info "  Total:    $_total"
+    info "  Skipped:  $_skip (already verified)"
+    info "  Passed:   $_pass"
     [ "$FIX_CHECKSUMS" -eq 1 ] \
         && info "  Fixed:    (mismatches auto-corrected in .stars files)" \
-        || info "  Failed:   $_f"
+        || info "  Failed:   $_fail"
     info "────────────────────────────────"
 
-    [ "$_f" -gt 0 ] && return 1
+    [ "$_fail" -gt 0 ] && return 1
     return 0
 }
 
@@ -800,7 +837,7 @@ add_checksums_to_stars() {
         _dest="$_tmpdir/$_fname"
         
         info "  [$_label] → downloading: $_fname"
-        if ! curl -fsSL --retry 3 --retry-delay 2 -o "$_dest" "$_url" 2>/dev/null; then
+        if ! curl -fsSL -A "Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0" --retry "$DOWNLOAD_RETRIES" --retry-delay 2 --retry-max-time 20 --connect-timeout 10 -o "$_dest" "$_url" 2>/dev/null; then
             warn "  [$_label] ✗ Failed to download: $_url"
             printf 'FAIL\n' > "$_tmpdir/.failed"
             continue
@@ -866,42 +903,68 @@ add_checksums_to_stars() {
 cmd_empty_checksums() {
     command -v curl >/dev/null 2>&1 || err "curl is required"
     command -v sha256sum >/dev/null 2>&1 || err "sha256sum is required"
-    
-    info "Fixing empty checksums in recipes..."
+
+    info "Fixing empty checksums in recipes (parallel jobs: $PARALLEL_JOBS)..."
     [ "$DRY_RUN" -eq 1 ] && info "Mode: dry-run (no changes)"
     info ""
-    
-    _total=0
-    _fixed=0
-    _skipped=0
-    _failed=0
-    
-    find "$RECIPES_DIR" -mindepth 2 -maxdepth 4 -name "*.stars" 2>/dev/null | sort | \
+
+    _edir=$(mktemp -d "${TMPDIR:-/tmp}/astral-empty-counts.XXXXXX")
+
+    find "$RECIPES_DIR" -mindepth 2 -maxdepth 4 -name "*.stars" 2>/dev/null | sort \
+        > "$_edir/filelist"
+
+    _total=$(wc -l < "$_edir/filelist" | tr -d ' ')
+    _running=0
+
     while IFS= read -r _sf; do
         _category=$(printf '%s' "$_sf" | sed "s|^${RECIPES_DIR}/||" | cut -d/ -f1)
         _basename=$(basename "$_sf" .stars)
         _pkgname=$(printf '%s' "$_basename" | sed 's/-[0-9][^-]*-[^-]*$//;s/-git-[^-]*$//')
         _label="${_category}/${_pkgname}"
-        
-        _total=$((_total + 1))
-        
-        # Check if checksums are empty/TODO
+        _key=$(printf '%s' "$_label" | tr '/' '_')
+
         if ! has_empty_checksums "$_sf"; then
             vinfo "[$_label] has checksums — skipping"
-            _skipped=$((_skipped + 1))
+            printf 'skip
+' > "$_edir/${_key}.result"
             continue
         fi
-        
+
         info "Fixing: $_label"
-        if add_checksums_to_stars "$_sf" "$_label"; then
-            _fixed=$((_fixed + 1))
-        else
-            warn "  [$_label] failed to add checksums"
-            _failed=$((_failed + 1))
+        (
+            _out="$_edir/${_key}.out"
+            if { add_checksums_to_stars "$_sf" "$_label"; } > "$_out" 2>&1; then
+                printf 'pass\n' > "$_edir/${_key}.result"
+                printf "${GREEN}✓${NC}  %s\n" "$_label"
+            else
+                printf 'fail\n' > "$_edir/${_key}.result"
+                grep -v '^[[:space:]]*$' "$_out" || true
+                printf "${RED}✗${NC}  %s\n" "$_label"
+            fi
+        ) &
+
+        _running=$((_running + 1))
+        if [ "$_running" -ge "$PARALLEL_JOBS" ]; then
+            wait
+            _running=0
         fi
-        info ""
+    done < "$_edir/filelist"
+
+    wait
+
+    _fixed=0; _failed=0; _skipped=0
+    for _r in "$_edir"/*.result; do
+        [ -f "$_r" ] || continue
+        _val=$(cat "$_r")
+        case "$_val" in
+            pass) _fixed=$((_fixed + 1))   ;;
+            fail) _failed=$((_failed + 1)) ;;
+            skip) _skipped=$((_skipped + 1)) ;;
+        esac
     done
-    
+
+    rm -rf "$_edir"
+
     info "────────────────────────────────"
     info "Empty checksums fix complete"
     info "  Total:    $_total"
@@ -909,7 +972,7 @@ cmd_empty_checksums() {
     info "  Skipped:  $_skipped (already have checksums)"
     info "  Failed:   $_failed"
     info "────────────────────────────────"
-    
+
     [ "$_failed" -gt 0 ] && return 1
     return 0
 }
@@ -1199,6 +1262,18 @@ while [ $# -gt 0 ]; do
             ;;
         -h|--help|help)
             usage
+            ;;
+        -j|--jobs)
+            [ $# -gt 1 ] || err "--jobs requires an argument"
+            PARALLEL_JOBS="$2"; shift 2
+            ;;
+        -r|--retries)
+            [ $# -gt 1 ] || err "--retries requires an argument"
+            DOWNLOAD_RETRIES="$2"; shift 2
+            ;;
+        -d|--delay)
+            [ $# -gt 1 ] || err "--delay requires an argument"
+            JOB_DELAY="$2"; shift 2
             ;;
         *)
             err "Unknown option: $1"

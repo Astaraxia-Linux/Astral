@@ -165,7 +165,7 @@ create_directories() {
     done
 }
 
-# Install binaries
+# Installing
 install_binaries() {
     header "Installing Astral"
 
