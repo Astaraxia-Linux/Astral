@@ -1797,34 +1797,27 @@ parse_astral_stars_config() {
                 case "$key" in
                     MAKE_CONF)
                         MAKE_CONF="$value"
-                        info "    → make.conf: $MAKE_CONF"
                         ;;
                     RECIPES_DIR)
                         RECIPES_DIR="$value"
-                        info "    → recipes dir: $RECIPES_DIR"
                         ;;
                     CACHE_SRC)
                         CACHE_SRC="$value"
-                        info "    → source cache: $CACHE_SRC"
                         ;;
                     DB_DIR)
                         DB_DIR="$value"
-                        info "    → db dir: $DB_DIR"
                         ;;
                     INSTALL_ROOT)
                         INSTALL_ROOT="$value"
-                        info "    → install root: $INSTALL_ROOT"
                         ;;
                     USAGE_MODE)
                         case "$value" in
                             compact|full) USAGE_MODE="$value" ;;
                             *) warn "    → unknown USAGE_MODE '$value', using 'full'" ;;
                         esac
-                        info "    → usage mode: $USAGE_MODE"
                         ;;
                     EDITOR)
                         EDITOR="$value"
-                        info "    → editor: $EDITOR"
                         ;;
                     DEBUG)
                         case "$value" in
@@ -1843,7 +1836,6 @@ parse_astral_stars_config() {
                         ;;
                     STORE_DIR)
                         STORE_DIR="$value"
-                        info "    → store dir: $STORE_DIR"
                         ;;
                 esac
                 ;;
@@ -1868,7 +1860,6 @@ parse_astral_stars_config() {
                 case "$key" in
                     GPG_KEYRING)
                         GPG_KEYRING="$value"
-                        info "    → GPG keyring: $GPG_KEYRING"
                         ;;
                     SAFETY_*)
                         case "$value" in
@@ -1876,7 +1867,6 @@ parse_astral_stars_config() {
                             0|no|false|disable) eval "${key}=0" ;;
                         esac
                         debug "config: $key=$value"
-                        info "    → $key: $value"
                         ;;
                 esac
                 ;;
@@ -1884,7 +1874,6 @@ parse_astral_stars_config() {
                 case "$key" in
                     METHOD|SANDBOX_METHOD)
                         SANDBOX_METHOD="$value"
-                        info "    → sandbox: $SANDBOX_METHOD"
                         ;;
                 esac
                 ;;
@@ -1892,7 +1881,6 @@ parse_astral_stars_config() {
                 case "$key" in
                     PROVIDED|HOST_PROVIDED)
                         HOST_PROVIDED="$value"
-                        info "    → host provided: $HOST_PROVIDED"
                         ;;
                 esac
             ;;
@@ -1900,21 +1888,18 @@ parse_astral_stars_config() {
                 case "$key" in
                     STRIP_BINARIES|STRIP_LIBS|STRIP_STATIC)
                         eval "${key}=\"$value\""
-                        info "    → $key: $value"
                         ;;
                     COLLISION_DETECT)
                         case "$value" in
                             1|yes|true)  SAFETY_COLLISION_DETECT=1 ;;
                             0|no|false)  SAFETY_COLLISION_DETECT=0 ;;
                         esac
-                        info "    → collision detect: $value"
                         ;;
                     GHOST_FILE_CHECK)
                         case "$value" in
                             1|yes|true)  SAFETY_GHOST_DETECT=1 ;;
                             0|no|false)  SAFETY_GHOST_DETECT=0 ;;
                         esac
-                        info "    → ghost file check: $value"
                         ;;
                     TRANSACTION_ENABLED)
                         case "$value" in
@@ -1922,11 +1907,9 @@ parse_astral_stars_config() {
                             0|no|false)  TRANSACTION_ENABLED=0 ;;
                             *)           TRANSACTION_ENABLED="$value" ;;
                         esac
-                        info "    → transactions: $value"
                         ;;
                     LOCK_TIMEOUT)
                         LOCK_TIMEOUT="$value"
-                        info "    → lock timeout: ${value}s"
                         ;;
                     SANDBOX_ENABLED)
                         case "$value" in
@@ -1934,15 +1917,12 @@ parse_astral_stars_config() {
                             0|no|false)  SANDBOX_ENABLED=0 ;;
                             *)           SANDBOX_ENABLED="$value" ;;
                         esac
-                        info "    → sandbox: $value"
                         ;;
                     SANDBOX_NETWORK)
                         SANDBOX_NETWORK="$value"
-                        info "    → sandbox network: $value"
                         ;;
                     SANDBOX_METHOD)
                         SANDBOX_METHOD="$value"
-                        info "    → sandbox method: $value"
                         ;;
                 esac
             ;;
@@ -1950,11 +1930,9 @@ parse_astral_stars_config() {
                 case "$key" in
                     CCACHE_ENABLED|CCACHE_DIR|CCACHE_MAXSIZE|CCACHE_COMPRESS|CCACHE_COMPRESSLEVEL)
                         eval "${key}=\"$value\""
-                        info "    → $key: $value"
                         ;;
                     DISTCC_ENABLED|DISTCC_DIR|DISTCC_HOSTS|DISTCC_VERBOSE)
                         eval "${key}=\"$value\""
-                        info "    → $key: $value"
                         ;;
                 esac
             ;;

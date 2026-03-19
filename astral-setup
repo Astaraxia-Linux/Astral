@@ -341,17 +341,75 @@ create_stars_config() {
     if [ ! -f "$stars_config" ]; then
         info "Creating ${stars_config}..."
         cat > "$stars_config" <<'EOF'
-# Astral advanced configuration
-# See: https://github.com/Astaraxia-Linux/Astral
+# Astral Configuration File (astral.stars)
+# AOHARU = Official repository, ASURA = Overlay/User repository
 
-# Use mode: compact or full (controls help output length)
-# USAGE_MODE = "full"
+$AST.core: {
+    # Core paths - make.conf location can be explicitly set
+    #MAKE_CONF = "/etc/astral/make.conf"
+    #RECIPES_DIR = "/usr/src/astral/recipes"
+    #CACHE_SRC = "/var/cache/astral/src"
+    #DB_DIR = "/var/lib/astral/db"
+    INSTALL_ROOT = "/"
+    USAGE_MODE = "full"
+    astral-env          = "disabled"
+    astral-env-system   = "disabled"
+};
 
-# Debug mode (set debug = yes to enable)
-# debug = no
+$AST.security: {
+    #GPG_KEYRING = "/etc/astral/gpg/trustedkeys.gpg"
 
-# Astral-env support (experimental)
-# astral_env = "disabled"
+    # Safety features (1=enabled, 0=disabled)
+    SAFETY_SCRIPT_CHECK = 1
+    SAFETY_COLLISION_DETECT = 1
+    SAFETY_GHOST_DETECT = 1
+    SAFETY_CHECKSUM_VERIFY = 1
+    SAFETY_MASK_CHECK = 1
+    SAFETY_SIGNATURE_VERIFY = 1
+    SAFETY_RECIPE_AUDIT = 1
+    SAFETY_SECURE_DOWNLOAD = 1
+    SAFETY_FILE_INTEGRITY = 0
+    SAFETY_MERKLE_VERIFY = 0
+    SAFETY_CERT_PIN = 0
+};
+
+$AST.host: {
+    # Packages provided by the host system astral will skip building these as deps.
+    # Add any package names here that you know are already installed system-wide.
+    PROVIDED = "gcc make glibc libc ncurses linux-headers binutils coreutils bash"
+};
+
+$AST.build: {
+    # Binary stripping
+    STRIP_BINARIES = "yes"
+    STRIP_LIBS = "yes"
+    STRIP_STATIC = "yes"
+
+    # Collision and ghost file detection
+    COLLISION_DETECT = "yes"
+    GHOST_FILE_CHECK = "yes"
+
+    # Sandbox
+    SANDBOX_ENABLED = "yes"
+    SANDBOX_NETWORK = "no"
+    SANDBOX_METHOD = "auto"      # auto, bubblewrap, firejail, fakechroot, none
+
+    # Transactions and locking
+    TRANSACTION_ENABLED = "yes"
+    LOCK_TIMEOUT = "300"         # seconds
+};
+
+$AST.tools: {
+    # ccache - compiler cache
+    CCACHE_ENABLED = "yes"
+    CCACHE_DIR = "/var/cache/ccache"
+    CCACHE_MAXSIZE = "5G"
+
+    # distcc - distributed compilation (disabled by default)
+    #DISTCC_ENABLED = "yes"
+    #DISTCC_HOSTS = "localhost 192.168.1.10"
+};
+
 EOF
         success "Created: ${stars_config}"
     else
