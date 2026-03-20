@@ -5994,7 +5994,12 @@ fetch_remote_recipe() {
     fi
 
     local_dir="$RECIPES_DIR/$category_pkg"
-    mkdir -p "$local_dir"
+    # Do NOT mkdir the flat path — we use the sharded layout exclusively.
+    # If a stale empty flat dir exists from a previous run, remove it to
+    # prevent recipe_path from seeing two matches and throwing an ambiguity error.
+    if [ -d "$local_dir" ] && [ -z "$(ls -A "$local_dir" 2>/dev/null)" ]; then
+        rmdir "$local_dir" 2>/dev/null || true
+    fi
 
     _fp_pkgbase=$(basename "$category_pkg")
     _fp_cat=$(dirname "$category_pkg")
