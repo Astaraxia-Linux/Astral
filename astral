@@ -2615,7 +2615,9 @@ create_fakeroot_sandbox() {
 create_chroot_sandbox() {
     builddir="$1"
     sandbox_root="$2"
-    mkdir -p "$sandbox_root"/{bin,lib,lib64,usr,tmp,proc,dev,etc}
+    mkdir -p "$sandbox_root/bin" "$sandbox_root/lib" "$sandbox_root/lib64" \
+             "$sandbox_root/usr" "$sandbox_root/tmp" "$sandbox_root/proc" \
+             "$sandbox_root/dev" "$sandbox_root/etc"
     info "  ✓ Chroot sandbox ready"
 }
 
@@ -2631,7 +2633,9 @@ create_bubblewrap_sandbox() {
     builddir="$1"
     sandbox_root="$2"
 
-    mkdir -p "$sandbox_root"/{bin,lib,lib64,usr,tmp,proc,dev,etc}
+    mkdir -p "$sandbox_root/bin" "$sandbox_root/lib" "$sandbox_root/lib64" \
+             "$sandbox_root/usr" "$sandbox_root/tmp" "$sandbox_root/proc" \
+             "$sandbox_root/dev" "$sandbox_root/etc"
 
     essential_tools="sh bash make gcc g++ ld ar as nm strip"
     for tool in $essential_tools; do
@@ -5604,7 +5608,7 @@ transaction_begin() {
 
     trans_dir="$TRANSACTION_DIR/$trans_id"
 
-    mkdir -p "$trans_dir"/{metadata,backup,journal}
+    mkdir -p "$trans_dir/metadata" "$trans_dir/backup" "$trans_dir/journal"
 
     cat > "$trans_dir/metadata/info" <<EOF
 transaction_id=$trans_id
@@ -5990,12 +5994,7 @@ fetch_remote_recipe() {
     fi
 
     local_dir="$RECIPES_DIR/$category_pkg"
-    # Do NOT mkdir the flat path — we use the sharded layout exclusively.
-    # If a stale empty flat dir exists from a previous run, remove it to
-    # prevent recipe_path from seeing two matches and throwing an ambiguity error.
-    if [ -d "$local_dir" ] && [ -z "$(ls -A "$local_dir" 2>/dev/null)" ]; then
-        rmdir "$local_dir" 2>/dev/null || true
-    fi
+    mkdir -p "$local_dir"
 
     _fp_pkgbase=$(basename "$category_pkg")
     _fp_cat=$(dirname "$category_pkg")
