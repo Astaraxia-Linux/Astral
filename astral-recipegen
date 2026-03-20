@@ -228,14 +228,14 @@ build_cmds_for() {
     # Source dir is typically "name-version" for tarballs, just "name" for git
     srcdir="${name}-${ver}"
     case "$sys" in
-        autotools) printf '    cd %s\n    ./configure          \\\n        --prefix=/usr\n    make -j$(nproc)\n' "$srcdir" ;;
-        cmake)     printf '    cd %s\n    cmake -B build              \\\n        -DCMAKE_BUILD_TYPE=Release \\\n        -DCMAKE_INSTALL_PREFIX=/usr\n    cmake --build build -j$(nproc)\n' "$srcdir" ;;
-        meson)     printf '    cd %s\n    meson setup build    \\\n        --prefix=/usr        \\\n        --buildtype=release\n    ninja -C build\n' "$srcdir" ;;
+        autotools) printf '    cd %s\n    ./configure          \\\n        --prefix=/usr\n    make -j${JOBS:-$(nproc)}\n' "$srcdir" ;;
+        cmake)     printf '    cd %s\n    cmake -B build              \\\n        -DCMAKE_BUILD_TYPE=Release \\\n        -DCMAKE_INSTALL_PREFIX=/usr \\\n        -DCMAKE_C_FLAGS="$CFLAGS" \\\n        -DCMAKE_CXX_FLAGS="$CXXFLAGS" \\\n        -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS"\n    cmake --build build -j${JOBS:-$(nproc)}\n' "$srcdir" ;;
+        meson)     printf '    cd %s\n    meson setup build    \\\n        --prefix=/usr        \\\n        --buildtype=release  \\\n        -Dc_args="$CFLAGS"   \\\n        -Dcpp_args="$CXXFLAGS" \\\n        -Dc_link_args="$LDFLAGS"\n    ninja -C build -j${JOBS:-$(nproc)}\n' "$srcdir" ;;
         python)    printf '    cd %s\n    python3 -m build --wheel --no-isolation\n' "$srcdir" ;;
         cargo)     printf '    cd %s\n    cargo build --release --locked\n' "$srcdir" ;;
         go)        printf '    cd %s\n    go build -o %s ./...\n' "$srcdir" "${name}" ;;
         npm)       printf '    cd %s\n    npm ci\n    npm run build\n' "$srcdir" ;;
-        make)      printf '    cd %s\n    make -j$(nproc)\n' "$srcdir" ;;
+        make)      printf '    cd %s\n    make -j${JOBS:-$(nproc)}\n' "$srcdir" ;;
         *)         printf '    cd %s\n    # TODO: add build commands\n' "$srcdir" ;;
     esac
 }
@@ -260,14 +260,14 @@ package_cmds_for() {
 build_cmds_git() {
     sys="$1"; name="${2:-PACKAGE_NAME}"
     case "$sys" in
-        autotools) printf '    cd %s\n    ./configure          \\\n        --prefix=/usr\n    make -j$(nproc)\n' "$name" ;;
-        cmake)     printf '    cd %s\n    cmake -B build              \\\n        -DCMAKE_BUILD_TYPE=Release \\\n        -DCMAKE_INSTALL_PREFIX=/usr\n    cmake --build build -j$(nproc)\n' "$name" ;;
-        meson)     printf '    cd %s\n    meson setup build    \\\n        --prefix=/usr        \\\n        --buildtype=release\n    ninja -C build\n' "$name" ;;
+        autotools) printf '    cd %s\n    ./configure          \\\n        --prefix=/usr\n    make -j${JOBS:-$(nproc)}\n' "$name" ;;
+        cmake)     printf '    cd %s\n    cmake -B build              \\\n        -DCMAKE_BUILD_TYPE=Release \\\n        -DCMAKE_INSTALL_PREFIX=/usr \\\n        -DCMAKE_C_FLAGS="$CFLAGS" \\\n        -DCMAKE_CXX_FLAGS="$CXXFLAGS" \\\n        -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS"\n    cmake --build build -j${JOBS:-$(nproc)}\n' "$name" ;;
+        meson)     printf '    cd %s\n    meson setup build    \\\n        --prefix=/usr        \\\n        --buildtype=release  \\\n        -Dc_args="$CFLAGS"   \\\n        -Dcpp_args="$CXXFLAGS" \\\n        -Dc_link_args="$LDFLAGS"\n    ninja -C build -j${JOBS:-$(nproc)}\n' "$name" ;;
         python)    printf '    cd %s\n    python3 -m build --wheel --no-isolation\n' "$name" ;;
         cargo)     printf '    cd %s\n    cargo build --release --locked\n' "$name" ;;
         go)        printf '    cd %s\n    go build -o %s ./...\n' "$name" "$name" ;;
         npm)       printf '    cd %s\n    npm ci\n    npm run build\n' "$name" ;;
-        make)      printf '    cd %s\n    make -j$(nproc)\n' "$name" ;;
+        make)      printf '    cd %s\n    make -j${JOBS:-$(nproc)}\n' "$name" ;;
         *)         printf '    cd %s\n    # TODO: add build commands\n' "$name" ;;
     esac
 }
@@ -685,14 +685,14 @@ generate_auto() {
         filename=$(basename -- "$source_url" | sed 's/?.*//')
         step "Downloading: $filename"
         curl -fSL "$source_url" -o "$temp_dir/$filename" || err "Download failed"
-        cd "$temp_dir"
-        case "$filename" in
+        # Extract inside a subshell so the cd does not change the parent CWD
+        ( cd "$temp_dir" && case "$filename" in
             *.tar.gz|*.tgz)  tar -xzf "$filename" ;;
             *.tar.bz2|*.tbz) tar -xjf "$filename" ;;
             *.tar.xz|*.txz)  tar -xJf "$filename" ;;
             *.zip)            unzip -q  "$filename" ;;
             *)                err "Unknown archive: $filename" ;;
-        esac
+        esac )
         src_dir=$(find "$temp_dir" -maxdepth 1 -type d ! -path "$temp_dir" | head -n1)
         [ -z "$src_dir" ] && err "Could not find extracted directory"
         checksum=$(sha256sum "$temp_dir/$filename" | awk '{print $1}')
@@ -704,7 +704,7 @@ generate_auto() {
 
     step "Build system: $build_system | Version: $version"; info ""
 
-    exec </dev/tty
+    [ -t 0 ] || exec </dev/tty 2>/dev/null || true
     printf "Category (default: app-misc): ";  read -r category; [ -z "$category" ] && category="app-misc"
     printf "Description: ";                   read -r description; [ -z "$description" ] && description="$pkg_name"
     printf "Homepage: ";                       read -r homepage
@@ -758,13 +758,13 @@ generate_from_git() {
     trap "rm -rf '$temp_dir'" EXIT
     step "Cloning..."
     git clone --branch "$git_branch" --depth 1 "$git_url" "$temp_dir/repo" 2>&1 || err "Clone failed"
-    cd "$temp_dir/repo"
 
-    version=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^[vV]//' || git rev-parse --short HEAD)
-    build_system=$(detect_build_system .)
+    # Run detect inside a subshell so the cd does not change the parent CWD
+    version=$(  cd "$temp_dir/repo" && git describe --tags --abbrev=0 2>/dev/null | sed 's/^[vV]//' || git -C "$temp_dir/repo" rev-parse --short HEAD)
+    build_system=$(detect_build_system "$temp_dir/repo")
     step "Version: $version | Build: $build_system"; info ""
 
-    exec </dev/tty
+    [ -t 0 ] || exec </dev/tty 2>/dev/null || true
     printf "Category (default: app-misc): ";      read -r category; [ -z "$category" ] && category="app-misc"
     printf "Description: ";                        read -r description; [ -z "$description" ] && description="$pkg_name"
     printf "Homepage [$git_url]: ";                read -r homepage; [ -z "$homepage" ] && homepage="$git_url"
@@ -963,7 +963,7 @@ convert_from_pkgbuild() {
     info "  RDepends: $rdepends"
     info "  Source:   $primary_src"
     info "  Category: $category"; info ""
-    exec </dev/tty
+    [ -t 0 ] || exec </dev/tty 2>/dev/null || true
     printf "Category [%s]: " "$category"; read -r cat_in; [ -n "$cat_in" ] && category="$cat_in"
 
     output_file="${OUTPUT_FILE:-${RECIPES_DIR}/${category}/$(shard_for "$pkgname")/${pkgname}/${pkgname}-${pkgver}-any.stars}"
@@ -1121,7 +1121,7 @@ convert_from_ebuild() {
     esac
 
     info "  Package: $pkgname $pkgver (EAPI $eapi) | Source: $src_uri"; info ""
-    exec </dev/tty
+    [ -t 0 ] || exec </dev/tty 2>/dev/null || true
     printf "Category [%s]: " "$category"; read -r cat_in; [ -n "$cat_in" ] && category="$cat_in"
 
     output_file="${OUTPUT_FILE:-${RECIPES_DIR}/${category}/$(shard_for "$pkgname")/${pkgname}/${pkgname}-${pkgver}-any.stars}"
@@ -1199,7 +1199,7 @@ convert_from_spec() {
     case "$group" in *Development*) category="dev-util" ;; *Library*) category="lib" ;; *System*) category="sys-apps" ;; esac
 
     info "  Package: $pkgname $pkgver | Source: $source0"; info ""
-    exec </dev/tty
+    [ -t 0 ] || exec </dev/tty 2>/dev/null || true
     printf "Category [%s]: " "$category"; read -r cat_in; [ -n "$cat_in" ] && category="$cat_in"
 
     output_file="${OUTPUT_FILE:-${RECIPES_DIR}/${category}/$(shard_for "$pkgname")/${pkgname}/${pkgname}-${pkgver}-any.stars}"
@@ -1264,7 +1264,7 @@ convert_from_cargo() {
     case "$pkgname" in *-rs|lib*) category="dev-rust" ;; esac
 
     info "  Crate: $pkgname $pkgver | Source: $src_url"; info ""
-    exec </dev/tty
+    [ -t 0 ] || exec </dev/tty 2>/dev/null || true
     printf "Category [%s]: " "$category"; read -r cat_in; [ -n "$cat_in" ] && category="$cat_in"
 
     output_file="${OUTPUT_FILE:-${RECIPES_DIR}/${category}/$(shard_for "$pkgname")/${pkgname}/${pkgname}-${pkgver}-any.stars}"
@@ -1318,7 +1318,7 @@ convert_from_npm() {
     pkg_body='    npm install --global --prefix="$PKGDIR/usr" --ignore-scripts'
 
     info "  Package: $pkgname $pkgver | Source: $src_url"; info ""
-    exec </dev/tty
+    [ -t 0 ] || exec </dev/tty 2>/dev/null || true
     printf "Category [dev-nodejs]: "; read -r cat_in; category="${cat_in:-dev-nodejs}"
 
     output_file="${OUTPUT_FILE:-${RECIPES_DIR}/${category}/$(shard_for "$pkgname")/${pkgname}/${pkgname}-${pkgver}-any.stars}"
@@ -1420,8 +1420,8 @@ cmd_lint() {
         else le "Missing \$PKG.$blk block"; fi
     done
 
-    opens=$(printf '%s\n' "$content" | grep -cE '^\$PKG\.[A-Za-z.]+.*[{]' || true)
-    closes=$(printf '%s\n' "$content" | grep -c '^};' || true)
+    opens=$(printf '%s\n' "$content" | grep -cE '^\$PKG\.[A-Za-z.]+.*[{]' 2>/dev/null || printf '0')
+    closes=$(printf '%s\n' "$content" | grep -c '^};' 2>/dev/null || printf '0')
     if [ "$opens" != "$closes" ]; then le "Mismatched blocks: $opens opened, $closes closed"
     else lo "Block balance OK ($opens blocks)"; fi
 

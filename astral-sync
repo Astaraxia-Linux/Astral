@@ -21,6 +21,7 @@ DOWNLOAD_RETRIES="${DOWNLOAD_RETRIES:-3}"
 JOB_DELAY="${JOB_DELAY:-0}"
 VERBOSE="${VERBOSE:-0}"
 FIX_CHECKSUMS="${FIX_CHECKSUMS:-0}"
+TMPDIR="${TMPDIR:-/tmp}"
 
 # Checksum state file — tracks which packages have been verified
 # Lives beside the index so it can be committed alongside it
@@ -60,6 +61,9 @@ Usage: astral-sync <command> [options]
   status                Index stats, recipe counts, checksum state
   list [<cat>]          List indexed packages (optional category filter)
   diff                  Show packages added/removed since last index
+  lint [--fix] [<cat>]  Audit recipes for hardcoded -j, inline flags,
+                        cmake/meson missing flag forwarding, use() calls.
+                        --fix auto-repairs items 1 (-j), 3 (cmake), 4 (meson).
 
 ━━━ Maintenance Commands ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -978,6 +982,218 @@ cmd_empty_checksums() {
 }
 
 # ============================================================
+# LINT
+# ============================================================
+
+# Extract the $PKG.Build and $PKG.Package blocks from a .stars file as plain text
+_lint_extract_blocks() {
+    _sf="$1"
+    awk '
+        /^\$PKG\.(Build|Package)[[:space:]]*(\{|:)/{in_block=1; next}
+        in_block && /^\};?[[:space:]]*$/{in_block=0; next}
+        in_block{print}
+    ' "$_sf"
+}
+
+# Lint one .stars file.  Prints findings and returns the number of warnings.
+_lint_one() {
+    _sf="$1"
+    _label="$2"
+    _w=0
+
+    _build_text=$(_lint_extract_blocks "$_sf")
+
+    # ── 1. Hardcoded -j<N> / -j$(nproc) ─────────────────────────────────
+    # Match -j$(nproc...) or -j<literal number>, but NOT the already-fixed -j${...}
+    if printf '%s\n' "$_build_text" | \
+            grep -qE '(make|ninja|cmake[[:space:]]+--build)[[:space:]].*-j(\$\(|[0-9])'; then
+        printf "${YELLOW}[WARN]${NC}  %-45s hardcoded -j — replace with -j\${JOBS:-\$(nproc)}\n" "$_label"
+        printf '%s\n' "$_build_text" \
+            | grep -nE '(make|ninja|cmake[[:space:]]+--build)[[:space:]].*-j(\$\(|[0-9])' \
+            | sed 's/^/         /'
+        _w=$((_w + 1))
+    fi
+
+    # ── 2. Inline flag overrides (report-only, never auto-fixed) ─────────
+    if printf '%s\n' "$_build_text" | \
+            grep -qE '^\s*(export\s+)?(CFLAGS|CXXFLAGS|LDFLAGS)\s*='; then
+        printf "${YELLOW}[WARN]${NC}  %-45s inline CFLAGS/CXXFLAGS/LDFLAGS override shadows make.conf\n" "$_label"
+        printf '%s\n' "$_build_text" \
+            | grep -nE '^\s*(export\s+)?(CFLAGS|CXXFLAGS|LDFLAGS)\s*=' \
+            | sed 's/^/         /'
+        _w=$((_w + 1))
+    fi
+
+    # ── 3. cmake without flag forwarding ─────────────────────────────────
+    if printf '%s\n' "$_build_text" | grep -qE 'cmake[[:space:]]+(-B|[./])'; then
+        if ! printf '%s\n' "$_build_text" | \
+                grep -qE 'CMAKE_C_FLAGS|CMAKE_CXX_FLAGS|CMAKE_EXE_LINKER_FLAGS'; then
+            printf "${YELLOW}[WARN]${NC}  %-45s cmake missing -DCMAKE_C_FLAGS=\"\$CFLAGS\" — make.conf flags not forwarded\n" "$_label"
+            _w=$((_w + 1))
+        fi
+    fi
+
+    # ── 4. meson without flag forwarding ─────────────────────────────────
+    if printf '%s\n' "$_build_text" | grep -qE 'meson[[:space:]]+(setup|configure)'; then
+        if ! printf '%s\n' "$_build_text" | \
+                grep -qE '(-Dc_args|-Dcpp_args|-Dc_link_args|--native-file)'; then
+            printf "${YELLOW}[WARN]${NC}  %-45s meson missing -Dc_args=\"\$CFLAGS\" — make.conf flags not forwarded\n" "$_label"
+            _w=$((_w + 1))
+        fi
+    fi
+
+    # ── 5. use() calls (report-only, never auto-fixed) ───────────────────
+    if printf '%s\n' "$_build_text" | grep -qE '\buse\s+[a-zA-Z_]'; then
+        printf "${YELLOW}[WARN]${NC}  %-45s calls use() — astral does not inject the helper, USE flags have no effect\n" "$_label"
+        printf '%s\n' "$_build_text" \
+            | grep -nE '\buse\s+[a-zA-Z_]' \
+            | sed 's/^/         /'
+        _w=$((_w + 1))
+    fi
+
+    return "$_w"
+}
+
+# Auto-fix one .stars file in-place.
+# Fixes items 1 (hardcoded -j), 3 (cmake flags), 4 (meson flags).
+# Items 2 (inline flag overrides) and 5 (use()) require human judgement.
+# Returns number of distinct fix types applied (0-3).
+_lint_fix_one() {
+    _sf="$1"
+    _label="$2"
+    _fixed=0
+
+    # ── Fix 1: -j$(nproc) → -j${JOBS:-$(nproc)} ─────────────────────────
+    if _lint_extract_blocks "$_sf" | \
+            grep -qE '(make|ninja|cmake[[:space:]]+--build)[[:space:]].*-j(\$\(|[0-9])'; then
+        sed -i 's/-j\$(nproc)/-j${JOBS:-$(nproc)}/g' "$_sf"
+        ok "  [$_label] ↻ -j\$(nproc) → -j\${JOBS:-\$(nproc)}"
+        _fixed=$((_fixed + 1))
+    fi
+
+    # ── Fix 3: cmake missing flag forwarding ─────────────────────────────
+    if _lint_extract_blocks "$_sf" | grep -qE 'cmake[[:space:]]+(-B|[./])'; then
+        if ! _lint_extract_blocks "$_sf" | \
+                grep -qE 'CMAKE_C_FLAGS|CMAKE_CXX_FLAGS|CMAKE_EXE_LINKER_FLAGS'; then
+            # Only match cmake as the first command on the line (after leading whitespace)
+            sed -i '/^[[:space:]]*cmake[[:space:]]\{1,\}\(-B[[:space:]]\{1,\}\S\{1,\}\|\.\.\?\([[:space:]]\|$\)\)/s|$| \\|
+/^[[:space:]]*cmake[[:space:]]\{1,\}\(-B[[:space:]]\{1,\}\S\{1,\}\|\.\.\?\([[:space:]]\|$\)\)/{
+    a\        -DCMAKE_C_FLAGS="$CFLAGS" \\
+    a\        -DCMAKE_CXX_FLAGS="$CXXFLAGS" \\
+    a\        -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS"
+}' "$_sf"
+            ok "  [$_label] ↻ added cmake flag forwarding"
+            _fixed=$((_fixed + 1))
+        fi
+    fi
+
+    # ── Fix 4: meson missing flag forwarding ─────────────────────────────
+    if _lint_extract_blocks "$_sf" | grep -qE 'meson[[:space:]]+(setup|configure)'; then
+        if ! _lint_extract_blocks "$_sf" | \
+                grep -qE '(-Dc_args|-Dcpp_args|-Dc_link_args|--native-file)'; then
+            sed -i '/^[[:space:]]*meson[[:space:]]\{1,\}\(setup\|configure\)/s|$| \\|
+/^[[:space:]]*meson[[:space:]]\{1,\}\(setup\|configure\)/{
+    a\        -Dc_args="$CFLAGS" \\
+    a\        -Dcpp_args="$CXXFLAGS" \\
+    a\        -Dc_link_args="$LDFLAGS"
+}' "$_sf"
+            ok "  [$_label] ↻ added meson flag forwarding"
+            _fixed=$((_fixed + 1))
+        fi
+    fi
+
+    return "$_fixed"
+}
+
+cmd_lint() {
+    _cat_filter=""
+    _fix=0
+
+    # Parse sub-options: lint [--fix] [<category>]
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --fix|-f) _fix=1; shift ;;
+            -*)       err "Unknown lint option: $1" ;;
+            *)        _cat_filter="$1"; shift ;;
+        esac
+    done
+
+    [ -d "$RECIPES_DIR" ] || err "Recipes directory not found: $RECIPES_DIR"
+
+    printf "${BOLD}Recipe lint${NC}"
+    [ -n "$_cat_filter" ] && printf " (category: %s)" "$_cat_filter"
+    [ "$_fix" -eq 1 ]     && printf " ${YELLOW}[--fix]${NC}"
+    printf "\n\n"
+
+    _total=0
+    _clean=0
+    _warn_total=0
+    _fix_total=0
+    _seen=""
+
+    find "$RECIPES_DIR" -mindepth 2 -maxdepth 4 -name "*.stars" 2>/dev/null | sort \
+        > "${TMPDIR:-/tmp}/astral-sync-lint-$$"
+
+    while IFS= read -r _sf; do
+        _rel=$(printf '%s' "$_sf" | sed "s|^${RECIPES_DIR}/||")
+        _cat=$(printf '%s' "$_rel" | cut -d/ -f1)
+
+        [ -n "$_cat_filter" ] && [ "$_cat" != "$_cat_filter" ] && continue
+
+        _basename=$(basename "$_sf" .stars)
+        _pkgname=$(printf '%s' "$_basename" | sed 's/-[0-9][^-]*-[^-]*$//;s/-git-[^-]*$//')
+        _label="${_cat}/${_pkgname}"
+
+        case " $_seen " in *" $_label "*) continue ;; esac
+        _seen="$_seen $_label"
+
+        _total=$((_total + 1))
+        _w=0
+        _lint_one "$_sf" "$_label" || _w=$?
+        _warn_total=$((_warn_total + _w))
+
+        if [ "$_w" -gt 0 ] && [ "$_fix" -eq 1 ]; then
+            _f=0
+            _lint_fix_one "$_sf" "$_label" || _f=$?
+            _fix_total=$((_fix_total + _f))
+        fi
+
+        [ "$_w" -eq 0 ] && _clean=$((_clean + 1))
+    done < "${TMPDIR:-/tmp}/astral-sync-lint-$$"
+    rm -f "${TMPDIR:-/tmp}/astral-sync-lint-$$"
+
+    printf "\n"
+    info "────────────────────────────────"
+    printf "Recipes checked: %d\n" "$_total"
+    printf "Clean:           %d\n" "$_clean"
+    printf "Warnings:        %d\n" "$_warn_total"
+    [ "$_fix" -eq 1 ] && printf "Fixes applied:   %d\n" "$_fix_total"
+    info "────────────────────────────────"
+
+    if [ "$_warn_total" -eq 0 ]; then
+        ok "All recipes are clean"
+    else
+        if [ "$_fix" -eq 1 ]; then
+            warn "$_warn_total warning(s) found, $_fix_total auto-fix(es) applied"
+            info "  Note: inline flag overrides and use() calls require manual review"
+        else
+            warn "$_warn_total warning(s) found  (run 'lint --fix' to auto-fix items 1, 3, 4)"
+            printf "\n"
+            info "Fix guide:"
+            info "  [1] Hardcoded -j:  replace -j\$(nproc) with -j\${JOBS:-\$(nproc)}"
+            info "  [2] Inline flags:  remove the override; astral exports CFLAGS from make.conf"
+            info "  [3] cmake flags:   add -DCMAKE_C_FLAGS=\"\$CFLAGS\" -DCMAKE_CXX_FLAGS=\"\$CXXFLAGS\""
+            info "                         -DCMAKE_EXE_LINKER_FLAGS=\"\$LDFLAGS\""
+            info "  [4] meson flags:   add -Dc_args=\"\$CFLAGS\" -Dcpp_args=\"\$CXXFLAGS\""
+            info "                         -Dc_link_args=\"\$LDFLAGS\""
+            info "  [5] use() calls:   USE flag injection not yet in astral — manual fix needed"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# ============================================================
 # LIST
 # ============================================================
 
@@ -1231,6 +1447,13 @@ while [ $# -gt 0 ]; do
             COMMAND="$1"
             shift
             ;;
+        lint)
+            # Stop global parsing here — remaining args (-f/--fix, category)
+            # belong to cmd_lint and must not be consumed by the global loop.
+            COMMAND="lint"
+            shift
+            break
+            ;;
         -r|--recipes)
             [ $# -gt 1 ] || err "--recipes requires an argument"
             RECIPES_DIR="$2"; shift 2
@@ -1307,6 +1530,9 @@ case "$COMMAND" in
         ;;
     diff)
         cmd_diff
+        ;;
+    lint)
+        cmd_lint "$@"
         ;;
     migrate)
         cmd_migrate

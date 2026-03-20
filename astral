@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v5.3.1.7 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
+# Astral v5.3.1.8 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
 # SOURCE-ONLY
-# V: 5 - Major . 3 - Minor . 1 - Patches . 7 - hotfixes
+# V: 5 - Major . 3 - Minor . 1 - Patches . 8 - hotfixes
 
-version="5.3.1.7 Main"
+version="5.3.1.8 Main"
 ASTRAL_PRODUCTION_DATE="2025-11-26"
 now_seconds=$(date +%s)
 prod_seconds=$(date -d "$ASTRAL_PRODUCTION_DATE" +%s)
@@ -3299,6 +3299,8 @@ Sandbox:
 Testing & Diagnostics:
   --test [mode]           Run test suite (all, quick)
   --validate <pkg>        Validate a recipe file
+  --check-recipe [pkg|all]  Audit recipes for hardcoded -j, flags, cmake/meson missing
+                            flag forwarding, and bare use() calls with no helper injected.
   --verify-integrity <pkg>     Verify installed package file integrity
   --verify-reproducible <pkg>  Verify package builds reproducibly
   --graph-deps <pkg>      Generate .dot dependency graph
@@ -3996,47 +3998,77 @@ parallel_build() {
     # Get topologically sorted order
     sorted_pkgs=$(topological_sort)
 
-    # Track running jobs
+    # Track running jobs and their exit codes via a temp dir
+    _pb_dir="$TMPDIR/astral-pb-$$"
+    mkdir -p "$_pb_dir"
     running_jobs=0
     job_pids=""
 
+    # Helper: reap any finished jobs from $job_pids.
+    # Updates running_jobs and job_pids in the caller's scope via temp files
+    # because POSIX sh has no nameref. Writes exit codes to $_pb_dir/<pid>.rc.
+    _pb_reap() {
+        _new_pids=""
+        for _rp_pid in $job_pids; do
+            if ! kill -0 "$_rp_pid" 2>/dev/null; then
+                # Process gone — reap it. Guard against double-wait (returns 127
+                # on an already-reaped PID on some shells).
+                _rc=0
+                wait "$_rp_pid" 2>/dev/null || _rc=$?
+                [ "$_rc" -eq 127 ] && _rc=0  # already reaped, not a real failure
+                printf '%d\n' "$_rc" > "$_pb_dir/${_rp_pid}.rc"
+                running_jobs=$((running_jobs - 1))
+            else
+                _new_pids="$_new_pids $_rp_pid"
+            fi
+        done
+        job_pids="$_new_pids"
+    }
+
     for pkg in $sorted_pkgs; do
-        # Wait if max jobs reached
-        while [ $running_jobs -ge $max_jobs ]; do
-            # Check for completed jobs
-            for pid in $job_pids; do
-                if ! kill -0 "$pid" 2>/dev/null; then
-                    # Job completed
-                    wait "$pid"
-                    exit_code=$?
-
-                    running_jobs=$((running_jobs - 1))
-                    job_pids=$(printf '%s\n' "$job_pids" | grep -v "^$pid$")
-
-                    if [ $exit_code -ne 0 ]; then
-                        err "Parallel build failed for a package"
-                    fi
-                fi
-            done
-
-            sleep 0.5
+        # Throttle: wait until a slot opens, polling without sleeping when
+        # a job has just been reaped so we don't waste a full 0.5s per slot.
+        while [ "$running_jobs" -ge "$max_jobs" ]; do
+            _before=$running_jobs
+            _pb_reap
+            # Only sleep if nothing was reaped (avoid busy-loop on slow builds)
+            [ "$running_jobs" -eq "$_before" ] && sleep 0.2
         done
 
-        # Start build in background
         info "[$((running_jobs + 1))/$max_jobs] Starting: $pkg"
-        (
-            sync_pkg_recursive "$pkg" 0 1
-        ) &
-
+        ( sync_pkg_recursive "$pkg" 0 1 ) &
         job_pid=$!
         job_pids="$job_pids $job_pid"
         running_jobs=$((running_jobs + 1))
     done
 
-    # Wait for all jobs to complete
+    # Drain: wait for each tracked PID explicitly — never call bare `wait`
+    # which would also reap unrelated background jobs from outer scopes.
     info "Waiting for all builds to complete..."
-    wait
+    _build_failed=0
+    for pid in $job_pids; do
+        _rc=0
+        wait "$pid" 2>/dev/null || _rc=$?
+        [ "$_rc" -eq 127 ] && _rc=0
+        if [ "$_rc" -ne 0 ]; then
+            warn "A parallel build job (pid $pid) failed with exit code $_rc"
+            _build_failed=1
+        fi
+    done
 
+    # Also check exit codes from jobs reaped during throttle phase
+    for _rcfile in "$_pb_dir"/*.rc; do
+        [ -f "$_rcfile" ] || continue
+        _rc=$(cat "$_rcfile")
+        if [ "$_rc" -ne 0 ]; then
+            warn "A parallel build job failed (exit code $_rc)"
+            _build_failed=1
+        fi
+    done
+
+    rm -rf "$_pb_dir"
+
+    [ "$_build_failed" -eq 1 ] && err "One or more parallel builds failed"
     info "✓ Parallel build complete"
 }
 
@@ -4053,7 +4085,6 @@ parallel_remove() {
 
     running_jobs=0
     job_pids=""
-    failed_pkgs=""
 
     for pkg in $packages; do
         # Resolve path before forking — resolve_installed_path is read-only
@@ -4062,26 +4093,26 @@ parallel_remove() {
             continue
         }
 
-        # Wait if at job limit
+        # Throttle: poll for finished jobs, sleep only when nothing reaped
         while [ "$running_jobs" -ge "$max_jobs" ]; do
-            new_pids=""
+            _new_pids=""
+            _reaped=0
             for pid in $job_pids; do
                 if ! kill -0 "$pid" 2>/dev/null; then
-                    wait "$pid"
-                    exit_code=$?
+                    _rc=0
+                    wait "$pid" 2>/dev/null || _rc=$?
+                    [ "$_rc" -eq 127 ] && _rc=0
                     running_jobs=$((running_jobs - 1))
-                    if [ "$exit_code" -ne 0 ]; then
-                        warn "A removal job (pid $pid) failed"
-                    fi
+                    _reaped=1
+                    [ "$_rc" -ne 0 ] && warn "A removal job (pid $pid) failed"
                 else
-                    new_pids="$new_pids $pid"
+                    _new_pids="$_new_pids $pid"
                 fi
             done
-            job_pids="$new_pids"
-            [ "$running_jobs" -ge "$max_jobs" ] && sleep 0.2
+            job_pids="$_new_pids"
+            [ "$_reaped" -eq 0 ] && sleep 0.2
         done
 
-        # Fork removal
         info "Removing: $pkg"
         ( remove_pkg_only "$pkg_path" ) &
         job_pid=$!
@@ -4089,10 +4120,13 @@ parallel_remove() {
         running_jobs=$((running_jobs + 1))
     done
 
-    # Wait for all remaining jobs
+    # Drain: wait only for PIDs still in job_pids (not already reaped above)
     info "Waiting for all removals to complete..."
     for pid in $job_pids; do
-        wait "$pid" || warn "A removal job (pid $pid) failed"
+        _rc=0
+        wait "$pid" 2>/dev/null || _rc=$?
+        [ "$_rc" -eq 127 ] && _rc=0
+        [ "$_rc" -ne 0 ] && warn "A removal job (pid $pid) failed"
     done
 
     info "✓ Parallel remove complete"
@@ -4119,26 +4153,26 @@ parallel_removedep() {
             continue
         }
 
-        # Wait if at job limit
+        # Throttle: poll for finished jobs, sleep only when nothing reaped
         while [ "$running_jobs" -ge "$max_jobs" ]; do
-            new_pids=""
+            _new_pids=""
+            _reaped=0
             for pid in $job_pids; do
                 if ! kill -0 "$pid" 2>/dev/null; then
-                    wait "$pid"
-                    exit_code=$?
+                    _rc=0
+                    wait "$pid" 2>/dev/null || _rc=$?
+                    [ "$_rc" -eq 127 ] && _rc=0
                     running_jobs=$((running_jobs - 1))
-                    if [ "$exit_code" -ne 0 ]; then
-                        warn "A removedep job (pid $pid) failed"
-                    fi
+                    _reaped=1
+                    [ "$_rc" -ne 0 ] && warn "A removedep job (pid $pid) failed"
                 else
-                    new_pids="$new_pids $pid"
+                    _new_pids="$_new_pids $pid"
                 fi
             done
-            job_pids="$new_pids"
-            [ "$running_jobs" -ge "$max_jobs" ] && sleep 0.2
+            job_pids="$_new_pids"
+            [ "$_reaped" -eq 0 ] && sleep 0.2
         done
 
-        # Fork — each removedep_pkg manages its own dep walk independently
         info "Removing with deps: $pkg"
         ( removedep_pkg "$pkg" ) &
         job_pid=$!
@@ -4146,9 +4180,13 @@ parallel_removedep() {
         running_jobs=$((running_jobs + 1))
     done
 
+    # Drain: wait only for PIDs still tracked (not already reaped above)
     info "Waiting for all removedep jobs to complete..."
     for pid in $job_pids; do
-        wait "$pid" || warn "A removedep job (pid $pid) failed"
+        _rc=0
+        wait "$pid" 2>/dev/null || _rc=$?
+        [ "$_rc" -eq 127 ] && _rc=0
+        [ "$_rc" -ne 0 ] && warn "A removedep job (pid $pid) failed"
     done
 
     info "✓ Parallel removedep complete"
@@ -6186,15 +6224,28 @@ parallel_download_sources() {
     # Open FIFO read/write so it is not closed between reads
     exec 3<>"$_fifo"
 
+    _dl_error_file="$TMPDIR/astral-dl-errors-$$"
+    rm -f "$_dl_error_file"
+
+    # Cleanup: close fd 3 and remove the FIFO.  Must run on both normal exit
+    # and on INT/TERM so the fd does not leak and the FIFO does not linger.
+    _dl_cleanup() {
+        exec 3>&- 2>/dev/null || true
+        rm -f "$_fifo" "$_dl_error_file"
+    }
+    # If the shell receives a signal while a subshell is mid-download and
+    # hasn't written its release token back yet, the FIFO token count
+    # permanently drops by one.  On the next call the pool would be one slot
+    # short and the last `read -r _token <&3` would block forever, hanging
+    # the entire build.  The trap aborts cleanly instead.
+    trap '_dl_cleanup; return 1' INT TERM
+
     # Pre-fill pool with $_jobs tokens
     _i=0
     while [ "$_i" -lt "$_jobs" ]; do
         printf '\n' >&3
         _i=$((_i + 1))
     done
-
-    _dl_error_file="$TMPDIR/astral-dl-errors-$$"
-    rm -f "$_dl_error_file"
 
     while IFS= read -r _line; do
         _line=$(printf '%s' "$_line" | tr -d '[:space:]')
@@ -6244,15 +6295,15 @@ parallel_download_sources() {
                     fi
                     ;;
             esac
-            # Release slot back to pool
+            # Release slot back to pool — runs even on error paths above
             printf '\n' >&3
         ) &
     done < "$_sources_file"
 
-    # Wait for all background jobs to finish
+    # Wait for all background jobs, then clean up
     wait
-    exec 3>&-
-    rm -f "$_fifo"
+    trap - INT TERM
+    _dl_cleanup
 
     # Report any errors
     if [ -f "$_dl_error_file" ]; then
@@ -6261,7 +6312,6 @@ parallel_download_sources() {
         rm -f "$_dl_error_file"
         return 1
     fi
-    rm -f "$_dl_error_file"
     return 0
 }
 
@@ -9717,6 +9767,28 @@ acquire_lock() {
     lockfile="${1:-$LOCK_FILE}"
     timeout="${2:-$LOCK_TIMEOUT}"
 
+    # Reentrant fast-path: if a parent astral already holds this lock, inherit
+    # it instead of competing.  horizon_run_stage() exports ASTRAL_LOCK_PID and
+    # ASTRAL_LOCK_FILE before calling sh stage.sh, so every `astral -C` inside
+    # the stage script sees these variables and skips straight to here.
+    # We double-check that the stated PID actually owns the lock right now to
+    # guard against stale env vars from a previous session.
+    if [ -n "${ASTRAL_LOCK_PID:-}" ] && [ -n "${ASTRAL_LOCK_FILE:-}" ]; then
+        if [ "$ASTRAL_LOCK_FILE" = "$lockfile" ]; then
+            _owner_pid=""
+            [ -f "${lockfile}.d/pid" ] && _owner_pid=$(cat "${lockfile}.d/pid" 2>/dev/null)
+            if [ "$_owner_pid" = "$ASTRAL_LOCK_PID" ] && kill -0 "$ASTRAL_LOCK_PID" 2>/dev/null; then
+                LOCK_INHERITED=1
+                LOCK_METHOD="inherited"
+                debug "Lock inherited from parent PID $ASTRAL_LOCK_PID"
+                return 0
+            fi
+            # Env vars set but lock not held by that PID — fall through to normal acquisition.
+            warn "ASTRAL_LOCK_PID set but lock not held by that PID; acquiring normally"
+        fi
+    fi
+
+    LOCK_INHERITED=0
     info "Acquiring package manager lock (timeout: ${timeout}s)..."
 
     # Create lock directory
@@ -9774,6 +9846,13 @@ acquire_lock() {
 release_lock() {
     lockfile="${1:-$LOCK_FILE}"
 
+    # Inherited lock: this instance did not acquire it, so it must not release
+    # it.  The owning parent astral will release it via its own EXIT trap.
+    if [ "${LOCK_INHERITED:-0}" = "1" ]; then
+        debug "Skipping lock release — inherited from parent PID ${ASTRAL_LOCK_PID:-?}"
+        return 0
+    fi
+
     case "${LOCK_METHOD:-mkdir}" in
         flock)
             # Close file descriptor 200
@@ -9787,6 +9866,9 @@ release_lock() {
         mkdir)
             # Remove directory
             rm -rf "${lockfile}.d"
+            ;;
+        inherited)
+            # Should not reach here given the guard above, but be safe.
             ;;
     esac
 
@@ -10472,6 +10554,17 @@ horizon_run_stage() {
     mkdir -p "$HORIZON_STATE"
     date > "$HORIZON_STATE/stage${stage}.start"
 
+    # Hand the lock off to child astral processes spawned by the stage script.
+    # Without this, every `astral -C <pkg>` inside stage.sh tries to acquire
+    # the same lock we already hold and deadlocks — kill -0 $$ succeeds because
+    # the parent (us) is still alive, so acquire_lock_mkdir never treats it as
+    # stale and just spins until LOCK_TIMEOUT.
+    # Also export LFS so stage scripts receive it even if the caller forgot to
+    # `export` it in their shell before invoking astral.
+    ASTRAL_LOCK_PID=$$
+    ASTRAL_LOCK_FILE="$LOCK_FILE"
+    export ASTRAL_LOCK_PID ASTRAL_LOCK_FILE LFS
+
     # Execute stage script
     info "Executing stage${stage}.sh..."
 
@@ -10504,6 +10597,9 @@ horizon_run_stage() {
     else
         err "Stage $stage failed. Check logs: $HORIZON_LOG"
     fi
+
+    # Clear lock handoff vars — nothing after this point should inherit them.
+    unset ASTRAL_LOCK_PID ASTRAL_LOCK_FILE
 }
 
 horizon_status() {
@@ -10788,6 +10884,206 @@ run_testsuite() {
     info "╰────────────────────────────────────────────────────────────────╯"
 
     [ $failed -eq 0 ] && return 0 || return 1
+}
+
+# === RECIPE HYGIENE CHECKER ===
+# Audits one or all recipes for issues that make make.conf flags ineffective:
+#   1. Hardcoded -j<N> or -j$(nproc) — overrides MAKEFLAGS job count
+#   2. Hardcoded CFLAGS/CXXFLAGS/LDFLAGS inline in the build block
+#   3. cmake build blocks missing -DCMAKE_C_FLAGS / -DCMAKE_CXX_FLAGS
+#   4. meson setup calls missing --native-file or -Dc_args / -Dcpp_args
+#   5. use() calls in build/package scripts with no injected helper
+#
+# Each finding is tagged WARN (best practice) or INFO (informational).
+# Returns 1 if any WARNs were found so the output can be checked in CI.
+
+# Audit a single expanded recipe directory and emit findings.
+# Returns number of warnings found.
+_check_one_recipe() {
+    _cr_rpath="$1"   # expanded recipe dir or .stars file path
+    _cr_label="$2"   # display label (category/pkgname)
+
+    _cr_warns=0
+
+    # Expand .stars to a temp dir if needed
+    _cr_tmp=""
+    case "$_cr_rpath" in
+        *.stars)
+            _cr_tmp="$TMPDIR/astral-hygiene-$$"
+            expand_stars_recipe "$_cr_rpath" "$_cr_tmp" "$_cr_label" 2>/dev/null || true
+            _cr_rpath="$_cr_tmp"
+            ;;
+    esac
+
+    # Collect all scripts to check
+    _cr_scripts=""
+    for _s in build package pre_install post_install; do
+        [ -f "$_cr_rpath/$_s" ] && _cr_scripts="$_cr_scripts $_cr_rpath/$_s"
+    done
+
+    # ── 1. Hardcoded -j<N> / -j$(nproc) ─────────────────────────────────
+    # Any explicit -j on make/ninja/cmake --build overrides MAKEFLAGS.
+    # Recipes should use ${JOBS:-$(nproc)} so the user can cap parallelism.
+    for _sf in $_cr_scripts; do
+        _sfn=$(basename "$_sf")
+        # Match: make -j4 / make -j$(nproc) / ninja -j8 / cmake --build ... -j$(nproc)
+        if grep -qE '(make|ninja|cmake[[:space:]]+--build)[[:space:]].*-j[0-9$(]' "$_sf" 2>/dev/null; then
+            printf "${YELLOW}[WARN]${NC}  %-40s %s: hardcoded -j — use \${JOBS:-\$(nproc)} instead of -j\$(nproc)\n" \
+                "$_cr_label" "$_sfn"
+            # Show the offending lines
+            grep -nE '(make|ninja|cmake[[:space:]]+--build)[[:space:]].*-j[0-9$(]' "$_sf" \
+                | sed "s/^/         line /"
+            _cr_warns=$((_cr_warns + 1))
+        fi
+    done
+
+    # ── 2. Inline CFLAGS/CXXFLAGS/LDFLAGS assignments ────────────────────
+    # e.g.  CFLAGS="-O2" ./configure  or  export CFLAGS="-march=native"
+    # These shadow the values exported by astral from make.conf.
+    for _sf in $_cr_scripts; do
+        _sfn=$(basename "$_sf")
+        if grep -qE '^\s*(export\s+)?(CFLAGS|CXXFLAGS|LDFLAGS)\s*=' "$_sf" 2>/dev/null; then
+            printf "${YELLOW}[WARN]${NC}  %-40s %s: inline flag override (CFLAGS/CXXFLAGS/LDFLAGS) shadows make.conf\n" \
+                "$_cr_label" "$_sfn"
+            grep -nE '^\s*(export\s+)?(CFLAGS|CXXFLAGS|LDFLAGS)\s*=' "$_sf" \
+                | sed "s/^/         line /"
+            _cr_warns=$((_cr_warns + 1))
+        fi
+    done
+
+    # ── 3. cmake without flag forwarding ─────────────────────────────────
+    # cmake ignores CFLAGS/LDFLAGS from the environment unless they are
+    # passed explicitly via -DCMAKE_C_FLAGS / -DCMAKE_EXE_LINKER_FLAGS etc.
+    if [ -f "$_cr_rpath/build" ] && grep -q 'cmake' "$_cr_rpath/build" 2>/dev/null; then
+        # Check: is cmake used for configuration (cmake -B or cmake ..) but
+        # -DCMAKE_C_FLAGS is absent?
+        if grep -qE 'cmake[[:space:]]+(-B|[./])' "$_cr_rpath/build" 2>/dev/null; then
+            if ! grep -qE 'CMAKE_C_FLAGS|CMAKE_CXX_FLAGS|CMAKE_EXE_LINKER_FLAGS' \
+                    "$_cr_rpath/build" 2>/dev/null; then
+                printf "${YELLOW}[WARN]${NC}  %-40s build: cmake recipe missing -DCMAKE_C_FLAGS=\"\$CFLAGS\" — make.conf CFLAGS not forwarded\n" \
+                    "$_cr_label"
+                _cr_warns=$((_cr_warns + 1))
+            fi
+        fi
+    fi
+
+    # ── 4. meson without flag forwarding ─────────────────────────────────
+    # meson setup reads CFLAGS only if passed as -Dc_args / -Dcpp_args or via
+    # a native file.  Bare `meson setup` silently drops make.conf flags.
+    if [ -f "$_cr_rpath/build" ] && grep -q 'meson' "$_cr_rpath/build" 2>/dev/null; then
+        if grep -qE 'meson[[:space:]]+(setup|configure|\.\.)' "$_cr_rpath/build" 2>/dev/null; then
+            if ! grep -qE '(-Dc_args|-Dcpp_args|-Dc_link_args|--native-file)' \
+                    "$_cr_rpath/build" 2>/dev/null; then
+                printf "${YELLOW}[WARN]${NC}  %-40s build: meson recipe missing -Dc_args=\"\$CFLAGS\" — make.conf CFLAGS not forwarded\n" \
+                    "$_cr_label"
+                _cr_warns=$((_cr_warns + 1))
+            fi
+        fi
+    fi
+
+    # ── 5. use() calls with no helper injected ────────────────────────────
+    # astral_inject_use_helpers() exists but is never called inside
+    # build_from_recipe_enhanced, so use() is undefined in recipe scripts.
+    # Flag any recipe that calls use() so the author knows it won't work.
+    for _sf in $_cr_scripts; do
+        _sfn=$(basename "$_sf")
+        if grep -qE '\buse\s+[a-zA-Z_]' "$_sf" 2>/dev/null; then
+            printf "${YELLOW}[WARN]${NC}  %-40s %s: calls use() but astral does not inject the helper — USE flags have no effect\n" \
+                "$_cr_label" "$_sfn"
+            grep -nE '\buse\s+[a-zA-Z_]' "$_sf" | sed "s/^/         line /"
+            _cr_warns=$((_cr_warns + 1))
+        fi
+    done
+
+    [ -n "$_cr_tmp" ] && rm -rf "$_cr_tmp"
+    return "$_cr_warns"
+}
+
+check_recipe_hygiene() {
+    _target="${1:-all}"
+
+    info "╭────────────────────────────────────────────────────────────────╮"
+    info "│                  Recipe Hygiene Check                          │"
+    info "│  Checks: hardcoded -j, inline flags, cmake/meson forwarding,   │"
+    info "│          bare use() calls                                      │"
+    info "╰────────────────────────────────────────────────────────────────╯"
+    info ""
+
+    _total_warns=0
+    _recipes_checked=0
+    _recipes_clean=0
+
+    if [ "$_target" = "all" ]; then
+        # Collect every .stars file and every legacy dir-recipe
+        _hygiene_list="$TMPDIR/astral-hygiene-list-$$"
+        find "$RECIPES_DIR" -mindepth 2 -maxdepth 4 \
+            \( -name "*.stars" -o -name "build" \) 2>/dev/null \
+            | grep -v '/\.astral' \
+            | sort > "$_hygiene_list"
+
+        _seen=""
+        while IFS= read -r _entry; do
+            case "$_entry" in
+                *.stars)
+                    _rpath="$_entry"
+                    _rel=$(printf '%s' "$_entry" | sed "s|^${RECIPES_DIR}/||")
+                    _label=$(printf '%s' "$_rel" | sed 's|/[^/]*\.stars$||')
+                    ;;
+                */build)
+                    _rpath=$(dirname "$_entry")
+                    _rel=$(printf '%s' "$_rpath" | sed "s|^${RECIPES_DIR}/||")
+                    _label="$_rel"
+                    ;;
+                *) continue ;;
+            esac
+
+            # Deduplicate: a .stars and its expanded dir can both appear
+            case " $_seen " in *" $_label "*) continue ;; esac
+            _seen="$_seen $_label"
+
+            _recipes_checked=$((_recipes_checked + 1))
+            _w=0
+            _check_one_recipe "$_rpath" "$_label" || _w=$?
+            if [ "$_w" -eq 0 ]; then
+                _recipes_clean=$((_recipes_clean + 1))
+            fi
+            _total_warns=$((_total_warns + _w))
+        done < "$_hygiene_list"
+        rm -f "$_hygiene_list"
+    else
+        # Single package
+        _rpath=$(recipe_path "$_target") || err "Recipe not found: $_target"
+        _label="$_target"
+        _recipes_checked=1
+        _w=0
+        _check_one_recipe "$_rpath" "$_label" || _w=$?
+        _total_warns=$_w
+        [ "$_w" -eq 0 ] && _recipes_clean=1
+    fi
+
+    info ""
+    info "────────────────────────────────────────────────────────────────"
+    printf "Checked:  %d recipe(s)\n" "$_recipes_checked"
+    printf "Clean:    %d\n" "$_recipes_clean"
+    printf "Warnings: %d\n" "$_total_warns"
+    info "────────────────────────────────────────────────────────────────"
+
+    if [ "$_total_warns" -eq 0 ]; then
+        info "✓ All checked recipes are clean"
+    else
+        warn "$_total_warns warning(s) found — see above for details"
+        info ""
+        info "Fixes:"
+        info "  -j hardcoded:     replace -j\$(nproc) with -j\${JOBS:-\$(nproc)}"
+        info "  inline flags:     remove the override; astral exports CFLAGS from make.conf"
+        info "  cmake flags:      add -DCMAKE_C_FLAGS=\"\$CFLAGS\" -DCMAKE_CXX_FLAGS=\"\$CXXFLAGS\""
+        info "                        -DCMAKE_EXE_LINKER_FLAGS=\"\$LDFLAGS\" to the cmake call"
+        info "  meson flags:      add -Dc_args=\"\$CFLAGS\" -Dcpp_args=\"\$CXXFLAGS\""
+        info "                        -Dc_link_args=\"\$LDFLAGS\" to meson setup"
+        info "  use() calls:      USE flags are not yet injected; track the issue upstream"
+        return 1
+    fi
+    return 0
 }
 
 # === RECIPE VALIDATION SYSTEM ===
@@ -12053,6 +12349,11 @@ start|stop|restart|enable|disable|status)
  --validate)
      [ $# -gt 1 ] || err "package name required"
      validate_recipe "$2"
+     ;;
+
+ --check-recipe)
+     _cr_target="${2:-all}"
+     check_recipe_hygiene "$_cr_target"
      ;;
 
 
