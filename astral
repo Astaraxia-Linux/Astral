@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v5.3.1.7 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
+# Astral v5.3.1.9 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
 # SOURCE-ONLY
-# V: 5 - Major . 3 - Minor . 1 - Patches . 7 - hotfixes
+# V: 5 - Major . 3 - Minor . 1 - Patches . 9 - hotfixes
 
-version="5.3.1.7 Main"
+version="5.3.1.9 Main"
 ASTRAL_PRODUCTION_DATE="2025-11-26"
 now_seconds=$(date +%s)
 prod_seconds=$(date -d "$ASTRAL_PRODUCTION_DATE" +%s)
@@ -7660,7 +7660,10 @@ SAFETY_WARNING
     fi
     cd "$buildtmp" || err "cd failed"
 
-    trap "rm -rf '$buildtmp'" EXIT
+    # Only clean up on successful exit — on failure the dir is preserved so
+    # 'astral -Re <pkg>' can resume from the interrupted stage.
+    _build_success=0
+    trap '[ "$_build_success" -eq 1 ] && rm -rf "$buildtmp" "$sandbox_root"' EXIT
 
     create_sandbox "$buildtmp" "$sandbox_root"
 
@@ -7789,6 +7792,7 @@ SAFETY_WARNING
         rm -rf "$stars_temp"
     fi
 
+    _build_success=1
     trap - EXIT
     # Commit transaction
     transaction_commit
@@ -9960,6 +9964,135 @@ clear_ccache() {
     info "ccache cleared"
 }
 
+# Top-level helper for interactive_dep_menu — must NOT be nested inside it
+# because POSIX sh / dash does not support nested function definitions.
+# Args: pkg_name indent is_last visited dep_type temp_tree temp_data
+build_interactive_tree() {
+    _bit_pkg="$1"
+    _bit_indent="$2"
+    _bit_is_last="${3:-0}"
+    _bit_visited="$4"
+    _bit_dep_type="${5:-required}"
+    _bit_tree="$6"
+    _bit_data="$7"
+
+    # Circular dependency check
+    case " $_bit_visited " in
+        *" $_bit_pkg "*)
+            _bit_branch=$([ "$_bit_is_last" -eq 1 ] && printf ' └─' || printf ' ├─')
+            printf '%s%s [CIRCULAR] %s\n' "$_bit_indent" "$_bit_branch" "$_bit_pkg" >> "$_bit_tree"
+            return 0
+            ;;
+    esac
+
+    _bit_visited="$_bit_visited $_bit_pkg"
+
+    _bit_status_icon=""
+    _bit_pkg_ver="unknown"
+    _bit_can_skip=0
+    _bit_is_optional=0
+    _bit_item_id=0
+
+    if is_pkg_installed "$_bit_pkg"; then
+        _bit_pkg_ver=$(get_installed_ver "$_bit_pkg")
+        _bit_status_icon="[✓✓]"
+    elif check_host_dependency "$_bit_pkg"; then
+        _bit_status_icon="[ ✓  ]"
+        _bit_can_skip=1
+        _bit_rpath=$(recipe_path "$_bit_pkg" 2>/dev/null || printf '')
+        if [ -n "$_bit_rpath" ]; then
+            _bit_pkg_ver=$(cat "$_bit_rpath/version" 2>/dev/null || printf 'host')
+        else
+            _bit_pkg_ver="host"
+        fi
+    else
+        _bit_status_icon="[  ]"
+        _bit_rpath=$(recipe_path "$_bit_pkg" 2>/dev/null || printf '')
+        [ -n "$_bit_rpath" ] && _bit_pkg_ver=$(cat "$_bit_rpath/version" 2>/dev/null || printf 'unknown')
+    fi
+
+    if [ "$_bit_dep_type" = "optional" ]; then
+        _bit_is_optional=1
+        _bit_status_icon="[OPT]"
+        _bit_can_skip=1
+    fi
+
+    if [ "$_bit_can_skip" -eq 1 ] || [ "$_bit_is_optional" -eq 1 ]; then
+        _bit_item_id=$(wc -l < "$_bit_data" | tr -d ' ')
+        _bit_item_id=$((_bit_item_id + 1))
+        printf '%d|%s|%s|%s|%d|%d\n' \
+            "$_bit_item_id" "$_bit_pkg" "$_bit_pkg_ver" "$_bit_dep_type" \
+            "$_bit_is_optional" "$_bit_can_skip" >> "$_bit_data"
+    fi
+
+    _bit_branch=$([ "$_bit_is_last" -eq 1 ] && printf ' └─' || printf ' ├─')
+    _bit_connector=$([ "$_bit_is_last" -eq 1 ] && printf '     ' || printf '│  ')
+    _bit_item_label=""
+    [ "$_bit_item_id" -gt 0 ] && _bit_item_label="[$_bit_item_id] "
+    _bit_opt_label=""
+    [ "$_bit_is_optional" -eq 1 ] && _bit_opt_label=" [OPTIONAL]"
+
+    printf '%s%s %s%s %s ─ %s%s\n' \
+        "$_bit_indent" "$_bit_branch" "$_bit_item_label" \
+        "$_bit_status_icon" "$_bit_pkg" "$_bit_pkg_ver" "$_bit_opt_label" >> "$_bit_tree"
+
+    # Resolve recipe path for dep reading
+    _bit_rpath=$(recipe_path "$_bit_pkg" 2>/dev/null || printf '')
+    if [ -n "$_bit_rpath" ]; then
+        if [ -f "$_bit_rpath" ]; then
+            case "$_bit_rpath" in
+                *.stars)
+                    _bit_expand="$TMPDIR/astral-expand-$_bit_pkg-$$"
+                    expand_stars_recipe "$_bit_rpath" "$_bit_expand" "$_bit_pkg" 2>/dev/null || true
+                    _bit_rpath="$_bit_expand"
+                    ;;
+            esac
+        fi
+
+        _bit_required_deps=""
+        _bit_build_deps=""
+        _bit_runtime_deps=""
+        _bit_optional_deps=""
+        [ -f "$_bit_rpath/depends"  ] && _bit_required_deps=$(grep -v '^#' "$_bit_rpath/depends"  2>/dev/null | grep -v '^$' | awk '{print $1}')
+        [ -f "$_bit_rpath/bdepends" ] && _bit_build_deps=$(grep -v '^#'    "$_bit_rpath/bdepends" 2>/dev/null | grep -v '^$' | awk '{print $1}')
+        [ -f "$_bit_rpath/rdepends" ] && _bit_runtime_deps=$(grep -v '^#'  "$_bit_rpath/rdepends" 2>/dev/null | grep -v '^$' | awk '{print $1}')
+        [ -f "$_bit_rpath/optional" ] && _bit_optional_deps=$(grep -v '^#' "$_bit_rpath/optional" 2>/dev/null | grep -v '^$' | awk '{print $1}')
+
+        _bit_dep_list=""
+        _bit_dep_count=0
+        _bit_seen=""
+
+        for _bd in $_bit_required_deps $_bit_build_deps $_bit_runtime_deps; do
+            _bd=$(printf '%s' "$_bd" | tr -d '[:space:]')
+            [ -z "$_bd" ] && continue
+            case " $_bit_seen " in *" $_bd "*) continue ;; esac
+            _bit_seen="$_bit_seen $_bd"
+            _bit_dep_list="$_bit_dep_list required:$_bd"
+            _bit_dep_count=$((_bit_dep_count + 1))
+        done
+        for _bd in $_bit_optional_deps; do
+            _bd=$(printf '%s' "$_bd" | tr -d '[:space:]')
+            [ -z "$_bd" ] && continue
+            case " $_bit_seen " in *" $_bd "*) continue ;; esac
+            _bit_seen="$_bit_seen $_bd"
+            _bit_dep_list="$_bit_dep_list optional:$_bd"
+            _bit_dep_count=$((_bit_dep_count + 1))
+        done
+
+        _bit_current=0
+        for _bit_dep_entry in $_bit_dep_list; do
+            _bit_current=$((_bit_current + 1))
+            _bit_dtype=$(printf '%s' "$_bit_dep_entry" | cut -d':' -f1)
+            _bit_dname=$(printf '%s' "$_bit_dep_entry" | cut -d':' -f2)
+            _bit_new_indent="$_bit_indent$_bit_connector"
+            _bit_dep_is_last=0
+            [ "$_bit_current" -eq "$_bit_dep_count" ] && _bit_dep_is_last=1
+            build_interactive_tree "$_bit_dname" "$_bit_new_indent" "$_bit_dep_is_last" \
+                "$_bit_visited" "$_bit_dtype" "$_bit_tree" "$_bit_data"
+        done
+    fi
+}
+
 interactive_dep_menu() {
     pkg="$1"
     skip_confirmation="${2:-0}"
@@ -9982,165 +10115,7 @@ interactive_dep_menu() {
 
     dep_counter=0
 
-    # Build interactive dependency tree
-    build_interactive_tree() {
-        local pkg_name="$1"
-        local indent="$2"
-        local is_last="${3:-0}"
-        local visited="$4"
-        local dep_type="${5:-required}"
-
-        # Circular dependency check
-        case " $visited " in
-            *" $pkg_name "*)
-                local branch="$([ $is_last -eq 1 ] && echo ' └─' || echo ' ├─')"
-                printf '%s%s [CIRCULAR] %s\n' "$indent" "$branch" "$pkg_name" >> "$temp_tree"
-                return 0
-                ;;
-        esac
-
-        visited="$visited $pkg_name"
-
-        # Get package status
-        local status_icon=""
-        local status_symbol=""
-        local pkg_ver="unknown"
-        local can_skip=0
-        local is_optional=0
-        local item_id=0
-
-        # Check installation status
-        if is_pkg_installed "$pkg_name"; then
-            pkg_ver=$(get_installed_ver "$pkg_name")
-            status_icon="[✓✓]"
-            status_symbol="✓✓"
-        elif check_host_dependency "$pkg_name"; then
-            status_icon="[ ✓  ]"
-            status_symbol="✓ "
-            can_skip=1
-
-            local rpath=$(recipe_path "$pkg_name" 2>/dev/null || echo "")
-            if [ -n "$rpath" ]; then
-                pkg_ver=$(cat "$rpath/version" 2>/dev/null || echo "host")
-            else
-                pkg_ver="host"
-            fi
-        else
-            status_icon="[  ]"
-            status_symbol="  "
-
-            local rpath=$(recipe_path "$pkg_name" 2>/dev/null || echo "")
-            if [ -n "$rpath" ]; then
-                pkg_ver=$(cat "$rpath/version" 2>/dev/null || echo "unknown")
-            fi
-        fi
-
-        # Check if optional
-        if [ "$dep_type" = "optional" ]; then
-            is_optional=1
-            status_icon="[OPT]"
-            status_symbol="OPT"
-            can_skip=1
-        fi
-
-        # Create selectable item if can be skipped
-        if [ $can_skip -eq 1 ] || [ $is_optional -eq 1 ]; then
-            dep_counter=$((dep_counter + 1))
-            item_id=$dep_counter
-
-            printf '%d|%s|%s|%s|%d|%d\n' "$item_id" "$pkg_name" "$pkg_ver" "$dep_type" "$is_optional" "$can_skip" >> "$temp_data"
-        fi
-
-        # Build tree line
-        local branch="$([ $is_last -eq 1 ] && echo ' └─' || echo ' ├─')"
-        local connector="$([ $is_last -eq 1 ] && echo '     ' || echo '│  ')"
-
-        local item_label=""
-        if [ $item_id -gt 0 ]; then
-            item_label="[$item_id] "
-        fi
-
-        local opt_label=""
-        if [ $is_optional -eq 1 ]; then
-            opt_label=" [OPTIONAL]"
-        fi
-
-        printf '%s%s %s%s %s ─ %s%s\n' "$indent" "$branch" "$item_label" "$status_icon" "$pkg_name" "$pkg_ver" "$opt_label" >> "$temp_tree"
-
-        # Get dependencies
-        local rpath=$(recipe_path "$pkg_name" 2>/dev/null || echo "")
-        if [ -n "$rpath" ]; then
-            if [ -f "$rpath" ]; then
-                case "$rpath" in
-                    *.stars)
-                        local temp_expand="$TMPDIR/astral-expand-$pkg_name-$$"
-                        expand_stars_recipe "$rpath" "$temp_expand" "$pkg_name" 2>/dev/null || true
-                        rpath="$temp_expand"
-                        ;;
-                esac
-            fi
-
-            local required_deps="" build_deps="" runtime_deps="" optional_deps=""
-
-            if [ -f "$rpath/depends" ]; then
-                required_deps=$(grep -v '^#' "$rpath/depends" 2>/dev/null | grep -v '^$' | awk '{print $1}' || true)
-            fi
-
-            if [ -f "$rpath/bdepends" ]; then
-                build_deps=$(grep -v '^#' "$rpath/bdepends" 2>/dev/null | grep -v '^$' | awk '{print $1}' || true)
-            fi
-
-            if [ -f "$rpath/rdepends" ]; then
-                runtime_deps=$(grep -v '^#' "$rpath/rdepends" 2>/dev/null | grep -v '^$' | awk '{print $1}' || true)
-            fi
-
-            if [ -f "$rpath/optional" ]; then
-                optional_deps=$(grep -v '^#' "$rpath/optional" 2>/dev/null | grep -v '^$' | awk '{print $1}' || true)
-            fi
-
-            local all_deps="$required_deps $build_deps $runtime_deps"
-            local dep_list=""
-            local dep_count=0
-            local seen_deps=""
-
-            for d in $all_deps; do
-                d=$(printf '%s' "$d" | tr -d '[:space:]')
-                [ -z "$d" ] && continue
-                # Skip duplicates
-                case " $seen_deps " in *" $d "*) continue ;; esac
-                seen_deps="$seen_deps $d"
-                dep_list="$dep_list required:$d"
-                dep_count=$((dep_count + 1))
-            done
-
-            for d in $optional_deps; do
-                d=$(printf '%s' "$d" | tr -d '[:space:]')
-                [ -z "$d" ] && continue
-                case " $seen_deps " in *" $d "*) continue ;; esac
-                seen_deps="$seen_deps $d"
-                dep_list="$dep_list optional:$d"
-                dep_count=$((dep_count + 1))
-            done
-
-            if [ $dep_count -gt 0 ]; then
-                local current=0
-                for dep_entry in $dep_list; do
-                    current=$((current + 1))
-
-                    local dtype=$(printf '%s' "$dep_entry" | cut -d':' -f1)
-                    local dname=$(printf '%s' "$dep_entry" | cut -d':' -f2)
-
-                    local new_indent="$indent$connector"
-                    local dep_is_last=0
-                    [ $current -eq $dep_count ] && dep_is_last=1
-
-                    build_interactive_tree "$dname" "$new_indent" "$dep_is_last" "$visited" "$dtype"
-                done
-            fi
-        fi
-    }
-
-    build_interactive_tree "$pkg" "" 1 "" "required"
+    build_interactive_tree "$pkg" "" 1 "" "required" "$temp_tree" "$temp_data"
 
     cat "$temp_tree"
     info ""
