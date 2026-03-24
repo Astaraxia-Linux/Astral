@@ -34,4 +34,4 @@ By contributing, you agree that your contributions will be licensed under GPL-3.
 
 ## Developer Certificate of Origin (DCO)
 
-All commits must include a Signed-off-by tag. See [AGENTS.md](DOCS/AGENTS.md) for details.
+All commits must include a Signed-off-by tag. See [AGENTS.md](../AGENTS.md) for details.

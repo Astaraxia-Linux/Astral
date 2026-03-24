@@ -53,7 +53,6 @@ Basic development tools (git, gcc, make, editors) should not be listed.
 Example:
 
 `Assisted-by: Claude:claude-4.6-opus coccinelle sparse`
-<<<<<<< HEAD
 
 ## AI Agent Pre-Flight Checklist
 
@@ -85,5 +84,3 @@ BEFORE presenting code or commands to the user, verify compliance with these rul
 ### 5. Communication
 - [ ] **Comments**: Removed all "what" comments; only "why" remains for complex logic.
 - [ ] **Review Cycle**: Reminded the user that PR reviews typically take **two weeks**.
-=======
->>>>>>> b0ffa73 (Fixed astral, and astral-setup.)

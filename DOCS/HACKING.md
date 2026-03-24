@@ -5,7 +5,7 @@ This guide covers the development workflow for the Astral project.
 ## Prerequisites
 
 - POSIX-compliant shell (/bin/sh)
-- C++17 compiler
+- C++23 compiler (GCC 13+ or Clang 17+)
 - Make
 - git
 

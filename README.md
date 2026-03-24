@@ -107,7 +107,7 @@ man astral-recipegen
 man astral-sync
 
 # Configuration file format
-man astral-stars    # section 5
+man 5 astral.stars  # section 5
 ```
 
 ### Configuration
@@ -1210,6 +1210,6 @@ If you made it this far, congratulations. You're either very thorough, very bore
 
 ---
 
-**Last updated**: 17 March 2026 (GMT+8)  
-**Documentation version**: 5.1  
+**Last updated**: 24 March 2026 (GMT+8)  
+**Documentation version**: 5.3  
 **Sanity level**: Questionable, as always

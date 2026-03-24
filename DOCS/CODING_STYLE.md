@@ -133,17 +133,17 @@ The C++ code follows modern C++ practices with some project-specific conventions
 
 - Use 4 spaces for indentation.
 - No tabs.
-- Use single indentation (4 spaces) for continuation lines, including function parameters.
+- Use 4 spaces for continuation lines, including function parameters. Do not align to the opening parenthesis.
 
 ```cpp
-// Good - single indentation for parameters
+// Good - 4-space indent for parameters
 void some_function(
-        int param_one,
-        bool param_two) {
+    int param_one,
+    bool param_two) {
     // function body
 }
 
-// Good - single indentation for condition continuations
+// Good - 4-space indent for condition continuations
 if (some_long_condition &&
     another_condition) {
     do_something();

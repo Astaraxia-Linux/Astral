@@ -42,12 +42,16 @@ astral (main script)
      |
      +---> astral-env (C++ environment manager)
                |
-               +---> config/ (configuration)
-               +---> lock/ (lockfile handling)
-               +---> repo/ (package repository)
-               +---> store/ (package store)
-               +---> snap/ (snapshots)
-               +---> system/ (system integration)
+               +---> config/ (make.conf / astral.stars parsing)
+               +---> env/ (environment config, activation)
+               +---> fetch/ (source fetching)
+               +---> lock/ (lockfile, dependency resolver)
+               +---> repo/ (index, registry, installer)
+               +---> snap/ (snapshot management)
+               +---> snapd/ (snapshot daemon, inotify watcher)
+               +---> store/ (package store / entry tracking)
+               +---> system/ (applier, differ, applicators, system_conf)
+               +---> util/ (process helpers, temp dirs)
 ```
 
 ## Key Design Decisions

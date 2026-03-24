@@ -3,7 +3,7 @@
 > *"Now with 100% more dependency separation!"*
 
 Version: 3.0  
-Last Updated: 8 January 2026  
+Last Updated: 24 March 2026  
 For: Astral Package Manager
 
 ---
@@ -917,7 +917,7 @@ $PKG.Depend.BDepends: {
 ## See Also
 
 - [Astral Documentation](README.md)
-- [astral-recipegen Documentation](RECIPEGEN.md)
+- [astral-recipegen Documentation](astral-recipegen Docs.md)
 - [Contributing Guide](CONTRIBUTING.md)
 
 ---
