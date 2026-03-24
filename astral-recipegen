@@ -1,12 +1,12 @@
 #!/bin/sh
 # astral-recipegen - Recipe generator for Astral package manager
-# Version: 3.0.0
+# Version: 3.0.1
 # Supports: v1 (@SECTION), v2 ($PKG.*), v3 (separated deps)
 # Converts: PKGBUILD, ebuild, .spec, Cargo.toml, package.json, directory
 
 set -eu
 
-VERSION="3.0.0"
+VERSION="3.0.1"
 RECIPES_DIR=${RECIPES_DIR:-/usr/src/astral/recipes}
 TMPDIR=${TMPDIR:-/tmp}
 BIN_DIR=${BIN_DIR:-/usr/src/astral/bin}
@@ -1008,7 +1008,7 @@ convert_from_ebuild() {
     [ ! -f "$eb" ] && err "ebuild not found: $eb"
 
     info "╔════════════════════════════════════════════════════════════════╗"
-    info "║          Converting Gentoo ebuild → .stars                    ║"
+    info "║          Converting Gentoo ebuild → .stars                     ║"
     info "╚════════════════════════════════════════════════════════════════╝"; info ""
 
     filename=$(basename -- "$eb" .ebuild)
@@ -1165,7 +1165,7 @@ convert_from_spec() {
     [ ! -f "$spec" ] && err ".spec not found: $spec"
 
     info "╔════════════════════════════════════════════════════════════════╗"
-    info "║          Converting RPM .spec → .stars                        ║"
+    info "║          Converting RPM .spec → .stars                         ║"
     info "╚════════════════════════════════════════════════════════════════╝"; info ""
 
     _get() { grep -iE "^$1:[[:space:]]" "$spec" | head -n1 | sed "s/^[^:]*:[[:space:]]*//"; }
@@ -1245,7 +1245,7 @@ convert_from_cargo() {
     [ ! -f "$cargo_toml" ] && err "Cargo.toml not found: $cargo_toml"
 
     info "╔════════════════════════════════════════════════════════════════╗"
-    info "║          Converting Cargo.toml → .stars                       ║"
+    info "║          Converting Cargo.toml → .stars                        ║"
     info "╚════════════════════════════════════════════════════════════════╝"; info ""
 
     in_pkg=0; pkgname=""; pkgver=""; description=""; homepage=""; license_c=""
@@ -1307,7 +1307,7 @@ convert_from_npm() {
     [ ! -f "$pkg_json" ] && err "package.json not found: $pkg_json"
 
     info "╔════════════════════════════════════════════════════════════════╗"
-    info "║          Converting package.json → .stars                     ║"
+    info "║          Converting package.json → .stars                      ║"
     info "╚════════════════════════════════════════════════════════════════╝"; info ""
 
     _jstr() { grep "\"$1\"" "$pkg_json" | head -n1 | sed 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*//' | tr -d '",' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
@@ -1513,7 +1513,7 @@ cmd_compile() {
     [ ! -f "$recipe" ] && err "Recipe not found: $recipe"
 
     info "╔════════════════════════════════════════════════════════════════╗"
-    info "║          Compiling Binary Package from .stars                 ║"
+    info "║          Compiling Binary Package from .stars                  ║"
     info "╚════════════════════════════════════════════════════════════════╝"
     info ""
 
@@ -1644,7 +1644,8 @@ cmd_compile() {
     # Output paths: bin/<arch>/<cat>/<s>/<pkg>-<ver>-<arch>.tar.bz2
     tarball_name="${pkg_name}-${version}-${arch}.tar.bz2"
     bin_shard=$(shard_for "$pkg_name")
-    bin_cat_dir="${BIN_DIR}/${arch}/${category}/${bin_shard}"
+    _abs_bin_dir="$(cd "${BIN_DIR}" 2>/dev/null && pwd || realpath "${BIN_DIR}")"
+    bin_cat_dir="${_abs_bin_dir}/${arch}/${category}/${bin_shard}"
     mkdir -p "$bin_cat_dir"
 
     # Pack binary tarball from PKGDIR
@@ -1723,7 +1724,7 @@ cmd_make_font() {
     read -r styles_in
     styles="${styles_in:-Regular}"
 
-    font_family_dir="${FONT_DIR}/${family}"
+    font_family_dir="$(cd "${FONT_DIR}" 2>/dev/null && pwd || realpath "${FONT_DIR}")/${family}"
     mkdir -p "$font_family_dir"
 
     tarball_name="${family}-f${font_type}${nerd_suffix}.tar.bz2"
