@@ -9,6 +9,8 @@ set -eu
 VERSION="3.0.0"
 RECIPES_DIR=${RECIPES_DIR:-/usr/src/astral/recipes}
 TMPDIR=${TMPDIR:-/tmp}
+BIN_DIR=${BIN_DIR:-/usr/src/astral/bin}
+FONT_DIR=${FONT_DIR:-/usr/src/astral/font}
 
 err()  { printf '\033[1;31mERROR:\033[0m %s\n'   "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
@@ -55,6 +57,12 @@ Usage: astral-recipegen [options] <command> [args...]
   convert|migrate <r> [ver]      Convert recipe between versions
   batch-convert <dir> [ver]      Convert all recipes in a directory
 
+━━━ Build & Font Commands ━━━━━━━━━━━━━━━━━━
+
+  compile <recipe.stars> [arch]         Compile recipe → binary tarball + pointer
+  make-font <family> [ttf|otf]          Package fonts + write pointer .stars
+                     [--nerd] [<dir>]
+
 ━━━ Utility Commands ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   checksum <url> [algo]          Download URL and print checksum
@@ -69,6 +77,8 @@ Usage: astral-recipegen [options] <command> [args...]
 
   -o, --output <file>     Output file (default: auto)
   -d, --dir <dir>         Recipe directory (default: $RECIPES_DIR)
+  --bin-dir <dir>         Binary output root  (default: $BIN_DIR)
+  --font-dir <dir>        Font output root    (default: $FONT_DIR)
   -f, --format <ver>      Output format: v1, v2, v3 (default: v3)
   -v, --version           Show version
   -h, --help              Show this help
@@ -87,6 +97,8 @@ Usage: astral-recipegen [options] <command> [args...]
   astral-recipegen lint /usr/src/astral/recipes/app-editors/nano.stars
   astral-recipegen search nano
   astral-recipegen batch-convert /usr/src/astral/recipes/app-editors
+  astral-recipegen compile /usr/src/astral/recipes/app-misc/f/fastfetch/fastfetch-2.41.0-any.stars
+  astral-recipegen make-font JetBrainsMono ttf --nerd ~/Downloads/JBM/
 USAGE
     exit 0
 }
@@ -1489,6 +1501,271 @@ cmd_batch_convert() {
     info ""; info "Done."
 }
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COMPILE  build a source recipe into a binary tarball + pointer .stars
+# ─────────────────────────────────────────────────────────────────────────────
+
+cmd_compile() {
+    recipe="$1"
+    arch="${2:-$(uname -m)}"
+    [ -z "$recipe" ] && err "Usage: astral-recipegen compile <recipe.stars> [arch]"
+    [ ! -f "$recipe" ] && err "Recipe not found: $recipe"
+
+    info "╔════════════════════════════════════════════════════════════════╗"
+    info "║          Compiling Binary Package from .stars                 ║"
+    info "╚════════════════════════════════════════════════════════════════╝"
+    info ""
+
+    # Derive package name from filename: <pkg>-<ver>-<arch>.stars
+    bname=$(basename "$recipe" .stars)
+    pkg_name=$(printf '%s' "$bname" | awk -F'-' '{
+        name=""
+        for (i=1; i<=NF; i++) {
+            if ($i ~ /^[0-9]/) break
+            if (name == "") name = $i
+            else name = name "-" $i
+        }
+        print name
+    }')
+    [ -z "$pkg_name" ] && pkg_name="$bname"
+
+    # Parse recipe metadata into a temp directory
+    metadir=$(mktemp -d "$TMPDIR/astral-compile-meta.XXXXXX")
+    trap "rm -rf '$metadir'" EXIT
+    ver_str=$(detect_recipe_version "$recipe")
+    case "$ver_str" in
+        v1)    parse_v1_recipe "$recipe" "$metadir" ;;
+        v2|v3) parse_v2_recipe "$recipe" "$metadir" ;;
+        *)     err "Unrecognised recipe format: $ver_str" ;;
+    esac
+
+    version=$(cat "$metadir/version"         2>/dev/null | tr -d '[:space:]')
+    [ -z "$version" ] && err "Could not read Version from recipe"
+    category=$(cat "$metadir/category"       2>/dev/null | tr -d '[:space:]')
+    [ -z "$category" ] && category="app-misc"
+    description=$(cat "$metadir/description" 2>/dev/null)
+    homepage=$(cat    "$metadir/homepage"     2>/dev/null)
+    rdepends=$(cat    "$metadir/rdepends"     2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+    [ -z "$rdepends" ] && \
+        rdepends=$(cat "$metadir/depends"     2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+    source_url=$(cat  "$metadir/sources"      2>/dev/null | grep -v '^[[:space:]]*$' | head -n1)
+    build_script=$(cat   "$metadir/build"     2>/dev/null)
+    package_script=$(cat "$metadir/package"   2>/dev/null)
+
+    # parse_v2_recipe does not extract checksums — do it inline
+    checksums_raw=$(awk '/\$PKG\.Checksums/,/};/{if(!/\$PKG\.Checksums|^};/) print}' \
+        "$recipe" 2>/dev/null || true)
+
+    info "  Package:  $pkg_name $version"
+    info "  Category: $category"
+    info "  Arch:     $arch"
+    [ -n "$source_url" ] && info "  Source:   $source_url"
+    info ""
+
+    # Build workspace
+    workdir=$(mktemp -d "$TMPDIR/astral-build.XXXXXX")
+    SRCDIR="$workdir/src"
+    PKGDIR="$workdir/pkg"
+    mkdir -p "$SRCDIR" "$PKGDIR"
+
+    # Download source tarball
+    if [ -n "$source_url" ]; then
+        step "Downloading source..."
+        src_file=$(basename -- "$source_url" | sed 's/?.*//')
+        curl -fSL "$source_url" -o "$SRCDIR/$src_file" || err "Download failed: $source_url"
+
+        # Verify checksums before extracting
+        if [ -n "$checksums_raw" ]; then
+            step "Verifying checksums..."
+            printf '%s\n' "$checksums_raw" | while IFS= read -r line; do
+                line=$(printf '%s' "$line" | sed 's/^[[:space:]]*//')
+                case "$line" in ''|\#*) continue ;; esac
+                algo=$(printf '%s' "$line" | cut -d: -f1)
+                rest=$(printf '%s' "$line" | cut -d: -f2-)
+                hash=$(printf '%s' "$rest" | awk '{print $1}')
+                fname=$(printf '%s' "$rest" | awk '{$1=""; sub(/^ /,""); print}')
+                chk_target="$SRCDIR/$fname"
+                [ ! -f "$chk_target" ] && { warn "Checksum target not found: $fname"; continue; }
+                case "$algo" in
+                    sha256) actual=$(sha256sum "$chk_target" | awk '{print $1}') ;;
+                    sha512) actual=$(sha512sum "$chk_target" | awk '{print $1}') ;;
+                    md5)    actual=$(md5sum    "$chk_target" | awk '{print $1}') ;;
+                    *)      warn "Unknown checksum algorithm: $algo"; continue ;;
+                esac
+                if [ "$actual" = "$hash" ]; then ok "Checksum OK: $fname"
+                else err "Checksum MISMATCH: $fname\n  expected: $hash\n  got:      $actual"
+                fi
+            done
+        fi
+
+        # Extract archive
+        step "Extracting $src_file..."
+        (cd "$SRCDIR" && case "$src_file" in
+            *.tar.gz|*.tgz)    tar -xzf  "$src_file" ;;
+            *.tar.bz2|*.tbz)   tar -xjf  "$src_file" ;;
+            *.tar.xz|*.txz)    tar -xJf  "$src_file" ;;
+            *.tar.zst|*.tzst)  tar --zstd -xf "$src_file" 2>/dev/null || \
+                                zstd -d "$src_file" --stdout | tar -x ;;
+            *.zip)             unzip -q  "$src_file" ;;
+            *.crate)           tar -xzf  "$src_file" ;;
+            *)                 warn "Unknown archive format: $src_file" ;;
+        esac) || err "Extraction failed"
+    else
+        warn "No source URL — build script must provide its own sources"
+    fi
+
+    # Export build environment
+    export PKG_NAME="$pkg_name"
+    export PKG_VERSION="$version"
+    export PKGDIR
+    export SRCDIR
+    export JOBS="${JOBS:-$(nproc 2>/dev/null || echo 1)}"
+
+    # Run Build section
+    if [ -n "$build_script" ]; then
+        step "Building $pkg_name-$version..."
+        sh -euc "$build_script" || err "Build step failed"
+    else
+        warn "No \$PKG.Build section — skipping build step"
+    fi
+
+    # Run Package section (installs into PKGDIR)
+    if [ -n "$package_script" ]; then
+        step "Staging package files..."
+        sh -euc "$package_script" || err "Package step failed"
+    else
+        warn "No \$PKG.Package section — PKGDIR may be empty"
+    fi
+
+    [ -z "$(ls -A "$PKGDIR" 2>/dev/null)" ] && \
+        warn "PKGDIR is empty — the Package section may not have installed any files"
+
+    # Output paths: bin/<arch>/<cat>/<s>/<pkg>-<ver>-<arch>.tar.bz2
+    tarball_name="${pkg_name}-${version}-${arch}.tar.bz2"
+    bin_shard=$(shard_for "$pkg_name")
+    bin_cat_dir="${BIN_DIR}/${arch}/${category}/${bin_shard}"
+    mkdir -p "$bin_cat_dir"
+
+    # Pack binary tarball from PKGDIR
+    step "Packing binary tarball: $tarball_name"
+    (cd "$PKGDIR" && tar -cjf "${bin_cat_dir}/${tarball_name}" .) \
+        || err "Failed to create binary tarball"
+
+    # Write pointer .stars: bin/<arch>/<cat>/<s>/<pkg>-<ver>.stars
+    pointer_file="${bin_cat_dir}/${pkg_name}-${version}.stars"
+    step "Writing pointer recipe: $(basename "$pointer_file")"
+    {
+        printf '$PKG.Version = "3"\n\n'
+        printf '$PKG.Metadata: {\n'
+        printf '    Version = "%s"\n'      "$version"
+        printf '    Description = "%s"\n'  "$description"
+        printf '    Homepage = "%s"\n'     "$homepage"
+        printf '    Category = "%s"\n'     "$category"
+        printf '    Arch = "%s"\n'         "$arch"
+        printf '    Type = "binary"\n'
+        printf '};\n\n'
+        printf '$PKG.Depend.RDepends: {\n'
+        if [ -n "$rdepends" ]; then
+            printf '%s\n' "$rdepends" | tr ' ' '\n' | while read -r dep; do
+                [ -z "$dep" ] && continue
+                printf '    %s\n' "$dep"
+            done
+        fi
+        printf '};\n'
+    } > "$pointer_file"
+
+    ok "Binary tarball: ${bin_cat_dir}/${tarball_name}"
+    ok "Pointer recipe: $pointer_file"
+    info ""
+    info "  Next step — rebuild the repo index:  astral-sync gen-index"
+
+    rm -rf "$workdir" "$metadir"
+    trap - EXIT
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAKE-FONT  package font files + generate font pointer .stars
+# ─────────────────────────────────────────────────────────────────────────────
+
+cmd_make_font() {
+    # make-font <family> [ttf|otf] [--nerd] [<font_src_dir>]
+    [ $# -lt 1 ] && err "Usage: astral-recipegen make-font <family> [ttf|otf] [--nerd] [<font_src_dir>]"
+    family="$1"; shift
+    font_type="ttf"; nerd="false"; font_src_dir=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            ttf|otf) font_type="$1" ;;
+            --nerd)  nerd="true" ;;
+            -*)      warn "Unknown option: $1" ;;
+            *)       if [ -d "$1" ]; then font_src_dir="$1"
+                     else warn "Skipping unrecognised argument (not a directory): $1"
+                     fi ;;
+        esac
+        shift
+    done
+
+    nerd_suffix=""; [ "$nerd" = "true" ] && nerd_suffix="-nerd"
+
+    info "╔════════════════════════════════════════════════════════════════╗"
+    info "║          Generating Font Pointer .stars                       ║"
+    info "╚════════════════════════════════════════════════════════════════╝"
+    info ""
+    info "  Family:     $family"
+    info "  Font type:  $font_type"
+    info "  Nerd font:  $nerd"
+    [ -n "$font_src_dir" ] && info "  Source dir: $font_src_dir"
+    info ""
+
+    [ -t 0 ] || exec </dev/tty 2>/dev/null || true
+    printf "Font styles (space-separated, e.g. Regular Bold Italic BoldItalic) [Regular]: "
+    read -r styles_in
+    styles="${styles_in:-Regular}"
+
+    font_family_dir="${FONT_DIR}/${family}"
+    mkdir -p "$font_family_dir"
+
+    tarball_name="${family}-f${font_type}${nerd_suffix}.tar.bz2"
+    stars_name="${family}-f${font_type}${nerd_suffix}.stars"
+
+    # Pack font files into tarball when a source directory is supplied
+    if [ -n "$font_src_dir" ]; then
+        n_fonts=$(find "$font_src_dir" -iname "*.${font_type}" 2>/dev/null | wc -l)
+        [ "$n_fonts" -eq 0 ] && err "No .${font_type} files found in: $font_src_dir"
+        step "Packaging $n_fonts .${font_type} file(s) from: $font_src_dir"
+
+        tmp_pack=$(mktemp -d "$TMPDIR/astral-font.XXXXXX")
+        trap "rm -rf '$tmp_pack'" EXIT
+        mkdir -p "$tmp_pack/$family"
+        find "$font_src_dir" -iname "*.${font_type}" | while read -r ff; do
+            cp "$ff" "$tmp_pack/$family/"
+        done
+        (cd "$tmp_pack" && tar -cjf "${font_family_dir}/${tarball_name}" "${family}/") \
+            || err "Failed to create font tarball"
+        rm -rf "$tmp_pack"
+        trap - EXIT
+        ok "Font tarball:  ${font_family_dir}/${tarball_name}"
+    fi
+
+    # Write font pointer .stars: font/<family>/<family>-f<type>[-nerd].stars
+    pointer_file="${font_family_dir}/${stars_name}"
+    step "Writing font pointer: $stars_name"
+    {
+        printf '$FONT.Metadata: {\n'
+        printf '    Family   = "%s"\n' "$family"
+        printf '    Style    = "%s"\n' "$styles"
+        printf '    FontType = "%s"\n' "$font_type"
+        printf '    Nerd     = "%s"\n' "$nerd"
+        printf '};\n'
+    } > "$pointer_file"
+
+    ok "Font pointer:  $pointer_file"
+    [ -z "$font_src_dir" ] && \
+        info "  Tip: pass a directory to also package font files into a tarball"
+    info "  Next step — rebuild the repo index:  astral-sync gen-index"
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1503,6 +1780,8 @@ while [ $# -gt 0 ]; do
         -o|--output)  [ $# -lt 2 ] && err "Missing arg for $1"; OUTPUT_FILE="$2"; shift 2 ;;
         -f|--format)  [ $# -lt 2 ] && err "Missing arg for $1"; OUTPUT_FORMAT="$2"; shift 2 ;;
         -d|--dir)     [ $# -lt 2 ] && err "Missing arg for $1"; RECIPES_DIR="$2"; shift 2 ;;
+        --bin-dir)    [ $# -lt 2 ] && err "Missing arg for $1"; BIN_DIR="$2";     shift 2 ;;
+        --font-dir)   [ $# -lt 2 ] && err "Missing arg for $1"; FONT_DIR="$2";    shift 2 ;;
         -*)           err "Unknown option: $1" ;;
         *)            break ;;
     esac
@@ -1558,6 +1837,12 @@ case "$command" in
     search)
         [ $# -lt 1 ] && err "Usage: astral-recipegen search <term>"
         cmd_search "$1" ;;
+    compile)
+        [ $# -lt 1 ] && err "Usage: astral-recipegen compile <recipe.stars> [arch]"
+        cmd_compile "$1" "${2:-$(uname -m)}" ;;
+    make-font)
+        [ $# -lt 1 ] && err "Usage: astral-recipegen make-font <family> [ttf|otf] [--nerd] [<font_src_dir>]"
+        cmd_make_font "$@" ;;
     *)
         err "Unknown command: $command. Run with --help for usage." ;;
 esac

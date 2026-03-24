@@ -249,7 +249,7 @@ scan_recipes() {
 # ============================================================
 
 # Scan the bin directory and emit lines: arch category pkgname version
-# Directory layout: bin/<arch>/<category>/<shard>/<pkgname>/*.stars
+# Directory layout: bin/<arch>/<category>/<pkgname>-<ver>.stars
 scan_bins() {
     _dir="$1"
     [ -d "$_dir" ] || return 0
@@ -262,14 +262,20 @@ scan_bins() {
             _cat=$(basename "$catdir")
             case "$_cat" in .*|_*) continue ;; esac
 
-            # Sharded layout: cat/s/pkg/*.stars
-            find "$catdir" -mindepth 2 -maxdepth 2 -type f -name "*.stars" 2>/dev/null | sort | \
+            # Flat layout: <cat>/<pkgname>-<ver>.stars (no sharding)
+            find "$catdir" -mindepth 1 -maxdepth 1 -type f -name "*.stars" 2>/dev/null | sort | \
             while read -r sf; do
-                _pkgname=$(dirname "$sf" | xargs basename)
+                _bn=$(basename "$sf" .stars)
                 _ver=$(extract_version_from_stars "$sf")
                 if [ -z "$_ver" ] || [ "$_ver" = "unknown" ]; then
-                    _bn=$(basename "$sf" .stars)
-                    _ver=$(printf '%s' "$_bn" | sed "s/^${_pkgname}-//")
+                    # Fallback: parse ver from filename <pkgname>-<ver>[-<arch>]
+                    _ver=$(printf '%s' "$_bn" | sed 's/.*-\([0-9][^-]*\).*/\1/')
+                fi
+                # pkgname: strip trailing -<ver> and optional -<arch>
+                if [ -n "$_ver" ] && [ "$_ver" != "unknown" ]; then
+                    _pkgname=$(printf '%s' "$_bn" | sed "s/-${_ver}.*//")
+                else
+                    _pkgname=$_bn
                 fi
                 printf '%s %s %s %s\n' "$_arch" "$_cat" "$_pkgname" "${_ver:-unknown}"
             done
