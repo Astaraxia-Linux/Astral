@@ -169,7 +169,7 @@ extract_function_body() {
 }
 
 # Adapt Arch/Gentoo/RPM variable names to Astral equivalents in build scripts.
-# IMPORTANT: do NOT wrap replacements in quotes — bash's declare -f already
+# IMPORTANT: do NOT wrap replacements in quotes bash's declare -f already
 # emits the surrounding quotes. Adding them here produces ""$PKGDIR"".
 adapt_build_script() {
     sed \
@@ -787,7 +787,7 @@ generate_from_git() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FROM-PKGBUILD  (FIXED — actually extracts build() and package() bodies)
+# FROM-PKGBUILD  (FIXED actually extracts build() and package() bodies)
 # ─────────────────────────────────────────────────────────────────────────────
 
 convert_from_pkgbuild() {
@@ -844,16 +844,16 @@ convert_from_pkgbuild() {
         # Collect function bodies with proper brace-depth tracking
         if [ -n "$state" ]; then
             case "$line" in
-                # Opening brace — skip the outer { at depth 0
+                # Opening brace skip the outer { at depth 0
                 '{'*) _fn_depth=$((_fn_depth + 1))
                       [ "$_fn_depth" -eq 1 ] && continue ;;
-                # Closing brace — if it closes the function, stop collecting
+                # Closing brace if it closes the function, stop collecting
                 '}'*) _fn_depth=$((_fn_depth - 1))
                       if [ "$_fn_depth" -le 0 ]; then
                           state=""; _fn_depth=0; continue
                       fi ;;
             esac
-            # Append line + real newline (POSIX sh — $'\n' is bash-only)
+            # Append line + real newline (POSIX sh $'\n' is bash-only)
             if [ "$state" = "build" ]; then
                 build_body="${build_body}${line}
 "
@@ -941,7 +941,7 @@ convert_from_pkgbuild() {
         | sed 's/[[:space:]]*;[[:space:]]*$//' \
         | sed '/^[[:space:]]*$/d')
     [ -z "$build_body" ]   && build_body="    # No build() in source PKGBUILD"
-    [ -z "$package_body" ] && package_body="    # Could not extract package() — review PKGBUILD manually"
+    [ -z "$package_body" ] && package_body="    # Could not extract package() review PKGBUILD manually"
 
     # Category heuristic (same as before)
     category="app-misc"
@@ -983,12 +983,12 @@ convert_from_pkgbuild() {
     esac
 
     ok "Converted: $output_file"
-    warn "Review build/package sections — shell variables may need adaptation."
+    warn "Review build/package sections shell variables may need adaptation."
     [ -n "$license" ] && info "  License: $license"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FROM-EBUILD  (NEW — Gentoo)
+# FROM-EBUILD  (NEW Gentoo)
 # ─────────────────────────────────────────────────────────────────────────────
 
 convert_from_ebuild() {
@@ -1140,12 +1140,12 @@ convert_from_ebuild() {
     esac
 
     ok "Converted: $output_file"
-    warn "Gentoo eclasses not emulated — review build section."
+    warn "Gentoo eclasses not emulated review build section."
     [ -n "$license" ] && info "  License: $license"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FROM-SPEC  (NEW — RPM)
+# FROM-SPEC  (NEW RPM)
 # ─────────────────────────────────────────────────────────────────────────────
 
 convert_from_spec() {
@@ -1225,7 +1225,7 @@ convert_from_spec() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FROM-CARGO  (NEW — Rust)
+# FROM-CARGO  (NEW Rust)
 # ─────────────────────────────────────────────────────────────────────────────
 
 convert_from_cargo() {
@@ -1258,7 +1258,7 @@ convert_from_cargo() {
     pkg_body="    install -Dm755 target/release/${pkgname} \"\$PKGDIR/usr/bin/${pkgname}\""
 
     grep -q '^\[\[bin\]\]' "$cargo_toml" 2>/dev/null && \
-        warn "Multiple [[bin]] targets — only '$pkgname' installed. Review package section."
+        warn "Multiple [[bin]] targets only '$pkgname' installed. Review package section."
 
     category="app-misc"
     case "$pkgname" in *-rs|lib*) category="dev-rust" ;; esac
@@ -1287,7 +1287,7 @@ convert_from_cargo() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FROM-NPM  (NEW — Node.js)
+# FROM-NPM  (NEW Node.js)
 # ─────────────────────────────────────────────────────────────────────────────
 
 convert_from_npm() {
@@ -1412,7 +1412,7 @@ cmd_lint() {
     if printf '%s\n' "$content" | grep -q '\$PKG\.Checksums'; then
         if printf '%s\n' "$content" | grep -qE '(sha256|sha512|md5):[a-fA-F0-9]{32,}'; then
             lo "Checksums present"
-        else lw "No valid checksum hash found — add before packaging"; fi
+        else lw "No valid checksum hash found add before packaging"; fi
     else le "Missing \$PKG.Checksums block"; fi
 
     for blk in Build Package; do
@@ -1426,12 +1426,12 @@ cmd_lint() {
     else lo "Block balance OK ($opens blocks)"; fi
 
     printf '%s\n' "$content" | grep -q '\$PKG\.Depend\.Depends' && \
-        lw "Legacy \$PKG.Depend.Depends — split into BDepends/RDepends for v3"
+        lw "Legacy \$PKG.Depend.Depends split into BDepends/RDepends for v3"
     printf '%s\n' "$content" | grep -qE '\$pkgdir|\$srcdir' && \
-        lw "PKGBUILD variables (\$pkgdir, \$srcdir) — adapt to \$PKGDIR, \$SRCDIR"
+        lw "PKGBUILD variables (\$pkgdir, \$srcdir) adapt to \$PKGDIR, \$SRCDIR"
 
     info ""
-    if [ "$errors" -eq 0 ] && [ "$warnings" -eq 0 ]; then ok "Clean — 0 errors, 0 warnings"
+    if [ "$errors" -eq 0 ] && [ "$warnings" -eq 0 ]; then ok "Clean 0 errors, 0 warnings"
     else printf '  Errors: \033[1;31m%d\033[0m  Warnings: \033[1;33m%d\033[0m\n' "$errors" "$warnings"; fi
     [ "$errors" -gt 0 ] && return 1; return 0
 }

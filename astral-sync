@@ -8,7 +8,7 @@
 
 set -eu
 
-VERSION="1.1.6"
+VERSION="1.1.8"
 RECIPES_DIR="${RECIPES_DIR:-./recipes}"
 OUTPUT_DIR="${OUTPUT_DIR:-.}"
 INDEX_FILE="${OUTPUT_DIR}/astral.index"
@@ -19,9 +19,13 @@ DRY_RUN="${DRY_RUN:-0}"
 PARALLEL_JOBS="${PARALLEL_JOBS:-8}"
 DOWNLOAD_RETRIES="${DOWNLOAD_RETRIES:-3}"
 JOB_DELAY="${JOB_DELAY:-0}"
+GEN_REPO=""
+GEN_DIR="."
+GEN_OUT="astral.index"
+BIN_DIR="${BIN_DIR:-}"
+FONT_DIR="${FONT_DIR:-}"
 VERBOSE="${VERBOSE:-0}"
 FIX_CHECKSUMS="${FIX_CHECKSUMS:-0}"
-TMPDIR="${TMPDIR:-/tmp}"
 
 # Checksum state file — tracks which packages have been verified
 # Lives beside the index so it can be committed alongside it
@@ -61,9 +65,6 @@ Usage: astral-sync <command> [options]
   status                Index stats, recipe counts, checksum state
   list [<cat>]          List indexed packages (optional category filter)
   diff                  Show packages added/removed since last index
-  lint [--fix] [<cat>]  Audit recipes for hardcoded -j, inline flags,
-                        cmake/meson missing flag forwarding, use() calls.
-                        --fix auto-repairs items 1 (-j), 3 (cmake), 4 (meson).
 
 ━━━ Maintenance Commands ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -82,7 +83,7 @@ Usage: astral-sync <command> [options]
   -p, --push            Auto-push after generating (same as sync)
   -f, --fix             Auto-fix wrong checksums in .stars files
   -j, --jobs <n>        Parallel download jobs (default: 8)
-  -r, --retries <n>     Download retry attempts on failure (default: 3)
+  -R, --retries <n>     Download retry attempts on failure (default: 3)
   -n, --dry-run         Show what would happen, make no changes
   -v, --verbose         Verbose output
   -V, --version         Show version
@@ -94,6 +95,8 @@ Environment:
   AUTO_PUSH=1    Auto-push after generate
   FIX_CHECKSUMS=1  Auto-fix wrong checksums
   DRY_RUN=1      Dry run mode
+  BIN_DIR        Binary packages directory
+  FONT_DIR       Font packages directory
 
 Examples:
   astral-sync status
@@ -242,94 +245,242 @@ scan_recipes() {
 }
 
 # ============================================================
+# BIN SCANNING
+# ============================================================
+
+# Scan the bin directory and emit lines: arch category pkgname version
+# Directory layout: bin/<arch>/<category>/<shard>/<pkgname>/*.stars
+scan_bins() {
+    _dir="$1"
+    [ -d "$_dir" ] || return 0
+
+    find "$_dir" -mindepth 1 -maxdepth 1 -type d | sort | while read -r archdir; do
+        _arch=$(basename "$archdir")
+        case "$_arch" in .*|_*) continue ;; esac
+
+        find "$archdir" -mindepth 1 -maxdepth 1 -type d | sort | while read -r catdir; do
+            _cat=$(basename "$catdir")
+            case "$_cat" in .*|_*) continue ;; esac
+
+            # Sharded layout: cat/s/pkg/*.stars
+            find "$catdir" -mindepth 2 -maxdepth 2 -type f -name "*.stars" 2>/dev/null | sort | \
+            while read -r sf; do
+                _pkgname=$(dirname "$sf" | xargs basename)
+                _ver=$(extract_version_from_stars "$sf")
+                if [ -z "$_ver" ] || [ "$_ver" = "unknown" ]; then
+                    _bn=$(basename "$sf" .stars)
+                    _ver=$(printf '%s' "$_bn" | sed "s/^${_pkgname}-//")
+                fi
+                printf '%s %s %s %s\n' "$_arch" "$_cat" "$_pkgname" "${_ver:-unknown}"
+            done
+        done
+    done
+}
+
+# ============================================================
+# FONT SCANNING
+# ============================================================
+
+# Scan the font directory and emit lines: family fontname variant
+# Directory layout: font/<family>/<fontname>/*-f-<variant>.stars
+# The -f separator distinguishes version from font variant name.
+scan_fonts() {
+    _dir="$1"
+    [ -d "$_dir" ] || return 0
+
+    find "$_dir" -mindepth 1 -maxdepth 1 -type d | sort | while read -r familydir; do
+        _family=$(basename "$familydir")
+        case "$_family" in .*|_*) continue ;; esac
+
+        find "$familydir" -mindepth 1 -maxdepth 1 -type d | sort | while read -r fontdir; do
+            _fontname=$(basename "$fontdir")
+            case "$_fontname" in .*|_*) continue ;; esac
+
+            find "$fontdir" -maxdepth 1 -type f -name "*-f-*.stars" 2>/dev/null | sort | \
+            while read -r sf; do
+                _bn=$(basename "$sf" .stars)
+                # iosevka-f-mono → mono → Mono
+                _variant=$(printf '%s' "$_bn" | sed 's/.*-f-//')
+                _variant=$(printf '%s' "$_variant" | \
+                    awk '{printf "%s%s", toupper(substr($0,1,1)), substr($0,2)}')
+                printf '%s %s %s\n' "$_family" "$_fontname" "$_variant"
+            done
+        done
+    done
+}
+
+# ============================================================
+# ============================================================
 # INDEX GENERATION
 # ============================================================
 
 cmd_generate() {
-    step "Scanning recipes: $RECIPES_DIR"
+    _base="${GEN_DIR:-.}"
+    _rdir="${RECIPES_DIR:-$_base/recipes}"
+    _bdir="${BIN_DIR:-$_base/bin}"
+    _fdir="${FONT_DIR:-$_base/font}"
+    _rname="${GEN_REPO:-${REPO_NAME}}"
 
-    # Collect all entries grouped by category
-    _tmpfile=$(mktemp "${TMPDIR:-/tmp}/astral-sync-scan.XXXXXX")
+    step "Scanning: $_base"
 
-    scan_recipes "$RECIPES_DIR" > "$_tmpfile"
+    _rtmp=$(mktemp "${TMPDIR:-/tmp}/astral-recipes.XXXXXX")
+    _btmp=$(mktemp "${TMPDIR:-/tmp}/astral-bins.XXXXXX")
+    _ftmp=$(mktemp "${TMPDIR:-/tmp}/astral-fonts.XXXXXX")
 
-    _total=$(wc -l < "$_tmpfile" | tr -d ' ')
-    info "  found $_total packages"
+    # Scan source recipes → cat pkg version
+    if [ -d "$_rdir" ]; then
+        scan_recipes "$_rdir" | \
+        while read -r _cat _pkg _arch _ver; do
+            printf '%s %s %s\n' "$_cat" "$_pkg" "$_ver"
+        done | sort -u > "$_rtmp"
+        _rcount=$(wc -l < "$_rtmp" | tr -d ' ')
+        info "  recipes: $_rcount versions"
+    fi
+
+    # Scan binary packages → arch cat pkg version
+    if [ -d "$_bdir" ]; then
+        scan_bins "$_bdir" | sort -u > "$_btmp"
+        _bcount=$(wc -l < "$_btmp" | tr -d ' ')
+        info "  bin:     $_bcount versions"
+    fi
+
+    # Scan font packages → family fontname variant
+    if [ -d "$_fdir" ]; then
+        scan_fonts "$_fdir" | sort -u > "$_ftmp"
+        _fcount=$(wc -l < "$_ftmp" | tr -d ' ')
+        info "  font:    $_fcount variants"
+    fi
+
+    # Count unique packages (distinct category/name pairs in recipes)
+    _total=$(sort -u "$_rtmp" 2>/dev/null | \
+        awk '{print $1"/"$2}' | sort -u | wc -l | tr -d ' ')
 
     if [ "$DRY_RUN" -eq 1 ]; then
         info "[dry-run] Would write index to: $INDEX_FILE"
-        info "[dry-run] Contents would be:"
-        awk '
-        {
-            cat=$1; pkg=$2; arch=$3; ver=$4
-            if (cat != prev_cat) {
-                if (prev_cat != "") {
-                    print "# " prev_cat " (" cat_count " package" (cat_count==1?"":"s") ")"
-                    print prev_cat ": {"
-                    for (i=1; i<=cat_count; i++) print lines[i]
-                    print "}"
-                    print ""
-                }
-                prev_cat=cat; cat_count=0
-            }
-            cat_count++
-            lines[cat_count]="  " pkg " | " arch " | " ver
-        }
-        END {
-            if (prev_cat != "") {
-                print "# " prev_cat " (" cat_count " package" (cat_count==1?"":"s") ")"
-                print prev_cat ": {"
-                for (i=1; i<=cat_count; i++) print lines[i]
-                print "}"
-            }
-        }' "$_tmpfile"
-        rm -f "$_tmpfile"
+        rm -f "$_rtmp" "$_btmp" "$_ftmp"
         return 0
     fi
 
     mkdir -p "$OUTPUT_DIR"
 
-    # Write the index
     {
-        printf '# Astral Repository Index v2.0\n'
-        printf '# Format: category/package | arch | version\n'
-        printf '# Generated by astral-sync v%s on %s\n' "$VERSION" "$(date -u '+%Y-%m-%d %H:%M UTC')"
-        printf '# Repository: %s\n' "$REPO_NAME"
+        printf '# Astral Repository Index v2.1\n'
+        printf '# v2.1 nested: /recipes, /bin, /font sections\n'
+        printf '# Generated by astral-sync v%s on %s\n' \
+            "$VERSION" "$(date -u '+%Y-%m-%d %H:%M UTC')"
+        printf '# Repository: %s\n' "$_rname"
         printf '# Packages: %s\n' "$_total"
         printf '\n'
 
-        awk '
-        {
-            cat=$1; pkg=$2; arch=$3; ver=$4
-            if (cat != prev_cat) {
-                if (prev_cat != "") {
-                    print "# " prev_cat " (" cat_count " package" (cat_count==1?"":"s") ")"
-                    print prev_cat ": {"
-                    for (i=1; i<=cat_count; i++) print lines[i]
-                    print "}"
-                    print ""
+        # /recipes section — nested: category → package → versions
+        if [ -s "$_rtmp" ]; then
+            awk '
+            BEGIN { print "/recipes: {"; prev_cat=""; prev_pkg="" }
+            {
+                cat=$1; pkg=$2; ver=$3
+                if (cat != prev_cat) {
+                    if (prev_pkg != "") { print "    }" }
+                    if (prev_cat != "") { print "  }" }
+                    printf "  %s: {\n", cat
+                    prev_cat=cat; prev_pkg=""
                 }
-                prev_cat=cat; cat_count=0
+                if (pkg != prev_pkg) {
+                    if (prev_pkg != "") { print "    }" }
+                    printf "    %s: {\n", pkg
+                    prev_pkg=pkg
+                }
+                printf "      %s\n", ver
             }
-            cat_count++
-            lines[cat_count]="  " pkg " | " arch " | " ver
-        }
-        END {
-            if (prev_cat != "") {
-                print "# " prev_cat " (" cat_count " package" (cat_count==1?"":"s") ")"
-                print prev_cat ": {"
-                for (i=1; i<=cat_count; i++) print lines[i]
+            END {
+                if (prev_pkg != "") { print "    }" }
+                if (prev_cat != "") { print "  }" }
                 print "}"
+            }' "$_rtmp"
+            printf '\n'
+        fi
+
+        # /bin section — nested: arch → category → package → versions
+        if [ -s "$_btmp" ]; then
+            awk '
+            BEGIN { print "/bin: {"; prev_arch=""; prev_cat=""; prev_pkg="" }
+            {
+                arch=$1; cat=$2; pkg=$3; ver=$4
+                if (arch != prev_arch) {
+                    if (prev_pkg != "") { print "        }" }
+                    if (prev_cat != "") { print "      }" }
+                    if (prev_arch != "") { print "    }" }
+                    printf "  %s: {\n", arch
+                    prev_arch=arch; prev_cat=""; prev_pkg=""
+                }
+                if (cat != prev_cat) {
+                    if (prev_pkg != "") { print "        }" }
+                    if (prev_cat != "") { print "      }" }
+                    printf "    %s: {\n", cat
+                    prev_cat=cat; prev_pkg=""
+                }
+                if (pkg != prev_pkg) {
+                    if (prev_pkg != "") { print "        }" }
+                    printf "      %s: {\n", pkg
+                    prev_pkg=pkg
+                }
+                printf "        %s\n", ver
             }
-        }' "$_tmpfile"
+            END {
+                if (prev_pkg != "") { print "        }" }
+                if (prev_cat != "") { print "      }" }
+                if (prev_arch != "") { print "    }" }
+                print "}"
+            }' "$_btmp"
+            printf '\n'
+        fi
+
+        # /font section — nested: family → fontname → variants
+        if [ -s "$_ftmp" ]; then
+            awk '
+            BEGIN { print "/font: {"; prev_fam=""; prev_font="" }
+            {
+                fam=$1; font=$2; var=$3
+                if (fam != prev_fam) {
+                    if (prev_font != "") { print "    }" }
+                    if (prev_fam != "") { print "  }" }
+                    printf "  %s: {\n", fam
+                    prev_fam=fam; prev_font=""
+                }
+                if (font != prev_font) {
+                    if (prev_font != "") { print "    }" }
+                    printf "    %s: {\n", font
+                    prev_font=font
+                }
+                printf "      %s\n", var
+            }
+            END {
+                if (prev_font != "") { print "    }" }
+                if (prev_fam != "") { print "  }" }
+                print "}"
+            }' "$_ftmp"
+        fi
+
     } > "$INDEX_FILE"
 
-    rm -f "$_tmpfile"
+    rm -f "$_rtmp" "$_btmp" "$_ftmp"
 
     ok "Index written: $INDEX_FILE ($_total packages)"
 }
 
-# ============================================================
+cmd_gen_index() {
+    # Thin wrapper: apply --repo/--dir/--out overrides then delegate to cmd_generate
+    [ -n "$GEN_OUT" ] && {
+        INDEX_FILE="$GEN_OUT"
+        OUTPUT_DIR=$(dirname "$GEN_OUT")
+    }
+    [ -n "$GEN_REPO" ] && REPO_NAME="$GEN_REPO"
+    [ -n "$GEN_DIR" ]  && {
+        BIN_DIR="${BIN_DIR:-$GEN_DIR/bin}"
+        FONT_DIR="${FONT_DIR:-$GEN_DIR/font}"
+    }
+    cmd_generate
+}
+
 # SIGNING
 # ============================================================
 
@@ -432,8 +583,24 @@ cmd_status() {
 
     printf "${BLUE}Index${NC}\n"
     if [ -f "$INDEX_FILE" ]; then
-        _pkg_count=$(grep -c '|' "$INDEX_FILE" 2>/dev/null || printf 0)
-        _cat_count=$(grep -c ': {' "$INDEX_FILE" 2>/dev/null || printf 0)
+        # Count unique packages (depth-3 blocks) in /recipes section
+        _pkg_count=$(awk '
+            /^\/recipes:[[:space:]]*\{/ { in_r=1; d=1; next }
+            /^\// { in_r=0; d=0 }
+            !in_r { next }
+            /\{/ { d++; if (d==3) count++ }
+            /\}/ { if (d>0) d-- }
+            END { print count+0 }
+        ' "$INDEX_FILE" 2>/dev/null || printf 0)
+        # Count categories (depth-2 blocks) in /recipes section
+        _cat_count=$(awk '
+            /^\/recipes:[[:space:]]*\{/ { in_r=1; d=1; next }
+            /^\// { in_r=0; d=0 }
+            !in_r { next }
+            /\{/ { d++; if (d==2) count++ }
+            /\}/ { if (d>0) d-- }
+            END { print count+0 }
+        ' "$INDEX_FILE" 2>/dev/null || printf 0)
         _mtime=$(stat -c '%y' "$INDEX_FILE" 2>/dev/null | cut -d. -f1             || stat -f '%Sm' "$INDEX_FILE" 2>/dev/null || printf 'unknown')
         _sigfile="${INDEX_FILE}.sig"
         if [ -f "$_sigfile" ]; then _signed="${GREEN}yes${NC}"; else _signed="${YELLOW}no${NC}"; fi
@@ -542,13 +709,13 @@ fix_checksum_in_stars() {
     esac
 
     # Try exact replacement first (algo:hash format)
-    if grep -qF "$_old_line" "$_fix_sf" 2>/dev/null; then
+    if grep -F "$_old_line" "$_fix_sf" >/dev/null 2>&1; then
         sed -i "s|${_fix_algo}:${_fix_old}  ${_fix_fname}|${_fix_algo}:${_fix_new}  ${_fix_fname}|g" "$_fix_sf"
         return 0
     fi
 
     # Try bare hash format
-    if grep -qF "$_old_bare" "$_fix_sf" 2>/dev/null; then
+    if grep -F "$_old_bare" "$_fix_sf" >/dev/null 2>&1; then
         sed -i "s|${_fix_old}  ${_fix_fname}|${_fix_new}  ${_fix_fname}|g" "$_fix_sf"
         return 0
     fi
@@ -808,8 +975,8 @@ has_empty_checksums() {
     [ -z "$_chk" ] && return 0
     
     # If only has TODO or comments, it's empty
-    printf '%s\n' "$_chk" | grep -qE '^(#|//|/\*)' && return 0
-    printf '%s\n' "$_chk" | grep -iq 'TODO' && return 0
+    printf '%s\n' "$_chk" | grep -E '^(#|//|/\*)' >/dev/null && return 0
+    printf '%s\n' "$_chk" | grep -i 'TODO' >/dev/null && return 0
     
     # Has real checksums
     return 1
@@ -982,218 +1149,6 @@ cmd_empty_checksums() {
 }
 
 # ============================================================
-# LINT
-# ============================================================
-
-# Extract the $PKG.Build and $PKG.Package blocks from a .stars file as plain text
-_lint_extract_blocks() {
-    _sf="$1"
-    awk '
-        /^\$PKG\.(Build|Package)[[:space:]]*(\{|:)/{in_block=1; next}
-        in_block && /^\};?[[:space:]]*$/{in_block=0; next}
-        in_block{print}
-    ' "$_sf"
-}
-
-# Lint one .stars file.  Prints findings and returns the number of warnings.
-_lint_one() {
-    _sf="$1"
-    _label="$2"
-    _w=0
-
-    _build_text=$(_lint_extract_blocks "$_sf")
-
-    # ── 1. Hardcoded -j<N> / -j$(nproc) ─────────────────────────────────
-    # Match -j$(nproc...) or -j<literal number>, but NOT the already-fixed -j${...}
-    if printf '%s\n' "$_build_text" | \
-            grep -qE '(make|ninja|cmake[[:space:]]+--build)[[:space:]].*-j(\$\(|[0-9])'; then
-        printf "${YELLOW}[WARN]${NC}  %-45s hardcoded -j — replace with -j\${JOBS:-\$(nproc)}\n" "$_label"
-        printf '%s\n' "$_build_text" \
-            | grep -nE '(make|ninja|cmake[[:space:]]+--build)[[:space:]].*-j(\$\(|[0-9])' \
-            | sed 's/^/         /'
-        _w=$((_w + 1))
-    fi
-
-    # ── 2. Inline flag overrides (report-only, never auto-fixed) ─────────
-    if printf '%s\n' "$_build_text" | \
-            grep -qE '^\s*(export\s+)?(CFLAGS|CXXFLAGS|LDFLAGS)\s*='; then
-        printf "${YELLOW}[WARN]${NC}  %-45s inline CFLAGS/CXXFLAGS/LDFLAGS override shadows make.conf\n" "$_label"
-        printf '%s\n' "$_build_text" \
-            | grep -nE '^\s*(export\s+)?(CFLAGS|CXXFLAGS|LDFLAGS)\s*=' \
-            | sed 's/^/         /'
-        _w=$((_w + 1))
-    fi
-
-    # ── 3. cmake without flag forwarding ─────────────────────────────────
-    if printf '%s\n' "$_build_text" | grep -qE 'cmake[[:space:]]+(-B|[./])'; then
-        if ! printf '%s\n' "$_build_text" | \
-                grep -qE 'CMAKE_C_FLAGS|CMAKE_CXX_FLAGS|CMAKE_EXE_LINKER_FLAGS'; then
-            printf "${YELLOW}[WARN]${NC}  %-45s cmake missing -DCMAKE_C_FLAGS=\"\$CFLAGS\" — make.conf flags not forwarded\n" "$_label"
-            _w=$((_w + 1))
-        fi
-    fi
-
-    # ── 4. meson without flag forwarding ─────────────────────────────────
-    if printf '%s\n' "$_build_text" | grep -qE 'meson[[:space:]]+(setup|configure)'; then
-        if ! printf '%s\n' "$_build_text" | \
-                grep -qE '(-Dc_args|-Dcpp_args|-Dc_link_args|--native-file)'; then
-            printf "${YELLOW}[WARN]${NC}  %-45s meson missing -Dc_args=\"\$CFLAGS\" — make.conf flags not forwarded\n" "$_label"
-            _w=$((_w + 1))
-        fi
-    fi
-
-    # ── 5. use() calls (report-only, never auto-fixed) ───────────────────
-    if printf '%s\n' "$_build_text" | grep -qE '\buse\s+[a-zA-Z_]'; then
-        printf "${YELLOW}[WARN]${NC}  %-45s calls use() — astral does not inject the helper, USE flags have no effect\n" "$_label"
-        printf '%s\n' "$_build_text" \
-            | grep -nE '\buse\s+[a-zA-Z_]' \
-            | sed 's/^/         /'
-        _w=$((_w + 1))
-    fi
-
-    return "$_w"
-}
-
-# Auto-fix one .stars file in-place.
-# Fixes items 1 (hardcoded -j), 3 (cmake flags), 4 (meson flags).
-# Items 2 (inline flag overrides) and 5 (use()) require human judgement.
-# Returns number of distinct fix types applied (0-3).
-_lint_fix_one() {
-    _sf="$1"
-    _label="$2"
-    _fixed=0
-
-    # ── Fix 1: -j$(nproc) → -j${JOBS:-$(nproc)} ─────────────────────────
-    if _lint_extract_blocks "$_sf" | \
-            grep -qE '(make|ninja|cmake[[:space:]]+--build)[[:space:]].*-j(\$\(|[0-9])'; then
-        sed -i 's/-j\$(nproc)/-j${JOBS:-$(nproc)}/g' "$_sf"
-        ok "  [$_label] ↻ -j\$(nproc) → -j\${JOBS:-\$(nproc)}"
-        _fixed=$((_fixed + 1))
-    fi
-
-    # ── Fix 3: cmake missing flag forwarding ─────────────────────────────
-    if _lint_extract_blocks "$_sf" | grep -qE 'cmake[[:space:]]+(-B|[./])'; then
-        if ! _lint_extract_blocks "$_sf" | \
-                grep -qE 'CMAKE_C_FLAGS|CMAKE_CXX_FLAGS|CMAKE_EXE_LINKER_FLAGS'; then
-            # Only match cmake as the first command on the line (after leading whitespace)
-            sed -i '/^[[:space:]]*cmake[[:space:]]\{1,\}\(-B[[:space:]]\{1,\}\S\{1,\}\|\.\.\?\([[:space:]]\|$\)\)/s|$| \\|
-/^[[:space:]]*cmake[[:space:]]\{1,\}\(-B[[:space:]]\{1,\}\S\{1,\}\|\.\.\?\([[:space:]]\|$\)\)/{
-    a\        -DCMAKE_C_FLAGS="$CFLAGS" \\
-    a\        -DCMAKE_CXX_FLAGS="$CXXFLAGS" \\
-    a\        -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS"
-}' "$_sf"
-            ok "  [$_label] ↻ added cmake flag forwarding"
-            _fixed=$((_fixed + 1))
-        fi
-    fi
-
-    # ── Fix 4: meson missing flag forwarding ─────────────────────────────
-    if _lint_extract_blocks "$_sf" | grep -qE 'meson[[:space:]]+(setup|configure)'; then
-        if ! _lint_extract_blocks "$_sf" | \
-                grep -qE '(-Dc_args|-Dcpp_args|-Dc_link_args|--native-file)'; then
-            sed -i '/^[[:space:]]*meson[[:space:]]\{1,\}\(setup\|configure\)/s|$| \\|
-/^[[:space:]]*meson[[:space:]]\{1,\}\(setup\|configure\)/{
-    a\        -Dc_args="$CFLAGS" \\
-    a\        -Dcpp_args="$CXXFLAGS" \\
-    a\        -Dc_link_args="$LDFLAGS"
-}' "$_sf"
-            ok "  [$_label] ↻ added meson flag forwarding"
-            _fixed=$((_fixed + 1))
-        fi
-    fi
-
-    return "$_fixed"
-}
-
-cmd_lint() {
-    _cat_filter=""
-    _fix=0
-
-    # Parse sub-options: lint [--fix] [<category>]
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --fix|-f) _fix=1; shift ;;
-            -*)       err "Unknown lint option: $1" ;;
-            *)        _cat_filter="$1"; shift ;;
-        esac
-    done
-
-    [ -d "$RECIPES_DIR" ] || err "Recipes directory not found: $RECIPES_DIR"
-
-    printf "${BOLD}Recipe lint${NC}"
-    [ -n "$_cat_filter" ] && printf " (category: %s)" "$_cat_filter"
-    [ "$_fix" -eq 1 ]     && printf " ${YELLOW}[--fix]${NC}"
-    printf "\n\n"
-
-    _total=0
-    _clean=0
-    _warn_total=0
-    _fix_total=0
-    _seen=""
-
-    find "$RECIPES_DIR" -mindepth 2 -maxdepth 4 -name "*.stars" 2>/dev/null | sort \
-        > "${TMPDIR:-/tmp}/astral-sync-lint-$$"
-
-    while IFS= read -r _sf; do
-        _rel=$(printf '%s' "$_sf" | sed "s|^${RECIPES_DIR}/||")
-        _cat=$(printf '%s' "$_rel" | cut -d/ -f1)
-
-        [ -n "$_cat_filter" ] && [ "$_cat" != "$_cat_filter" ] && continue
-
-        _basename=$(basename "$_sf" .stars)
-        _pkgname=$(printf '%s' "$_basename" | sed 's/-[0-9][^-]*-[^-]*$//;s/-git-[^-]*$//')
-        _label="${_cat}/${_pkgname}"
-
-        case " $_seen " in *" $_label "*) continue ;; esac
-        _seen="$_seen $_label"
-
-        _total=$((_total + 1))
-        _w=0
-        _lint_one "$_sf" "$_label" || _w=$?
-        _warn_total=$((_warn_total + _w))
-
-        if [ "$_w" -gt 0 ] && [ "$_fix" -eq 1 ]; then
-            _f=0
-            _lint_fix_one "$_sf" "$_label" || _f=$?
-            _fix_total=$((_fix_total + _f))
-        fi
-
-        [ "$_w" -eq 0 ] && _clean=$((_clean + 1))
-    done < "${TMPDIR:-/tmp}/astral-sync-lint-$$"
-    rm -f "${TMPDIR:-/tmp}/astral-sync-lint-$$"
-
-    printf "\n"
-    info "────────────────────────────────"
-    printf "Recipes checked: %d\n" "$_total"
-    printf "Clean:           %d\n" "$_clean"
-    printf "Warnings:        %d\n" "$_warn_total"
-    [ "$_fix" -eq 1 ] && printf "Fixes applied:   %d\n" "$_fix_total"
-    info "────────────────────────────────"
-
-    if [ "$_warn_total" -eq 0 ]; then
-        ok "All recipes are clean"
-    else
-        if [ "$_fix" -eq 1 ]; then
-            warn "$_warn_total warning(s) found, $_fix_total auto-fix(es) applied"
-            info "  Note: inline flag overrides and use() calls require manual review"
-        else
-            warn "$_warn_total warning(s) found  (run 'lint --fix' to auto-fix items 1, 3, 4)"
-            printf "\n"
-            info "Fix guide:"
-            info "  [1] Hardcoded -j:  replace -j\$(nproc) with -j\${JOBS:-\$(nproc)}"
-            info "  [2] Inline flags:  remove the override; astral exports CFLAGS from make.conf"
-            info "  [3] cmake flags:   add -DCMAKE_C_FLAGS=\"\$CFLAGS\" -DCMAKE_CXX_FLAGS=\"\$CXXFLAGS\""
-            info "                         -DCMAKE_EXE_LINKER_FLAGS=\"\$LDFLAGS\""
-            info "  [4] meson flags:   add -Dc_args=\"\$CFLAGS\" -Dcpp_args=\"\$CXXFLAGS\""
-            info "                         -Dc_link_args=\"\$LDFLAGS\""
-            info "  [5] use() calls:   USE flag injection not yet in astral — manual fix needed"
-            return 1
-        fi
-    fi
-    return 0
-}
-
-# ============================================================
 # LIST
 # ============================================================
 
@@ -1201,27 +1156,48 @@ cmd_list() {
     _filter="${1:-}"
     [ -f "$INDEX_FILE" ] || err "Index not found: $INDEX_FILE — run 'astral-sync generate' first"
 
-    _count=0
-    _cur_cat=""
-    while IFS='|' read -r _entry _arch _ver; do
-        [ -z "$_entry" ] && continue
-        case "$_entry" in '#'*|'  '*) continue ;; esac
-        _entry=$(printf '%s' "$_entry" | tr -d ' ')
-        _arch=$(printf '%s' "$_arch" | tr -d ' ')
-        _ver=$(printf '%s' "$_ver" | tr -d ' ')
-        [ -z "$_entry" ] && continue
-        _cat=$(printf '%s' "$_entry" | cut -d/ -f1)
-        _pkg=$(printf '%s' "$_entry" | cut -d/ -f2)
-        [ -n "$_filter" ] && [ "$_cat" != "$_filter" ] && continue
-        if [ "$_cat" != "$_cur_cat" ]; then
-            [ -n "$_cur_cat" ] && printf "\n"
-            printf "${BOLD}%s${NC}\n" "$_cat"
-            _cur_cat="$_cat"
-        fi
-        printf "  %-30s %s\n" "$_pkg" "$_ver"
-        _count=$((_count + 1))
-    done < "$INDEX_FILE"
-    printf "\n%d package(s)\n" "$_count"
+    awk -v filter="$_filter" '
+    BEGIN { state=0; cat=""; pkg=""; count=0; prev_cat="" }
+
+    /^\/recipes:[[:space:]]*\{/ { state=1; next }
+    /^\/(bin|font):[[:space:]]*\{/ { state=99; next }
+    state == 99 { next }
+    state == 0  { next }
+
+    # Closing brace — pop state
+    /^[[:space:]]*\}[[:space:]]*$/ {
+        if      (state == 3) state=2
+        else if (state == 2) state=1
+        else if (state == 1) state=0
+        next
+    }
+
+    # Category block: "  catname: {"  (state 1)
+    state == 1 && /\{/ {
+        cat=$0; gsub(/^[[:space:]]+/,"",cat); gsub(/:[[:space:]]*\{.*/,"",cat)
+        state=2; next
+    }
+
+    # Package block: "    pkgname: {"  (state 2)
+    state == 2 && /\{/ {
+        pkg=$0; gsub(/^[[:space:]]+/,"",pkg); gsub(/:[[:space:]]*\{.*/,"",pkg)
+        if (filter == "" || filter == cat) {
+            if (cat != prev_cat) {
+                if (prev_cat != "") printf "\n"
+                printf "\033[1m%s\033[0m\n", cat
+                prev_cat=cat
+            }
+            printf "  %-30s\n", pkg
+            count++
+        }
+        state=3; next
+    }
+
+    # Version lines (state 3) — skip for listing
+    state == 3 { next }
+
+    END { printf "\n%d package(s)\n", count }
+    ' "$INDEX_FILE"
 }
 
 # ============================================================
@@ -1232,16 +1208,26 @@ cmd_diff() {
     [ -f "$INDEX_FILE" ] || err "Index not found: $INDEX_FILE — run 'astral-sync generate' first"
 
     _tmp_new=$(mktemp "${TMPDIR:-/tmp}/astral-sync-diff-new.XXXXXX")
-    scan_recipes "$RECIPES_DIR" | awk '{print $1"/"$2 " " $4}' | sort > "$_tmp_new"
+    scan_recipes "$RECIPES_DIR" | awk '{print $1"/"$2 " " $4}' | sort -u > "$_tmp_new"
 
-    # Extract current index entries for comparison
+    # Extract current index entries for comparison (v2.1 nested format)
     _tmp_old=$(mktemp "${TMPDIR:-/tmp}/astral-sync-diff-old.XXXXXX")
-    grep '|' "$INDEX_FILE" 2>/dev/null | while IFS='|' read -r entry arch ver; do
-        entry=$(printf '%s' "$entry" | tr -d ' ')
-        ver=$(printf '%s' "$ver" | tr -d ' ')
-        [ -n "$entry" ] && printf '%s %s
-' "$entry" "$ver"
-    done | sort > "$_tmp_old"
+    awk '
+    /^\/recipes:[[:space:]]*\{/ { in_r=1; d=1; next }
+    /^\// { in_r=0; d=0 }
+    !in_r { next }
+    /\{/ {
+        line=$0; gsub(/^[[:space:]]+/,"",line); gsub(/:[[:space:]]*\{.*/,"",line)
+        d++
+        if (d==2) cat=line
+        else if (d==3) pkg=line
+    }
+    /\}/ { if (d>0) d-- }
+    d==3 && !/[{]/ && !/^[[:space:]]*[}]/ && !/^[[:space:]]*#/ {
+        ver=$0; gsub(/^[[:space:]]+/,"",ver); gsub(/[[:space:]]+$/,"",ver)
+        if (ver != "") printf "%s/%s %s\n", cat, pkg, ver
+    }
+    ' "$INDEX_FILE" | sort > "$_tmp_old"
 
     _added=0; _removed=0; _changed=0
 
@@ -1261,7 +1247,7 @@ cmd_diff() {
     # Added
     while IFS=' ' read -r pkg ver; do
         [ -z "$pkg" ] && continue
-        grep -q "^$pkg " "$_tmp_old" || {
+        grep "^$pkg " "$_tmp_old" >/dev/null 2>&1 || {
             printf "${GREEN}  + %s${NC} (%s)\n" "$pkg" "$ver"
             _added=$((_added + 1))
         }
@@ -1443,16 +1429,9 @@ COMMAND=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        generate|sign|verify|push|sync|status|list|diff|migrate|migrate-organize|checksum|checksum-reset|empty-checksums|help)
+    generate|gen-index|sign|verify|push|sync|status|list|diff|migrate|migrate-organize|checksum|checksum-reset|empty-checksums|help)
             COMMAND="$1"
             shift
-            ;;
-        lint)
-            # Stop global parsing here — remaining args (-f/--fix, category)
-            # belong to cmd_lint and must not be consumed by the global loop.
-            COMMAND="lint"
-            shift
-            break
             ;;
         -r|--recipes)
             [ $# -gt 1 ] || err "--recipes requires an argument"
@@ -1490,13 +1469,25 @@ while [ $# -gt 0 ]; do
             [ $# -gt 1 ] || err "--jobs requires an argument"
             PARALLEL_JOBS="$2"; shift 2
             ;;
-        -r|--retries)
+        -R|--retries)
             [ $# -gt 1 ] || err "--retries requires an argument"
             DOWNLOAD_RETRIES="$2"; shift 2
             ;;
         -d|--delay)
             [ $# -gt 1 ] || err "--delay requires an argument"
             JOB_DELAY="$2"; shift 2
+            ;;
+        --repo)
+            [ $# -gt 1 ] || err "--repo requires an argument"
+            GEN_REPO="$2"; shift 2
+            ;;
+        --dir)
+            [ $# -gt 1 ] || err "--dir requires an argument"
+            GEN_DIR="$2"; shift 2
+            ;;
+        --out)
+            [ $# -gt 1 ] || err "--out requires an argument"
+            GEN_OUT="$2"; shift 2
             ;;
         *)
             err "Unknown option: $1"
@@ -1510,6 +1501,9 @@ case "$COMMAND" in
     generate)
         cmd_generate
         [ "$AUTO_PUSH" -eq 1 ] && cmd_sign && cmd_push
+        ;;
+    gen-index)
+        cmd_gen_index
         ;;
     sign)
         cmd_sign
@@ -1530,9 +1524,6 @@ case "$COMMAND" in
         ;;
     diff)
         cmd_diff
-        ;;
-    lint)
-        cmd_lint "$@"
         ;;
     migrate)
         cmd_migrate

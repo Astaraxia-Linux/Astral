@@ -1,9 +1,9 @@
 #!/bin/sh
-# Astral v5.3.1.9 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
+# Astral v5.3.1.10 Main - minimal POSIX package manager for Astaraxia - Runs on anything with /bin/sh - even your microwave (if its posix compliant)
 # SOURCE-ONLY
-# V: 5 - Major . 3 - Minor . 1 - Patches . 9 - hotfixes
+# V: 5 - Major . 3 - Minor . 1 - Patches . 10 - hotfixes
 
-version="5.3.1.9 Main"
+version="5.3.1.10 Main"
 ASTRAL_PRODUCTION_DATE="2025-11-26"
 now_seconds=$(date +%s)
 prod_seconds=$(date -d "$ASTRAL_PRODUCTION_DATE" +%s)
@@ -89,7 +89,7 @@ LOG_SYNC_FILE=${LOG_SYNC_FILE:-/var/log/astral/sync.log}
 LOG_BUILD_FILE=${LOG_BUILD_FILE:-/var/log/astral/build.log}
 LOG_ENABLE=${LOG_ENABLE:-1}
 
-# §8.3 — Portable file size (GNU stat / BSD stat / wc -c fallback)
+# §8.3 Portable file size (GNU stat / BSD stat / wc -c fallback)
 file_size_bytes() {
     _f="$1"
     _s=$(stat -c%s "$_f" 2>/dev/null) && { printf '%s' "$_s"; return 0; }
@@ -196,7 +196,7 @@ _original_err() { printf "${RED}[ERROR]${NC} %s\n" "$*" >&2; exit 1; }
 # Colored [pkgname] label for install/build messages
 pkg_label() { printf "%b[%s]%b" "${CYAN}${BOLD}" "$1" "${NC}"; }
 
-# §5.2 — Structured error output with actionable hints
+# §5.2 Structured error output with actionable hints
 err_hint() {
     _msg="$1"
     _hint="$2"
@@ -205,7 +205,7 @@ err_hint() {
     exit 1
 }
 
-# §5.3 — Machine-readable errors for astral-env (ASTRAL_JSON_OUTPUT=1)
+# §5.3 Machine-readable errors for astral-env (ASTRAL_JSON_OUTPUT=1)
 err_structured() {
     _code="$1" _msg="$2" _pkg="${3:-}" _hint="${4:-}"
     if [ "${ASTRAL_JSON_OUTPUT:-0}" -eq 1 ]; then
@@ -218,7 +218,7 @@ err_structured() {
     exit 1
 }
 
-# Named error helpers — call these instead of generic err() for common failures
+# Named error helpers call these instead of generic err() for common failures
 recipe_not_found_err() {
     _pkg="$1"
     err_hint \
@@ -469,7 +469,7 @@ DISTCC_ENABLED="no"
 HOST_PROVIDED=${HOST_PROVIDED:-""}
 
 load_config() {
-    # Source make.conf — pure build environment (CFLAGS, USE, FEATURES, etc.)
+    # Source make.conf pure build environment (CFLAGS, USE, FEATURES, etc.)
     if [ -f "$CONFIG_FILE" ]; then
         . "$CONFIG_FILE"
     fi
@@ -477,7 +477,7 @@ load_config() {
     export CFLAGS CXXFLAGS LDFLAGS MAKEFLAGS
 }
 
-# Called after parse_astral_stars_config — activates tools configured in astral.stars
+# Called after parse_astral_stars_config activates tools configured in astral.stars
 apply_tool_config() {
     if [ "$CCACHE_ENABLED" = "yes" ]; then
         if command -v ccache >/dev/null 2>&1; then
@@ -601,7 +601,7 @@ ensure_package_provided() {
     if [ ! -f "$PROVIDED_FILE" ]; then
         mkdir -p /etc/astral
         cat > "$PROVIDED_FILE" <<EOF
-# Provider aliases — maps bare package names to canonical category/pkg forms.
+# Provider aliases maps bare package names to canonical category/pkg forms.
 # This file is ONLY needed when two recipes in different categories share the
 # same bare name. Astral will refuse to resolve the bare name until you
 # declare a winner here.
@@ -648,7 +648,7 @@ check_provided_conflicts() {
         # Only consider dirs that actually contain a recipe (build script or .stars)
         { [ -f "$_rdir/build" ] || ls "$_rdir"/*.stars 2>/dev/null | grep -q .; } || continue
         _bare=$(basename "$_rdir")
-        # _catpkg is always category/pkgname — strip the shard layer if present
+        # _catpkg is always category/pkgname strip the shard layer if present
         _rel=$(printf '%s' "$_rdir" | sed "s|^$RECIPES_DIR/||")
         _depth=$(printf '%s' "$_rel" | tr -cd '/' | wc -c)
         if [ "$_depth" -eq 2 ]; then
@@ -957,7 +957,7 @@ verify_signature() {
     fi
 }
 
-# §4.2 — Checksum-first, GPG-sig-optional verification
+# §4.2 Checksum-first, GPG-sig-optional verification
 # Usage: verify_source_file <file> <checksums_file> [sig_file]
 # Always verifies checksum; GPG sig is optional bonus trust.
 verify_source_file() {
@@ -983,7 +983,7 @@ verify_source_file() {
             SHA512)
                 _actual=$(sha512sum "$_file" 2>/dev/null | awk '{print $1}') ;;
             BLAKE2B)
-                # §4 — BLAKE2B fallback alongside SHA256
+                # §4 BLAKE2B fallback alongside SHA256
                 if command -v b2sum >/dev/null 2>&1; then
                     _actual=$(b2sum "$_file" 2>/dev/null | awk '{print $1}')
                 else
@@ -1000,10 +1000,10 @@ verify_source_file() {
 
         if [ "$_actual" != "$_expected" ]; then
             if [ -w "$_checksums" ]; then
-                # Fix first, report after — no mismatch noise if we can self-heal
+                # Fix first, report after no mismatch noise if we can self-heal
                 sed -i "s|${_algo}:${_expected}[[:space:]]*${_fname}|${_algo}:${_actual} ${_fname}|g" "$_checksums"
                 sed -i "s|^${_expected}[[:space:]]*${_fname}|${_actual} ${_fname}|g" "$_checksums"
-                info "  ↻ [$_algo] $_fname — stale hash updated in recipe"
+                info "  ↻ [$_algo] $_fname stale hash updated in recipe"
             else
                 warn "  ✗ Checksum mismatch [$_algo] $_fname"
                 warn "    recipe has: $_expected"
@@ -1991,7 +1991,7 @@ $AST.security: {
 };
 
 $AST.host: {
-    # Packages provided by the host system — astral will skip building these as deps.
+    # Packages provided by the host system astral will skip building these as deps.
     # Add any package names here that you know are already installed system-wide.
     PROVIDED = "gcc make glibc libc ncurses linux-headers binutils coreutils bash"
 };
@@ -2270,13 +2270,13 @@ check_script_safety() {
     # Pattern: a variable is assigned a dangerous string then executed via $VAR
     if grep -qE '(rm|dd|mkfs|wipefs)[[:space:]].*=.*["\x27]' "$script_file" 2>/dev/null || \
        grep -qE '^[[:space:]]*[A-Z_]+=["\x27].*(rm -rf|dd of=|mkfs|wipefs)' "$script_file" 2>/dev/null; then
-        warn "Script '$pkg_name' assigns dangerous commands to variables — review before running"
+        warn "Script '$pkg_name' assigns dangerous commands to variables review before running"
     fi
 
     # Catch obfuscated fork bombs: variations beyond the classic :(){:|:&}
     if grep -qE 'while true|while :' "$script_file" 2>/dev/null && \
        grep -qE '&[[:space:]]*$|& $' "$script_file" 2>/dev/null; then
-        warn "Script '$pkg_name' has an unbounded background loop — possible fork bomb, review before running"
+        warn "Script '$pkg_name' has an unbounded background loop possible fork bomb, review before running"
     fi
 
     [ -n "$_verbose" ] && info "✓ Basic safety checks passed (review script manually for full safety)"
@@ -2321,7 +2321,7 @@ advanced_script_safety_check() {
         printf '%b  [OK]    %s%b\n' "$GREEN" "$*" "$NC" >&2
     }
 
-    # ── 1. Namespace violation — writes outside $PKGDIR / $DESTDIR ───────────
+    # ── 1. Namespace violation writes outside $PKGDIR / $DESTDIR ───────────
     # A legitimate build script should ONLY write to $PKGDIR or $DESTDIR.
     # Any absolute path write that isn't prefixed by one of those vars is
     # potentially touching the host filesystem.
@@ -2361,7 +2361,7 @@ advanced_script_safety_check() {
     for _sf in $_scripts; do
         _sfname=$(basename "$_sf")
         if grep -qE '(/proc/|/sys/)[a-zA-Z]' "$_sf" 2>/dev/null | grep -vE '#'; then
-            _adv_warn "[$_sfname] Accesses /proc or /sys — may tamper with kernel parameters or other processes"
+            _adv_warn "[$_sfname] Accesses /proc or /sys may tamper with kernel parameters or other processes"
         fi
     done
 
@@ -2370,7 +2370,7 @@ advanced_script_safety_check() {
         _sfname=$(basename "$_sf")
         if grep -qE '(crontab|/etc/cron|/etc/init\.d|/etc/rc\.|/etc/systemd|systemctl enable|systemctl start|chkconfig|update-rc\.d)' \
                 "$_sf" 2>/dev/null; then
-            _adv_warn "[$_sfname] Modifies init system or cron — verify this is intentional for a daemon package"
+            _adv_warn "[$_sfname] Modifies init system or cron verify this is intentional for a daemon package"
         fi
     done
 
@@ -2378,7 +2378,7 @@ advanced_script_safety_check() {
     for _sf in $_scripts; do
         _sfname=$(basename "$_sf")
         if grep -qE '(LD_PRELOAD|LD_LIBRARY_PATH)[[:space:]]*=' "$_sf" 2>/dev/null; then
-            _adv_fail "[$_sfname] Sets LD_PRELOAD or LD_LIBRARY_PATH — classic shared-library injection vector"
+            _adv_fail "[$_sfname] Sets LD_PRELOAD or LD_LIBRARY_PATH classic shared-library injection vector"
         fi
     done
 
@@ -2387,7 +2387,7 @@ advanced_script_safety_check() {
         _sfname=$(basename "$_sf")
         if grep -qE 'chmod[[:space:]]+(u\+s|g\+s|[0-9]*[24][0-9]{3})|setcap[[:space:]]' \
                 "$_sf" 2>/dev/null; then
-            _adv_warn "[$_sfname] Sets SUID/SGID bits or file capabilities — ensure this binary truly needs elevated privileges"
+            _adv_warn "[$_sfname] Sets SUID/SGID bits or file capabilities ensure this binary truly needs elevated privileges"
         fi
     done
 
@@ -2396,7 +2396,7 @@ advanced_script_safety_check() {
         _sfname=$(basename "$_sf")
         if grep -qE '(/etc/passwd|/etc/shadow|/etc/sudoers|visudo|useradd|usermod|groupadd)' \
                 "$_sf" 2>/dev/null; then
-            _adv_warn "[$_sfname] Modifies users/groups or sudoers — legitimate for packages that need a system user, but verify"
+            _adv_warn "[$_sfname] Modifies users/groups or sudoers legitimate for packages that need a system user, but verify"
         fi
     done
 
@@ -2407,19 +2407,19 @@ advanced_script_safety_check() {
         # Base64-encoded payloads piped to shell
         if grep -qE '(base64[[:space:]].*-d|base64[[:space:]].*--decode).*\|.*(sh|bash|ash|dash)' \
                 "$_sf" 2>/dev/null; then
-            _adv_fail "[$_sfname] Decodes and executes base64 payload — strong obfuscation indicator"
+            _adv_fail "[$_sfname] Decodes and executes base64 payload strong obfuscation indicator"
         fi
 
         # Python/perl -c with exec/system (common dropper pattern)
         if grep -qE '(python|python3|perl)[[:space:]]+-c[[:space:]].*exec\|system' \
                 "$_sf" 2>/dev/null; then
-            _adv_fail "[$_sfname] Executes inline Python/Perl with exec/system — possible dropper"
+            _adv_fail "[$_sfname] Executes inline Python/Perl with exec/system possible dropper"
         fi
 
         # Hex/octal encoded strings piped to shell
         if grep -qE '(printf|echo).*\\\\x[0-9a-fA-F]{2}.*\|.*(sh|bash)' \
                 "$_sf" 2>/dev/null; then
-            _adv_fail "[$_sfname] Hex-encoded payload piped to shell — obfuscation detected"
+            _adv_fail "[$_sfname] Hex-encoded payload piped to shell obfuscation detected"
         fi
 
         # $(cat /dev/urandom) or similar entropy abuse to generate payloads
@@ -2433,7 +2433,7 @@ advanced_script_safety_check() {
         _sfname=$(basename "$_sf")
         if grep -qE '(tcpdump|nmap|nc[[:space:]]|netcat|socat|/dev/tcp|/dev/udp)' \
                 "$_sf" 2>/dev/null; then
-            _adv_warn "[$_sfname] Uses raw network tools (tcpdump/nmap/netcat/socat) — unexpected in a build script"
+            _adv_warn "[$_sfname] Uses raw network tools (tcpdump/nmap/netcat/socat) unexpected in a build script"
         fi
     done
 
@@ -2442,7 +2442,7 @@ advanced_script_safety_check() {
         _sfname=$(basename "$_sf")
         if grep -qE '(~/.ssh|/root/.ssh|authorized_keys|known_hosts|~/.gnupg|/root/.gnupg)' \
                 "$_sf" 2>/dev/null; then
-            _adv_fail "[$_sfname] Modifies SSH keys or GPG keyrings — this is almost never legitimate in a build script"
+            _adv_fail "[$_sfname] Modifies SSH keys or GPG keyrings this is almost never legitimate in a build script"
         fi
     done
 
@@ -2463,7 +2463,7 @@ advanced_script_safety_check() {
                 # in a path context (e.g. /usr/lib/otherpkg or $PKGDIR/../otherpkg)
                 if grep -qE "(lib|share|include|bin)/${_other_pkg}[^a-zA-Z0-9_-]|/${_other_pkg}/\." \
                         "$_sf" 2>/dev/null; then
-                    _adv_warn "[$_sfname] References path belonging to installed package '$_other_pkg' — possible namespace collision"
+                    _adv_warn "[$_sfname] References path belonging to installed package '$_other_pkg' possible namespace collision"
                 fi
             done < "$_other_pkgs_tmpf"
         done
@@ -2475,12 +2475,12 @@ advanced_script_safety_check() {
     if [ "$_violations" -gt 0 ]; then
         printf '%b  Advanced check: %d BLOCKING violation(s), %d warning(s)%b\n' \
             "$RED" "$_violations" "$_warnings" "$NC" >&2
-        err "Advanced security analysis blocked installation of '$_pkg' — $_violations violation(s) found. Review the script and set SAFETY_ADVANCED_SCRIPT_CHECK=0 to override if you are certain it is safe."
+        err "Advanced security analysis blocked installation of '$_pkg' $_violations violation(s) found. Review the script and set SAFETY_ADVANCED_SCRIPT_CHECK=0 to override if you are certain it is safe."
     elif [ "$_warnings" -gt 0 ]; then
-        printf '%b  Advanced check: 0 violations, %d warning(s) — proceeding with caution%b\n' \
+        printf '%b  Advanced check: 0 violations, %d warning(s) proceeding with caution%b\n' \
             "$YELLOW" "$_warnings" "$NC" >&2
     else
-        printf '%b  Advanced check: CLEAN — no issues found%b\n' "$GREEN" "$NC" >&2
+        printf '%b  Advanced check: CLEAN no issues found%b\n' "$GREEN" "$NC" >&2
     fi
 }
 
@@ -2626,7 +2626,7 @@ create_directory_isolation() {
     builddir="$1"
     sandbox_root="$2"
     mkdir -p "$sandbox_root"
-    info "  ✓ Directory isolation ready (no sandbox — build has host access)"
+    info "  ✓ Directory isolation ready (no sandbox build has host access)"
 }
 
 create_bubblewrap_sandbox() {
@@ -2818,7 +2818,7 @@ conflicts_with() {
     grep -Fx "$pkg2" "$rpath1/conflicts" >/dev/null 2>&1
 }
 
-# §2.3 — Portable version resolution (subshell pipe bug fixed)
+# §2.3 Portable version resolution (subshell pipe bug fixed)
 # The original used a pipe-fed while loop whose variable assignments were lost
 # in the parent shell. We now write constraints to a temp file instead.
 resolve_version_conflicts() {
@@ -3118,7 +3118,7 @@ check_versioned_deps() {
 detect_recipe_format() {
     pkg="$1"
 
-    # Check for .stars file first (faster) — legacy flat path
+    # Check for .stars file first (faster) legacy flat path
     if [ -f "$RECIPES_DIR/$pkg.stars" ]; then
         printf 'stars\n'; return 0
     fi
@@ -3721,7 +3721,7 @@ deep_recipe_check() {
         warn "  ⚠ Package modifies privileged files/permissions"
     fi
 
-    # 2. Network access in build — only flag actual download tool invocations, not mentions
+    # 2. Network access in build only flag actual download tool invocations, not mentions
     if grep -rE '^[[:space:]]*(curl|wget|fetch)[[:space:]]' "$rpath/build" 2>/dev/null | grep -qv '^#'; then
         if [ "$SANDBOX_NETWORK" = "no" ]; then
             warn "  ⚠ Build script may require network but SANDBOX_NETWORK=no"
@@ -3849,7 +3849,7 @@ resolve_installed_path() {
     requested_pkg="$1"
     _base=$(basename "$requested_pkg")
 
-    # Must have a version file — bare directory is not a valid install record
+    # Must have a version file bare directory is not a valid install record
     if [ -f "$DB_DIR/$requested_pkg/version" ]; then
         printf '%s\n' "$requested_pkg"
         return 0
@@ -4060,7 +4060,7 @@ parallel_remove() {
     failed_pkgs=""
 
     for pkg in $packages; do
-        # Resolve path before forking — resolve_installed_path is read-only
+        # Resolve path before forking resolve_installed_path is read-only
         pkg_path=$(resolve_installed_path "$pkg") || {
             warn "Package '$pkg' not installed, skipping."
             continue
@@ -4142,7 +4142,7 @@ parallel_removedep() {
             [ "$running_jobs" -ge "$max_jobs" ] && sleep 0.2
         done
 
-        # Fork — each removedep_pkg manages its own dep walk independently
+        # Fork each removedep_pkg manages its own dep walk independently
         info "Removing with deps: $pkg"
         ( removedep_pkg "$pkg" ) &
         job_pid=$!
@@ -4229,7 +4229,7 @@ recipe_path() {
             fi
         fi
 
-        # Search whole recipes dir — check for ambiguity across categories.
+        # Search whole recipes dir check for ambiguity across categories.
         _all_matches=$(find "$RECIPES_DIR" -mindepth 2 -maxdepth 3 -type d \
             -name "$_search_name" 2>/dev/null | \
             while read -r d; do
@@ -4237,13 +4237,13 @@ recipe_path() {
             done)
         _match_count=$(printf '%s\n' "$_all_matches" | grep -c . 2>/dev/null || echo 0)
         if [ "$_match_count" -gt 1 ]; then
-            warn "Ambiguous package '$_pkg' — found in multiple categories:"
+            warn "Ambiguous package '$_pkg' found in multiple categories:"
             printf '%s\n' "$_all_matches" | sed "s|$RECIPES_DIR/||" | while read -r _m; do
                 warn "  $_m"
             done
             err "Specify the full category/pkg form, or declare a provider in $PROVIDED_FILE"
         fi
-        # Single match — prefer expanded dir, then .stars
+        # Single match prefer expanded dir, then .stars
         _found=$(find "$RECIPES_DIR" -maxdepth 4 -type d -name "$_search_name" 2>/dev/null | \
             while read -r d; do [ -f "$d/build" ] && printf '%s\n' "$d" && break; done | head -n1)
         if [ -z "$_found" ]; then
@@ -4357,7 +4357,7 @@ M
 
 # === PACKAGE STORE ===
 # Compute a content hash for a built package directory.
-# Uses sha256 over sorted file contents — same files = same hash always.
+# Uses sha256 over sorted file contents same files = same hash always.
 store_hash() {
     _sh_pkgdir="$1"
     find "$_sh_pkgdir" -type f | sort | xargs sha256sum 2>/dev/null | sha256sum | cut -c1-40
@@ -4696,7 +4696,7 @@ check_host_dependency() {
         debug "  ✗ Not found in pkg-config"
     fi
 
-    # Priority 4: Binary name translation — package name often ≠ binary name
+    # Priority 4: Binary name translation package name often ≠ binary name
     _dep_bin="$dep"
     case "$dep" in
         texinfo)           _dep_bin="makeinfo" ;;
@@ -5697,7 +5697,7 @@ transaction_commit() {
 
     printf 'end_time=%s\n' "$(portable_timestamp)" >> "$trans_dir/metadata/info"
 
-    # Delete backup now that commit succeeded — no rollback possible anyway
+    # Delete backup now that commit succeeded no rollback possible anyway
     rm -rf "$trans_dir/backup" 2>/dev/null || true
 
     # Prune old committed transactions, keep only the last 5
@@ -5913,11 +5913,11 @@ fetch_remote_recipe() {
         _is_complete=0
         case "$existing_rpath" in
             *.stars)
-                # It's a .stars file — check it has content
+                # It's a .stars file check it has content
                 [ -s "$existing_rpath" ] && _is_complete=1
                 ;;
             *)
-                # It's an expanded directory — check for a build script
+                # It's an expanded directory check for a build script
                 [ -f "$existing_rpath/build" ] && _is_complete=1
                 ;;
         esac
@@ -5936,7 +5936,7 @@ fetch_remote_recipe() {
             return 0
         fi
 
-        # Recipe exists but is incomplete — re-derive category and re-download
+        # Recipe exists but is incomplete re-derive category and re-download
         warn "  ⚠ Existing recipe for '$_pkg' is incomplete, re-fetching..."
         _raw=$(printf '%s' "$existing_rpath" | sed "s|^${RECIPES_DIR}/||")
         _cat=$(printf '%s' "$_raw" | cut -d'/' -f1)
@@ -5986,7 +5986,7 @@ fetch_remote_recipe() {
                 if [ -n "$category" ]; then
                     category_pkg="${category}/${_pkg}"
                 else
-                    warn "  ⚠ Could not find '$_pkg' in index — trying without category"
+                    warn "  ⚠ Could not find '$_pkg' in index trying without category"
                     category_pkg="$_pkg"
                 fi
                 ;;
@@ -5994,7 +5994,7 @@ fetch_remote_recipe() {
     fi
 
     local_dir="$RECIPES_DIR/$category_pkg"
-    # Do NOT mkdir the flat path — we use the sharded layout exclusively.
+    # Do NOT mkdir the flat path we use the sharded layout exclusively.
     # If a stale empty flat dir exists from a previous run, remove it to
     # prevent recipe_path from seeing two matches and throwing an ambiguity error.
     if [ -d "$local_dir" ] && [ -z "$(ls -A "$local_dir" 2>/dev/null)" ]; then
@@ -6145,13 +6145,13 @@ fetch_remote_recipe_stars() {
     return 1
 }
 
-# §3 — Parallel source downloader (pure POSIX sh, FIFO job pool)
+# §3 Parallel source downloader (pure POSIX sh, FIFO job pool)
 # Replaces serial download_sources() as the primary downloader.
 # Falls back to serial download_sources() if mkfifo is unavailable.
 # Suggestion: recoverable download with retry logic
 # Usage: download_with_retry <url> <dest> [max_retries]
 # Retries transient failures (network blip, server hiccup) with exponential backoff.
-# Gives up and returns 1 after max_retries — caller decides whether to err() or warn().
+# Gives up and returns 1 after max_retries caller decides whether to err() or warn().
 download_with_retry() {
     _url="$1"
     _dest="$2"
@@ -6330,7 +6330,7 @@ download_sources() {
                 else
                     rm -f "$sig_file"
                     if [ "$SAFETY_SIGNATURE_VERIFY" -eq 1 ]; then
-                        err "No signature found for $filename and SAFETY_SIGNATURE_VERIFY=1 — refusing to proceed. Disable with SAFETY_SIGNATURE_VERIFY=0 if upstream does not publish signatures."
+                        err "No signature found for $filename and SAFETY_SIGNATURE_VERIFY=1 refusing to proceed. Disable with SAFETY_SIGNATURE_VERIFY=0 if upstream does not publish signatures."
                     else
                         warn "No signature file for $filename (SAFETY_SIGNATURE_VERIFY=0, continuing)"
                     fi
@@ -6411,7 +6411,7 @@ store_file_checksums() {
 
     info "Storing file checksums for verification..."
 
-    # §8.1 — Avoid pipe subshell: use temp file so loop runs in current shell
+    # §8.1 Avoid pipe subshell: use temp file so loop runs in current shell
     _cs_tmpf="$TMPDIR/astral-cs-$$"
     ( cd "$pkgdir" && find . -type f ) > "$_cs_tmpf"
     while IFS= read -r file; do
@@ -6600,7 +6600,7 @@ handle_regular_source() {
 }
 
 
-# §11.2 — Cached checksum to avoid re-hashing on build resume
+# §11.2 Cached checksum to avoid re-hashing on build resume
 # Uses a .checksum_cache file in the same dir; invalidates if source file is newer.
 get_or_compute_checksum() {
     _file="$1"
@@ -6693,7 +6693,7 @@ verify_checksums_and_extract() {
             if [ -w "$checksums_file" ]; then
                 sed -i "s|${algo}:${expected_hash}[[:space:]]*${filename}|${algo}:${actual_hash} ${filename}|g" "$checksums_file"
                 sed -i "s|^${expected_hash}[[:space:]]*${filename}|${actual_hash} ${filename}|g" "$checksums_file"
-                info "  ↻ ($algo) $filename — stale hash updated in recipe"
+                info "  ↻ ($algo) $filename stale hash updated in recipe"
             else
                 warn "  ✗ Checksum mismatch ($algo) for $filename"
                 warn "    recipe has: $expected_hash"
@@ -7128,7 +7128,7 @@ resolve_sat_dependencies() {
     printf '%s\n' "$packages_to_install"
 }
 
-# §2.2 — Two-phase flat dependency resolver
+# §2.2 Two-phase flat dependency resolver
 # Replaces the recursive VISITED_PACKAGES approach which misidentifies shared
 # deps as circular (diamond dep problem). Uses an iterative queue instead.
 #
@@ -7193,7 +7193,7 @@ collect_deps() {
     done
 }
 
-# resolve_install_order — call after collect_deps; prints install order (deepest deps first)
+# resolve_install_order call after collect_deps; prints install order (deepest deps first)
 resolve_install_order() {
     printf '%s' "$DEP_CONSTRAINTS" | grep . | \
         awk -F: '{print $2}' | \
@@ -7333,12 +7333,12 @@ sync_pkg_recursive() {
         _sync_restore 0; return
     fi
 
-    # Already visited this package in a prior branch — skip, don't error (diamond dep)
+    # Already visited this package in a prior branch skip, don't error (diamond dep)
     case " $VISITED_PACKAGES " in
         *" $CALL_PKG_CLEAN "*) _sync_restore 0; return ;;
     esac
 
-    # True circular dependency check — is this pkg currently on the active call stack?
+    # True circular dependency check is this pkg currently on the active call stack?
     case " $DEP_CALL_STACK " in
         *" $CALL_PKG_CLEAN "*)
             echo "ERROR: Circular dependency!" >> "$LOG"
@@ -7375,7 +7375,7 @@ sync_pkg_recursive() {
         # Already installed?
         if is_pkg_installed "$CALL_PKG_CLEAN"; then
             installed_ver=$(get_installed_ver "$CALL_PKG_CLEAN")
-            info "$(pkg_label "$CALL_PKG_CLEAN") already installed ($installed_ver) — skipping"
+            info "$(pkg_label "$CALL_PKG_CLEAN") already installed ($installed_ver) skipping"
             echo "  EARLY EXIT: Already installed" >> "$LOG"
             echo "==== EXIT (already installed) ====" >> "$LOG"
             echo "" >> "$LOG"
@@ -7472,7 +7472,7 @@ sync_pkg_recursive() {
 
         dep_count=$((dep_count + 1))
 
-        # Skip if already installed or visited in another branch (diamond dep — not a cycle)
+        # Skip if already installed or visited in another branch (diamond dep not a cycle)
         case " $VISITED_PACKAGES " in
             *" $dep "*) continue ;;
         esac
@@ -7568,7 +7568,7 @@ sync_pkg_asura() {
     info "✓ ASURA sync complete, context reset to AOHARU"
 }
 
-# §7.2 — Inject use() helper into build environment for optional deps
+# §7.2 Inject use() helper into build environment for optional deps
 # Must be called just before sourcing the build script.
 # Writes a use() function definition to a temp file that the build script sources.
 astral_inject_use_helpers() {
@@ -7624,7 +7624,7 @@ build_from_recipe_enhanced() {
         info "Installing '$_pkg' version $recipe_ver..."
     fi
 
-    # Safety checks — print banner once
+    # Safety checks print banner once
     cat >&2 <<SAFETY_WARNING
 ───────────────────────────────────────────────────────────────
 ⚠️  SAFETY CHECK: $_pkg
@@ -7660,14 +7660,14 @@ SAFETY_WARNING
     fi
     cd "$buildtmp" || err "cd failed"
 
-    # Only clean up on successful exit — on failure the dir is preserved so
+    # Only clean up on successful exit on failure the dir is preserved so
     # 'astral -Re <pkg>' can resume from the interrupted stage.
     _build_success=0
     trap '[ "$_build_success" -eq 1 ] && rm -rf "$buildtmp" "$sandbox_root"' EXIT
 
     create_sandbox "$buildtmp" "$sandbox_root"
 
-    # §3 — Use parallel downloader; falls back to serial if mkfifo unavailable
+    # §3 Use parallel downloader; falls back to serial if mkfifo unavailable
     parallel_download_sources "$rpath" "$buildtmp"
     verify_checksums_and_extract "$_pkg" "$rpath" "$buildtmp"
 
@@ -7715,7 +7715,7 @@ SAFETY_WARNING
         _build_workdir="$buildtmp"
         [ -n "$git_dir" ] && [ -d "$git_dir" ] && _build_workdir="$git_dir"
 
-        # Run build script from correct dir — recipes do their own cd for tarballs
+        # Run build script from correct dir recipes do their own cd for tarballs
         (
             cd "$_build_workdir" || exit 1
             export DESTDIR="$PKGDIR"
@@ -7887,7 +7887,7 @@ update_repo() {
         return 1
     fi
 
-    if [ ! -s "$temp_index" ] || ! grep -qE '^[a-zA-Z0-9_-]+:' "$temp_index"; then
+    if [ ! -s "$temp_index" ] || ! grep -E '^[a-zA-Z0-9/_-]+:' "$temp_index" >/dev/null; then
         rm -f "$temp_index"
         err "Downloaded index file is invalid or empty"
         return 1
@@ -7895,14 +7895,14 @@ update_repo() {
 
     mv -f "$temp_index" "$INDEX_FILE"
     info "Database updated successfully."
-    # §11.1 — Rebuild per-package lookup cache after index update
+    # §11.1 Rebuild per-package lookup cache after index update
     build_pkg_cache
     # Check for bare-name conflicts in local recipe tree
     ensure_package_provided
     check_provided_conflicts || warn "Fix conflicts in $PROVIDED_FILE before installing affected packages"
 }
 
-# §11.1 — Per-package lookup cache (avoids re-reading full index on every lookup)
+# §11.1 Per-package lookup cache (avoids re-reading full index on every lookup)
 # Called at end of update_repo(); can also be run with astral --rebuild-cache.
 build_pkg_cache() {
     _index="$INDEX_FILE_AOHARU"
@@ -7928,14 +7928,33 @@ build_pkg_cache() {
         # Skip empty and comments
         [ -z "$_line" ] && continue
         case "$_line" in '#'*) continue ;; esac
+        # v2.1 section detection for build_pkg_cache
+        _bpc_first=$(printf '%s' "$_line" | cut -c1-9)
+        case "$_bpc_first" in
+            /recipes*)
+                _cache_in_recipes=1; _cache_depth=1; _current_cat=""; continue ;;
+            /bin*|/fon*)
+                _cache_in_recipes=0; _cache_depth=1; _current_cat=""; continue ;;
+        esac
+        # Closing brace
+        case "$_line" in
+            '}')
+                _cache_depth=$(( _cache_depth - 1 ))
+                [ "${_cache_depth:-0}" -le 0 ] && { _cache_depth=0; _current_cat=""; }
+                [ "${_cache_depth:-0}" -eq 1 ] && _current_cat=""
+                continue ;;
+        esac
         # Detect category header: "name: {" or "name:"
         case "$_line" in
             *':{'|*': {'|*':')
-                _current_cat=$(printf '%s' "$_line" | sed 's/:[[:space:]]*{.*//;s/:$//')
-                continue
-                ;;
-            '}') continue ;;
+                if [ "${_cache_in_recipes:-1}" -eq 1 ]; then
+                    _current_cat=$(printf '%s' "$_line" | sed 's/:[[:space:]]*{.*//;s/:$//')
+                fi
+                _cache_depth=$(( _cache_depth + 1 ))
+                continue ;;
         esac
+        # Skip if not in /recipes section
+        [ "${_cache_in_recipes:-1}" -eq 0 ] && continue
         # Parse package line: pkg | arch | version
         _entry=$(printf '%s' "$_line" | cut -d'|' -f1 | tr -d ' ')
         _arch=$(printf '%s'   "$_line" | cut -d'|' -f2 | tr -d ' ')
@@ -7964,70 +7983,96 @@ query_pkg_cached() {
     return 1  # Not found --- fall back to index scan
 }
 
-# === NEW INDEX PARSER V2 ===
+# === INDEX PARSER V2.1 ===
+# Parses nested v2.1 format:
+#   /recipes: { category: { pkg: { version1 version2 ... } } }
+# Outputs: category/pkg version (one per line)
+# Also accepts legacy flat format (auto-detected)
 parse_index_v2() {
     index_file="$1"
-
     [ ! -f "$index_file" ] && return 1
 
-    current_category=""
+    _in_recipes=0
+    _depth=0
+    _current_category=""
+    _current_pkg=""
 
     while IFS= read -r line || [ -n "$line" ]; do
-        # Remove leading/trailing whitespace
+        # Strip leading/trailing whitespace
         line=$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-
+        
         # Skip empty lines and comments
         [ -z "$line" ] && continue
         case "$line" in \#*) continue ;; esac
 
-        # Detect category header: "name: {" or "name:"
+        # === SECTION HEADERS ===
         case "$line" in
-            *':{'|*': {'|*':')
-                current_category=$(printf '%s' "$line" | sed 's/:[[:space:]]*{.*//;s/:$//')
+            /recipes:*)
+                _in_recipes=1
+                _depth=1
+                _current_category=""
+                _current_pkg=""
                 continue
                 ;;
-            '}') continue ;;
+            /bin:*|/font:*)
+                _in_recipes=0
+                _depth=1
+                _current_category=""
+                _current_pkg=""
+                continue
+                ;;
         esac
 
-        # Parse package line: pkg | arch | version
-        pkg=$(printf '%s' "$line" | cut -d'|' -f1 | tr -d ' ')
-        arch=$(printf '%s' "$line" | cut -d'|' -f2 | tr -d ' ')
-        ver=$(printf '%s' "$line" | cut -d'|' -f3 | tr -d ' ')
+        # === CLOSING BRACE ===
+        if [ "$line" = "}" ]; then
+            _depth=$(( _depth - 1 ))
+            [ "$_depth" -le 0 ] && {
+                _depth=0
+                _current_category=""
+                _current_pkg=""
+            }
+            [ "$_depth" -eq 1 ] && {
+                _current_category=""
+                _current_pkg=""
+            }
+            [ "$_depth" -eq 2 ] && _current_pkg=""
+            continue
+        fi
 
-        [ -z "$pkg" ] && continue
+        # Skip if not in /recipes section
+        [ "$_in_recipes" -eq 0 ] && continue
 
-        # Output: category/pkg arch version
-        printf '%s/%s %s %s\n' "$current_category" "$pkg" "$arch" "$ver"
-    done < "$index_file"
-}
+        # === CATEGORY LEVEL (depth 1 → 2) ===
+        if [ "$_depth" -eq 1 ]; then
+            case "$line" in
+                *:*)
+                    _current_category=$(printf '%s' "$line" | sed 's/:[[:space:]]*{*.*$//')
+                    _depth=2
+                    continue
+                    ;;
+            esac
+        fi
 
-# Query index for specific package
-query_index_v2() {
-    pkg="$1"
-    arch="${2:-x86_64}"  # Default to x86_64
-    repo="${3:-aoharu}"
+        # === PACKAGE LEVEL (depth 2 → 3) ===
+        if [ "$_depth" -eq 2 ]; then
+            case "$line" in
+                *:*)
+                    _current_pkg=$(printf '%s' "$line" | sed 's/:[[:space:]]*{*.*$//')
+                    _depth=3
+                    continue
+                    ;;
+            esac
+        fi
 
-    index_file=""
-    case "$repo" in
-        aoharu) index_file="$INDEX_FILE_AOHARU" ;;
-        asura) index_file="$INDEX_FILE_ASURA" ;;
-        *) err "Unknown repository: $repo" ;;
-    esac
-
-    [ ! -f "$index_file" ] && return 1
-
-    # Parse and filter
-    parse_index_v2 "$index_file" | while read -r fullpkg pkg_arch pkg_ver; do
-        pkg_name=$(basename "$fullpkg")
-
-        # Match package name
-        if [ "$pkg_name" = "$pkg" ]; then
-            # Check architecture
-            if [ "$pkg_arch" = "any" ] || [ "$pkg_arch" = "$arch" ]; then
-                printf '%s %s %s\n' "$fullpkg" "$pkg_arch" "$pkg_ver"
+        # === VERSION LEVEL (depth 3) ===
+        if [ "$_depth" -eq 3 ] && [ -n "$_current_category" ] && [ -n "$_current_pkg" ]; then
+            # Any non-brace line at depth 3 is a version
+            if [ "$line" != "}" ]; then
+                version=$(printf '%s' "$line" | tr -d ' ')
+                [ -n "$version" ] && printf '%s/%s %s\n' "$_current_category" "$_current_pkg" "$version"
             fi
         fi
-    done
+    done < "$index_file"
 }
 
 # List all versions of a package
@@ -8142,7 +8187,7 @@ search_pkg_json() {
     done < "$stars_list"
     rm -f "$stars_list"
 
-    # Remote indexes — use parse_index_v2 so the structured format is handled correctly
+    # Remote indexes use parse_index_v2 so the structured format is handled correctly
     for idx in "$INDEX_FILE_AOHARU" "$INDEX_FILE_ASURA"; do
         [ -f "$idx" ] || continue
         repo_name=$(basename "$idx" | sed 's/index_//')
@@ -8209,7 +8254,7 @@ show_pkg_info_json() {
 }
 
 # rewritten... hopes that it doesnt fucking explode
-# §10 — Enhanced search with fuzzy match and filter flags
+# §10 Enhanced search with fuzzy match and filter flags
 # Usage: astral_search_enhanced <query> [--installed] [--category <cat>]
 astral_search_enhanced() {
     _query="$1"
@@ -8226,7 +8271,7 @@ astral_search_enhanced() {
 
     _results=0
 
-    # §8.1 — Read index via temp file to avoid pipe subshell
+    # §8.1 Read index via temp file to avoid pipe subshell
     _idx_tmpf="$TMPDIR/astral-search-idx-$$"
     [ -f "$INDEX_FILE_AOHARU" ] && cat "$INDEX_FILE_AOHARU" > "$_idx_tmpf" || : > "$_idx_tmpf"
 
@@ -8546,7 +8591,7 @@ get_file_owner() {
         return 1
     fi
 
-    # Fallback: slow path (warns to rebuild index — once per session only)
+    # Fallback: slow path (warns to rebuild index once per session only)
     _warn_flag="${TMPDIR:-/tmp}/.astral-fileidx-warned-$$"
     if [ ! -f "$_warn_flag" ]; then
         warn "File index missing - using slow lookup. Run: astral --rebuild-index"
@@ -8625,7 +8670,7 @@ upgrade_all() {
     # Create holds file if it doesn't exist
     touch "$HOLDS_FILE" 2>/dev/null || true
 
-    # §8.1 — Avoid pipe subshell: count vars inside a pipe-fed while-loop are
+    # §8.1 Avoid pipe subshell: count vars inside a pipe-fed while-loop are
     # invisible after the loop on dash/ash. Write pkg list to a temp file first.
     _upgrade_tmpf="$TMPDIR/astral-upgrade-list-$$"
     find "$DB_DIR" -type f -name "version" -maxdepth 5 2>/dev/null |
@@ -8904,7 +8949,7 @@ remove_pkg_only() {
 
     rpath=$(recipe_path "$(basename "$pkg_path")") 2>/dev/null || rpath=""
 
-    # §9 — Correct hook order: pre_remove → remove files → remove DB → post_remove
+    # §9 Correct hook order: pre_remove → remove files → remove DB → post_remove
     # post_remove must only run AFTER files and DB entry are gone.
     # Previously post_remove ran before file removal, which was wrong.
 
@@ -8991,7 +9036,7 @@ removedep_pkg() {
                         dep_queue="$dep_queue $subdeps"
                     fi
                 else
-                    warn "Failed to remove orphan $dep_path — skipping its subdeps"
+                    warn "Failed to remove orphan $dep_path skipping its subdeps"
                 fi
             else
                 info "Keeping dependency $dep_path (still required)."
@@ -9964,7 +10009,7 @@ clear_ccache() {
     info "ccache cleared"
 }
 
-# Top-level helper for interactive_dep_menu — must NOT be nested inside it
+# Top-level helper for interactive_dep_menu must NOT be nested inside it
 # because POSIX sh / dash does not support nested function definitions.
 # Args: pkg_name indent is_last visited dep_type temp_tree temp_data
 build_interactive_tree() {
@@ -11457,7 +11502,7 @@ if [ $# -lt 1 ]; then err "no operation specified (use -h or --help for help)"; 
 
 # Determine if we should auto-check version based on command
 case "$1" in
-    -S|--Sync|-SA|--Sync-Asura|-C|--Compile|--Upgrade-All|-Re|--resume|-U|--self-update)
+    -S|--Sync|-SA|--Sync-Asura|-SENV|--Sync-Env|-C|--Compile|--Upgrade-All|-Re|--resume|-U|--self-update)
         # These commands should trigger version check
         ;;
     *)
@@ -11525,6 +11570,54 @@ case "$1" in
     FORCE_BUILD=0
     ;;
 
+# Install a package whose recipe lives inside an astral-env path.
+# Usage: astral -SENV <env-path> <repo|url> <pkgname>
+-SENV|--Sync-Env)
+    [ $# -gt 3 ] || err "Usage: astral -SENV <env-path> <repo|url> <pkgname>"
+    _senv_path="$2"
+    _senv_repo="$3"
+    _senv_pkg="$4"
+    shift 4
+
+    [ -d "$_senv_path" ] || err "-SENV: env path not found: $_senv_path"
+    _senv_recipes="${_senv_path%/}/recipes"
+    [ -d "$_senv_recipes" ] || err "-SENV: no recipes/ dir in $_senv_path"
+
+    # Save current settings
+    _senv_old_rdir="$RECIPES_DIR"
+    _senv_old_url="$RECIPE_RAW_URL"
+    _senv_old_ctx="$REPO_CONTEXT"
+
+    # Point recipe resolver at the env recipes dir
+    RECIPES_DIR="$_senv_recipes"
+
+    # Set repo context / remote URL for dependency downloads
+    case "$_senv_repo" in
+        aoharu)             REPO_CONTEXT="aoharu" ;;
+        asura)              REPO_CONTEXT="asura"  ;;
+        http://*|https://*) RECIPE_RAW_URL="$_senv_repo"; REPO_CONTEXT="aoharu" ;;
+        */*)
+            # owner/repo shorthand -> GitHub raw URL
+            RECIPE_RAW_URL="https://raw.githubusercontent.com/${_senv_repo}/refs/heads/main/"
+            REPO_CONTEXT="aoharu"
+            ;;
+        *) err "-SENV: unrecognised repo/url: $_senv_repo" ;;
+    esac
+
+    info "ENV recipebuild: recipes=${_senv_recipes}, repo=${_senv_repo}"
+
+    _vp_saved="$VISITED_PACKAGES"; _cs_saved="$DEP_CALL_STACK"
+    VISITED_PACKAGES=""; DEP_CALL_STACK=""
+    build_from_recipe_enhanced "$_senv_pkg" "$FORCE_BUILD"
+    VISITED_PACKAGES="$_vp_saved"; DEP_CALL_STACK="$_cs_saved"
+    FORCE_BUILD=0
+
+    # Restore original settings
+    RECIPES_DIR="$_senv_old_rdir"
+    RECIPE_RAW_URL="$_senv_old_url"
+    REPO_CONTEXT="$_senv_old_ctx"
+    ;;
+
 --Upgrade-All)
     upgrade_all 0 "$PRETEND_MODE"
     ;;
@@ -11558,7 +11651,7 @@ case "$1" in
     if [ "$JSON_OUTPUT" -eq 1 ]; then
         search_pkg_json "$2"
     else
-        # §10 — Use enhanced search (fuzzy match + installed status + category filter)
+        # §10 Use enhanced search (fuzzy match + installed status + category filter)
         astral_search_enhanced "$2"
         search_pkg "$2"  # also run legacy local recipe search
     fi

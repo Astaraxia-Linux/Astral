@@ -1,10 +1,8 @@
 # Astral Package Manager Documentation
 
-> *"Because compiling from source should be less painful than a root canal"*
-
-Version: 5.3.1.7 Main  
-Last Updated: 17 March 2026 (GMT+8)  
-Maintained by: One Maniac (yes, just one)
+Version: 5.3.1.10 Main
+Last Updated: 17 March 2026 (GMT+8)
+Maintained by: Izumi Sonoka
 
 *Made in Malaysia, btw*
 
@@ -1129,11 +1127,11 @@ git push
 
 ### Contributing to Astral Core
 
-1. Read the code (good luck - it's 12k lines of sh)
+1. Read the code (good luck - it's 10k lines of sh)
 2. Test your changes (seriously)
 3. No bashisms - POSIX sh only
 4. Submit a PR
-5. Wait for the One Maniac™ to review (may take up to 3 business weeks)
+5. Wait for the Izumi Sonoka to review (may take up to 3 business weeks)
 
 ---
 
@@ -1183,13 +1181,13 @@ It's the declarative system configuration layer that sits on top of Astral. It l
 
 ### Who maintains this?
 
-One Maniac. Just one. Send help (or coffee).
+Izumi Sonoka, Just one. Send help (or coffee).
 
 ---
 
 ## Credits
 
-- **Created by**: One Maniac™
+- **Created by**: Izumi Sonoka
 - **Inspired by**: Gentoo Portage, Arch Pacman, KISS Linux, and pain
 - **Special thanks**: Everyone who reported bugs instead of rage-quitting (both of you)
 
@@ -1208,7 +1206,7 @@ Just plain GPL-3.0
 
 Astral is still evolving. The code is still spaghetti. The philosophy is still based. The implementation is extremely transparent (you can read all 10,000+ lines of it).
 
-If you made it this far, congratulations. You're either very thorough, very bored, or writing documentation for a One Maniac™ project at 2am. Either way, happy compiling.
+If you made it this far, congratulations. You're either very thorough, very bored, or writing documentation for Izumi Sonoka project at 2am. Either way, happy compiling.
 
 ---
 

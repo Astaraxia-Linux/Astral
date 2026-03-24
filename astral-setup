@@ -1,7 +1,8 @@
 #!/bin/sh
 # astral-setup - Installation and initialization script for Astral package manager
-# Version: 1.1.0
+# Version: 1.2.0
 # POSIX-compliant: works with any /bin/sh
+VERSION="1.1.0"
 
 set -eu
 
@@ -39,8 +40,7 @@ fi
 # Man pages directory
 MAN_PAGES_DIR="${SCRIPT_DIR}/man"
 
-# Version
-VERSION="1.1.0"
+# Version was also here :/
 
 # Print functions
 info() {
