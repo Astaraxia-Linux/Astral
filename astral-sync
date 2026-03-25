@@ -8,7 +8,7 @@
 
 set -eu
 
-VERSION="1.1.8"
+VERSION="1.1.9"
 RECIPES_DIR="${RECIPES_DIR:-./recipes}"
 OUTPUT_DIR="${OUTPUT_DIR:-.}"
 INDEX_FILE="${OUTPUT_DIR}/astral.index"
@@ -27,7 +27,7 @@ FONT_DIR="${FONT_DIR:-}"
 VERBOSE="${VERBOSE:-0}"
 FIX_CHECKSUMS="${FIX_CHECKSUMS:-0}"
 
-# Checksum state file — tracks which packages have been verified
+# Checksum state file tracks which packages have been verified
 # Lives beside the index so it can be committed alongside it
 CHECKSUM_STATE="${OUTPUT_DIR}/.astral-checksum-state"
 
@@ -262,7 +262,7 @@ scan_bins() {
             _cat=$(basename "$catdir")
             case "$_cat" in .*|_*) continue ;; esac
 
-            # Flat layout: <cat>/<pkgname>-<ver>.stars (no sharding)
+            # Flat layout: <cat>/<pkgname>-<ver>.stars
             find "$catdir" -mindepth 1 -maxdepth 1 -type f -name "*.stars" 2>/dev/null | sort | \
             while read -r sf; do
                 _bn=$(basename "$sf" .stars)
@@ -271,7 +271,7 @@ scan_bins() {
                     # Fallback: parse ver from filename <pkgname>-<ver>[-<arch>]
                     _ver=$(printf '%s' "$_bn" | sed 's/.*-\([0-9][^-]*\).*/\1/')
                 fi
-                # pkgname: strip trailing -<ver> and optional -<arch>
+                # strip trailing -<ver> and optional -<arch>
                 if [ -n "$_ver" ] && [ "$_ver" != "unknown" ]; then
                     _pkgname=$(printf '%s' "$_bn" | sed "s/-${_ver}.*//")
                 else
@@ -287,9 +287,7 @@ scan_bins() {
 # FONT SCANNING
 # ============================================================
 
-# Scan the font directory and emit lines: family variant
 # Directory layout: font/<family>/<family>-f<type>[-nerd].stars
-# The -f separator distinguishes family from type.
 scan_fonts() {
     _dir="$1"
     [ -d "$_dir" ] || return 0
@@ -301,14 +299,12 @@ scan_fonts() {
         find "$familydir" -maxdepth 1 -type f -name "*-f*.stars" 2>/dev/null | sort | \
         while read -r sf; do
             _bn=$(basename "$sf" .stars)
-            # e.g. Iosevka-fttf-nerd → ttf-nerd
             _variant=$(printf '%s' "$_bn" | sed 's/.*-f//')
             printf '%s %s\n' "$_family" "$_variant"
         done
     done
 }
 
-# ============================================================
 # ============================================================
 # INDEX GENERATION
 # ============================================================
@@ -326,7 +322,7 @@ cmd_generate() {
     _btmp=$(mktemp "${TMPDIR:-/tmp}/astral-bins.XXXXXX")
     _ftmp=$(mktemp "${TMPDIR:-/tmp}/astral-fonts.XXXXXX")
 
-    # Scan source recipes → cat pkg version
+    # Scan source recipes
     if [ -d "$_rdir" ]; then
         scan_recipes "$_rdir" | \
         while read -r _cat _pkg _arch _ver; do
@@ -336,21 +332,21 @@ cmd_generate() {
         info "  recipes: $_rcount versions"
     fi
 
-    # Scan binary packages → arch cat pkg version
+    # Scan binary packages
     if [ -d "$_bdir" ]; then
         scan_bins "$_bdir" | sort -u > "$_btmp"
         _bcount=$(wc -l < "$_btmp" | tr -d ' ')
         info "  bin:     $_bcount versions"
     fi
 
-    # Scan font packages → family fontname variant
+    # Scan font packages
     if [ -d "$_fdir" ]; then
         scan_fonts "$_fdir" | sort -u > "$_ftmp"
         _fcount=$(wc -l < "$_ftmp" | tr -d ' ')
         info "  font:    $_fcount variants"
     fi
 
-    # Count unique packages (distinct category/name pairs in recipes)
+    # Count packages
     _total=$(sort -u "$_rtmp" 2>/dev/null | \
         awk '{print $1"/"$2}' | sort -u | wc -l | tr -d ' ')
 
@@ -371,7 +367,7 @@ cmd_generate() {
         printf '# Packages: %s\n' "$_total"
         printf '\n'
 
-        # /recipes section — nested: category → package → versions
+        # /recipes section
         if [ -s "$_rtmp" ]; then
             awk '
             BEGIN { print "/recipes: {"; prev_cat=""; prev_pkg="" }
@@ -398,7 +394,7 @@ cmd_generate() {
             printf '\n'
         fi
 
-        # /bin section — nested: arch → category → package → versions
+        # /bin section
         if [ -s "$_btmp" ]; then
             awk '
             BEGIN { print "/bin: {"; prev_arch=""; prev_cat=""; prev_pkg="" }
@@ -433,7 +429,7 @@ cmd_generate() {
             printf '\n'
         fi
 
-        # /font section — nested: family → fontname → variants
+        # /font section
         if [ -s "$_ftmp" ]; then
             awk '
             BEGIN { print "/font: {"; prev_fam=""; prev_font="" }
@@ -473,6 +469,7 @@ cmd_gen_index() {
     cmd_generate
 }
 
+# ============================================================
 # SIGNING
 # ============================================================
 
@@ -530,7 +527,7 @@ cmd_verify() {
 cmd_push() {
     command -v git >/dev/null 2>&1 || err "git not found"
 
-    # Check we're in a git repo
+    # Check if it's in a git repo
     git -C "$OUTPUT_DIR" rev-parse --git-dir >/dev/null 2>&1 \
         || err "Output directory is not a git repository: $OUTPUT_DIR"
 
@@ -551,7 +548,7 @@ cmd_push() {
 
     git -C "$OUTPUT_DIR" add $_files
     git -C "$OUTPUT_DIR" diff --cached --quiet && {
-        info "Nothing to commit — index is up to date"
+        info "Nothing to commit index is up to date"
         return 0
     }
     git -C "$OUTPUT_DIR" commit -m "astral-sync: regenerate index (${_pkg_count} packages)"
@@ -575,7 +572,7 @@ cmd_status() {
 
     printf "${BLUE}Index${NC}\n"
     if [ -f "$INDEX_FILE" ]; then
-        # Count unique packages (depth-3 blocks) in /recipes section
+        # Count packages (depth-3 blocks) in /recipes section
         _pkg_count=$(awk '
             /^\/recipes:[[:space:]]*\{/ { in_r=1; d=1; next }
             /^\// { in_r=0; d=0 }
@@ -601,7 +598,7 @@ cmd_status() {
         printf "  generated   %s\n" "$_mtime"
         printf "  signed      %b\n" "$_signed"
     else
-        printf "  ${YELLOW}not generated yet${NC} — run: astral-sync generate\n"
+        printf "  ${YELLOW}not generated yet${NC} run: astral-sync generate\n"
     fi
     printf "\n"
 
@@ -622,7 +619,7 @@ cmd_status() {
         _verified=$(grep -c "checksum-ok:" "$CHECKSUM_STATE" 2>/dev/null || printf 0)
         printf "  verified  %s packages\n" "$_verified"
     else
-        printf "  not run yet — run: astral-sync checksum\n"
+        printf "  not run yet run: astral-sync checksum\n"
     fi
 }
 
@@ -639,7 +636,7 @@ extract_sources_from_stars() {
         /\$PKG\.Sources[[:space:]]*:/{in_block=1; next}
         in_block && /^\}[[:space:]]*$/{in_block=0; next}
         in_block && /https?:\/\//{
-            # Extract the URL — handle: urls = "...", "...", or bare URL line
+            # Extract the URL handle: urls = "...", "...", or bare URL line
             line=$0
             gsub(/^[[:space:]]+/, "", line)
             gsub(/^urls[[:space:]]*=[[:space:]]*"/, "", line)
@@ -729,7 +726,7 @@ verify_stars_checksums() {
     # Get checksums from recipe
     _checksums=$(extract_checksums_from_stars "$_sf")
     if [ -z "$_checksums" ]; then
-        warn "  [$_label] No checksums block found — skipping"
+        warn "  [$_label] No checksums block found skipping"
         rm -rf "$_tmpdir"
         return 0
     fi
@@ -738,7 +735,7 @@ verify_stars_checksums() {
     _urls=$(extract_sources_from_stars "$_sf")
     if [ -z "$_urls" ]; then
         # Git-only recipe (no URLs to download)
-        vinfo "[$_label] No HTTP sources — skipping (git-only recipe)"
+        vinfo "[$_label] No HTTP sources skipping (git-only recipe)"
         rm -rf "$_tmpdir"
         return 0
     fi
@@ -760,7 +757,7 @@ verify_stars_checksums() {
             continue
         fi
 
-        # Find matching checksum entry — use temp file to avoid subshell scope loss
+        # Find matching checksum entry use temp file to avoid subshell scope loss
         _match_file="$_tmpdir/.matched_${_fname}"
         printf '%s
 ' "$_checksums" | while IFS= read -r _cline; do
@@ -801,7 +798,7 @@ verify_stars_checksums() {
             esac
 
             if [ "$_actual" = "$_hash" ]; then
-                : # checksum ok — reported at job level
+                : # checksum ok reported at job level
             else
                 warn "  [$_label] ✗ MISMATCH (${_algo}): $_fname"
                 warn "    expected: $_hash"
@@ -871,7 +868,7 @@ cmd_checksum() {
 
         # Already verified? Record and skip without backgrounding
         if checksum_is_done "$_label"; then
-            vinfo "[$_label] already verified — skipping"
+            vinfo "[$_label] already verified skipping"
             printf 'skip
 ' > "$_cdir/${_key}.result"
             continue
@@ -882,7 +879,7 @@ cmd_checksum() {
             continue
         fi
 
-        # Background job — buffer output, print ONE line per package atomically
+        # Background job buffer output, print ONE line per package atomically
         [ "${JOB_DELAY:-0}" != "0" ] && sleep "$JOB_DELAY"
         (
             _out="$_cdir/${_key}.out"
@@ -962,14 +959,14 @@ has_empty_checksums() {
     _sf="$1"
     # Check if Checksums block is missing, empty, or has only TODO/comments
     _chk=$(extract_checksums_from_stars "$_sf")
-    
+
     # If no checksums at all, it's empty
     [ -z "$_chk" ] && return 0
-    
+
     # If only has TODO or comments, it's empty
     printf '%s\n' "$_chk" | grep -E '^(#|//|/\*)' >/dev/null && return 0
     printf '%s\n' "$_chk" | grep -i 'TODO' >/dev/null && return 0
-    
+
     # Has real checksums
     return 1
 }
@@ -980,51 +977,51 @@ add_checksums_to_stars() {
     _label="$2"
     _tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/astral-empty-chk.XXXXXX")
     _fixed=0
-    
+
     # Get source URLs
     _urls=$(extract_sources_from_stars "$_sf")
     if [ -z "$_urls" ]; then
         # Git-only recipe, skip
-        vinfo "[$_label] No HTTP sources — skipping (git-only)"
+        vinfo "[$_label] No HTTP sources skipping (git-only)"
         rm -rf "$_tmpdir"
         return 0
     fi
-    
+
     # Download each source and compute checksum
     _new_checksums=""
     printf '%s\n' "$_urls" | while IFS= read -r _url; do
         [ -z "$_url" ] && continue
         case "$_url" in git+*|*.git) continue ;; esac
-        
+
         _fname=$(basename "$_url" | sed 's/#.*//')
         _dest="$_tmpdir/$_fname"
-        
+
         info "  [$_label] → downloading: $_fname"
         if ! curl -fsSL -A "Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0" --retry "$DOWNLOAD_RETRIES" --retry-delay 2 --retry-max-time 20 --connect-timeout 10 -o "$_dest" "$_url" 2>/dev/null; then
             warn "  [$_label] ✗ Failed to download: $_url"
             printf 'FAIL\n' > "$_tmpdir/.failed"
             continue
         fi
-        
+
         # Calculate sha256
         _hash=$(sha256sum "$_dest" 2>/dev/null | awk '{print $1}')
         printf "    sha256:%s %s\n" "$_hash" "$_fname" >> "$_tmpdir/.checksums"
     done
-    
+
     # Check if download failed
     if [ -f "$_tmpdir/.failed" ]; then
         rm -rf "$_tmpdir"
         return 1
     fi
-    
+
     # Read computed checksums
     if [ ! -f "$_tmpdir/.checksums" ]; then
         rm -rf "$_tmpdir"
         return 0
     fi
-    
+
     _new_checksums=$(cat "$_tmpdir/.checksums")
-    
+
     # Replace the Checksums block in the recipe
     # Strategy: Find the block, replace everything inside it
     if [ "$DRY_RUN" -eq 1 ]; then
@@ -1052,13 +1049,13 @@ add_checksums_to_stars() {
             }
             {print}
         ' "$_sf" > "$_tmpfile"
-        
+
         # Replace original file
         mv "$_tmpfile" "$_sf"
         ok "  [$_label] ✓ added checksums to $(basename "$_sf")"
         _fixed=1
     fi
-    
+
     rm -rf "$_tmpdir"
     return 0
 }
@@ -1087,7 +1084,7 @@ cmd_empty_checksums() {
         _key=$(printf '%s' "$_label" | tr '/' '_')
 
         if ! has_empty_checksums "$_sf"; then
-            vinfo "[$_label] has checksums — skipping"
+            vinfo "[$_label] has checksums skipping"
             printf 'skip
 ' > "$_edir/${_key}.result"
             continue
@@ -1146,7 +1143,7 @@ cmd_empty_checksums() {
 
 cmd_list() {
     _filter="${1:-}"
-    [ -f "$INDEX_FILE" ] || err "Index not found: $INDEX_FILE — run 'astral-sync generate' first"
+    [ -f "$INDEX_FILE" ] || err "Index not found: $INDEX_FILE run 'astral-sync generate' first"
 
     awk -v filter="$_filter" '
     BEGIN { state=0; cat=""; pkg=""; count=0; prev_cat="" }
@@ -1156,7 +1153,7 @@ cmd_list() {
     state == 99 { next }
     state == 0  { next }
 
-    # Closing brace — pop state
+    # Closing brace pop state
     /^[[:space:]]*\}[[:space:]]*$/ {
         if      (state == 3) state=2
         else if (state == 2) state=1
@@ -1185,7 +1182,7 @@ cmd_list() {
         state=3; next
     }
 
-    # Version lines (state 3) — skip for listing
+    # Version lines (state 3) skip for listing
     state == 3 { next }
 
     END { printf "\n%d package(s)\n", count }
@@ -1197,7 +1194,7 @@ cmd_list() {
 # ============================================================
 
 cmd_diff() {
-    [ -f "$INDEX_FILE" ] || err "Index not found: $INDEX_FILE — run 'astral-sync generate' first"
+    [ -f "$INDEX_FILE" ] || err "Index not found: $INDEX_FILE run 'astral-sync generate' first"
 
     _tmp_new=$(mktemp "${TMPDIR:-/tmp}/astral-sync-diff-new.XXXXXX")
     scan_recipes "$RECIPES_DIR" | awk '{print $1"/"$2 " " $4}' | sort -u > "$_tmp_new"
@@ -1248,7 +1245,7 @@ cmd_diff() {
     rm -f "$_tmp_new" "$_tmp_old"
 
     if [ $((_added + _removed + _changed)) -eq 0 ]; then
-        ok "Index is up to date — no changes"
+        ok "Index is up to date no changes"
     else
         printf "\n  ${GREEN}+%d added${NC}  ${YELLOW}~%d changed${NC}  ${RED}-%d removed${NC}\n"             "$_added" "$_changed" "$_removed"
     fi
@@ -1319,7 +1316,7 @@ cmd_migrate() {
     done
 
     if [ "$DRY_RUN" -eq 1 ]; then
-        info "Dry run complete — no files moved"
+        info "Dry run complete no files moved"
     else
         ok "Migration complete"
     fi
@@ -1344,46 +1341,46 @@ extract_category_from_stars() {
 # Example: nano-8.6-any.stars → recipes/app-editors/n/nano/nano-8.6-any.stars
 cmd_migrate_organize() {
     [ -d "$RECIPES_DIR" ] || err "Recipes directory not found: $RECIPES_DIR"
-    
+
     info "Organizing recipes into sharded structure..."
     [ "$DRY_RUN" -eq 1 ] && info "Mode: dry-run (no changes)"
     info ""
-    
+
     _moved=0
     _skipped=0
     _failed=0
-    
+
     # Find all .stars files (flat or partially organized)
     find "$RECIPES_DIR" -name "*.stars" 2>/dev/null | sort | while IFS= read -r _sf; do
         _basename=$(basename "$_sf" .stars)
-        
+
         # Extract package name from filename (strip version-arch suffix)
         # nano-8.6-any → nano
         # rust-1.85.0-x86_64 → rust
         _pkgname=$(printf '%s' "$_basename" | sed 's/-[0-9][^-]*-[^-]*$//;s/-git-[^-]*$//')
-        
+
         # Get category from recipe metadata
         _category=$(extract_category_from_stars "$_sf")
         if [ -z "$_category" ]; then
-            warn "[$_basename] No category found in recipe — skipping"
+            warn "[$_basename] No category found in recipe skipping"
             _failed=$((_failed + 1))
             continue
         fi
-        
+
         # Get shard (first letter)
         _shard=$(shard_for "$_pkgname")
-        
+
         # Build target path
         _target_dir="$RECIPES_DIR/$_category/$_shard/$_pkgname"
         _target_file="$_target_dir/$(basename "$_sf")"
-        
+
         # Check if already in correct location
         if [ "$_sf" = "$_target_file" ]; then
-            vinfo "[$_basename] Already organized — skipping"
+            vinfo "[$_basename] Already organized skipping"
             _skipped=$((_skipped + 1))
             continue
         fi
-        
+
         # Move file
         if [ "$DRY_RUN" -eq 1 ]; then
             info "[$_basename] Would move:"
@@ -1400,7 +1397,7 @@ cmd_migrate_organize() {
             fi
         fi
     done
-    
+
     info ""
     info "────────────────────────────────"
     info "Organization complete"
@@ -1408,7 +1405,7 @@ cmd_migrate_organize() {
     info "  Skipped:  $_skipped (already organized)"
     info "  Failed:   $_failed"
     info "────────────────────────────────"
-    
+
     [ "$_failed" -gt 0 ] && return 1
     return 0
 }
