@@ -287,9 +287,9 @@ scan_bins() {
 # FONT SCANNING
 # ============================================================
 
-# Scan the font directory and emit lines: family fontname variant
-# Directory layout: font/<family>/<fontname>/*-f-<variant>.stars
-# The -f separator distinguishes version from font variant name.
+# Scan the font directory and emit lines: family variant
+# Directory layout: font/<family>/<family>-f<type>[-nerd].stars
+# The -f separator distinguishes family from type.
 scan_fonts() {
     _dir="$1"
     [ -d "$_dir" ] || return 0
@@ -298,19 +298,12 @@ scan_fonts() {
         _family=$(basename "$familydir")
         case "$_family" in .*|_*) continue ;; esac
 
-        find "$familydir" -mindepth 1 -maxdepth 1 -type d | sort | while read -r fontdir; do
-            _fontname=$(basename "$fontdir")
-            case "$_fontname" in .*|_*) continue ;; esac
-
-            find "$fontdir" -maxdepth 1 -type f -name "*-f-*.stars" 2>/dev/null | sort | \
-            while read -r sf; do
-                _bn=$(basename "$sf" .stars)
-                # iosevka-f-mono → mono → Mono
-                _variant=$(printf '%s' "$_bn" | sed 's/.*-f-//')
-                _variant=$(printf '%s' "$_variant" | \
-                    awk '{printf "%s%s", toupper(substr($0,1,1)), substr($0,2)}')
-                printf '%s %s %s\n' "$_family" "$_fontname" "$_variant"
-            done
+        find "$familydir" -maxdepth 1 -type f -name "*-f*.stars" 2>/dev/null | sort | \
+        while read -r sf; do
+            _bn=$(basename "$sf" .stars)
+            # e.g. Iosevka-fttf-nerd → ttf-nerd
+            _variant=$(printf '%s' "$_bn" | sed 's/.*-f//')
+            printf '%s %s\n' "$_family" "$_variant"
         done
     done
 }
@@ -445,22 +438,15 @@ cmd_generate() {
             awk '
             BEGIN { print "/font: {"; prev_fam=""; prev_font="" }
             {
-                fam=$1; font=$2; var=$3
+                fam=$1; var=$2
                 if (fam != prev_fam) {
-                    if (prev_font != "") { print "    }" }
                     if (prev_fam != "") { print "  }" }
                     printf "  %s: {\n", fam
-                    prev_fam=fam; prev_font=""
+                    prev_fam=fam
                 }
-                if (font != prev_font) {
-                    if (prev_font != "") { print "    }" }
-                    printf "    %s: {\n", font
-                    prev_font=font
-                }
-                printf "      %s\n", var
+                printf "    %s\n", var
             }
             END {
-                if (prev_font != "") { print "    }" }
                 if (prev_fam != "") { print "  }" }
                 print "}"
             }' "$_ftmp"
