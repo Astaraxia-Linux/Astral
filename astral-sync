@@ -8,7 +8,7 @@
 
 set -eu
 
-VERSION="1.1.9"
+VERSION="1.1.10"
 RECIPES_DIR="${RECIPES_DIR:-./recipes}"
 OUTPUT_DIR="${OUTPUT_DIR:-.}"
 INDEX_FILE="${OUTPUT_DIR}/astral.index"
@@ -27,7 +27,6 @@ FONT_DIR="${FONT_DIR:-}"
 VERBOSE="${VERBOSE:-0}"
 FIX_CHECKSUMS="${FIX_CHECKSUMS:-0}"
 
-# Checksum state file tracks which packages have been verified
 # Lives beside the index so it can be committed alongside it
 CHECKSUM_STATE="${OUTPUT_DIR}/.astral-checksum-state"
 
@@ -322,7 +321,6 @@ cmd_generate() {
     _btmp=$(mktemp "${TMPDIR:-/tmp}/astral-bins.XXXXXX")
     _ftmp=$(mktemp "${TMPDIR:-/tmp}/astral-fonts.XXXXXX")
 
-    # Scan source recipes
     if [ -d "$_rdir" ]; then
         scan_recipes "$_rdir" | \
         while read -r _cat _pkg _arch _ver; do
@@ -332,23 +330,23 @@ cmd_generate() {
         info "  recipes: $_rcount versions"
     fi
 
-    # Scan binary packages
     if [ -d "$_bdir" ]; then
         scan_bins "$_bdir" | sort -u > "$_btmp"
         _bcount=$(wc -l < "$_btmp" | tr -d ' ')
         info "  bin:     $_bcount versions"
     fi
 
-    # Scan font packages
     if [ -d "$_fdir" ]; then
         scan_fonts "$_fdir" | sort -u > "$_ftmp"
         _fcount=$(wc -l < "$_ftmp" | tr -d ' ')
         info "  font:    $_fcount variants"
     fi
 
-    # Count packages
-    _total=$(sort -u "$_rtmp" 2>/dev/null | \
-        awk '{print $1"/"$2}' | sort -u | wc -l | tr -d ' ')
+    # Count unique packages: distinct recipe cat/pkg + unique bin cat/pkg + font variants
+    _rpkgs=$(sort -u "$_rtmp" 2>/dev/null | awk '{print $1"/"$2}' | sort -u | wc -l | tr -d ' ')
+    _bpkgs=$(sort -u "$_btmp" 2>/dev/null | awk '{print $2"/"$3}' | sort -u | wc -l | tr -d ' ')
+    _fpkgs=$(wc -l < "$_ftmp" 2>/dev/null | tr -d ' ')
+    _total=$(( ${_rpkgs:-0} + ${_bpkgs:-0} + ${_fpkgs:-0} ))
 
     if [ "$DRY_RUN" -eq 1 ]; then
         info "[dry-run] Would write index to: $INDEX_FILE"
@@ -1023,7 +1021,7 @@ add_checksums_to_stars() {
     _new_checksums=$(cat "$_tmpdir/.checksums")
 
     # Replace the Checksums block in the recipe
-    # Strategy: Find the block, replace everything inside it
+    # Find the block, replace everything inside it
     if [ "$DRY_RUN" -eq 1 ]; then
         info "  [$_label] [dry-run] Would add checksums:"
         printf '%s\n' "$_new_checksums" | sed 's/^/      /'
@@ -1338,7 +1336,6 @@ extract_category_from_stars() {
 }
 
 # Organize flat recipes into proper category/shard/pkg structure
-# Example: nano-8.6-any.stars → recipes/app-editors/n/nano/nano-8.6-any.stars
 cmd_migrate_organize() {
     [ -d "$RECIPES_DIR" ] || err "Recipes directory not found: $RECIPES_DIR"
 
@@ -1355,8 +1352,6 @@ cmd_migrate_organize() {
         _basename=$(basename "$_sf" .stars)
 
         # Extract package name from filename (strip version-arch suffix)
-        # nano-8.6-any → nano
-        # rust-1.85.0-x86_64 → rust
         _pkgname=$(printf '%s' "$_basename" | sed 's/-[0-9][^-]*-[^-]*$//;s/-git-[^-]*$//')
 
         # Get category from recipe metadata
