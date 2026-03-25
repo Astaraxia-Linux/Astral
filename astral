@@ -159,7 +159,7 @@ ASTRAL_LIB_DIR="${ASTRAL_LIB_DIR:-/usr/lib/astral}"
 LOCK_FILE=${LOCK_FILE:-/var/lock/astral.lock}
 
 # --- REPOS ---
-REPO_URL=${REPO_URL:-https://astaraxia-linux.github.io/}
+REPO_URL=${REPO_URL:-https://astaraxia-linux.github.io/AOHARU}
 RECIPE_RAW_URL=${RECIPE_RAW_URL:-https://raw.githubusercontent.com/Astaraxia-Linux/AOHARU/refs/heads/main/}
 USER_REPO_URL=${USER_REPO_URL:-https://codeberg.org/Izumi/ASURA/raw/branch/main}
 USER_RECIPE_RAW_URL=${USER_RECIPE_RAW_URL:-$USER_REPO_URL}
@@ -8000,7 +8000,7 @@ parse_index_v2() {
     while IFS= read -r line || [ -n "$line" ]; do
         # Strip leading/trailing whitespace
         line=$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-        
+
         # Skip empty lines and comments
         [ -z "$line" ] && continue
         case "$line" in \#*) continue ;; esac
