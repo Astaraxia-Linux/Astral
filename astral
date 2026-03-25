@@ -159,8 +159,8 @@ ASTRAL_LIB_DIR="${ASTRAL_LIB_DIR:-/usr/lib/astral}"
 LOCK_FILE=${LOCK_FILE:-/var/lock/astral.lock}
 
 # --- REPOS ---
-REPO_URL=${REPO_URL:-https://izumi-sonoka.github.io/AOHARU/}
-RECIPE_RAW_URL=${RECIPE_RAW_URL:-https://raw.githubusercontent.com/Izumi-Sonoka/AOHARU/refs/heads/main/}
+REPO_URL=${REPO_URL:-https://astaraxia-linux.github.io/}
+RECIPE_RAW_URL=${RECIPE_RAW_URL:-https://raw.githubusercontent.com/Astaraxia-Linux/AOHARU/refs/heads/main/}
 USER_REPO_URL=${USER_REPO_URL:-https://codeberg.org/Izumi/ASURA/raw/branch/main}
 USER_RECIPE_RAW_URL=${USER_RECIPE_RAW_URL:-$USER_REPO_URL}
 HORIZON_REPO=${HORIZON_REPO:-https://raw.githubusercontent.com/Astaraxia-Linux/Horizon/main}
